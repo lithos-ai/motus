@@ -1,0 +1,31 @@
+repos:
+  # Basic checks (file ending newline, remove extra spaces, check configuration file syntax)
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace # Trims trailing whitespace
+      - id: end-of-file-fixer # Makes sure files end in a newline and only a newline
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1000'] # Prevent submitting files larger than 1MB
+      - id: detect-private-key # Intercept private keys
+      - id: debug-statements # Intercept pdb.set_trace() or breakpoint()
+      - id: check-merge-conflict # Intercept git conflict markers
+      - id: check-shebang-scripts-are-executable # Ensure shell scripts are executable
+      - id: no-commit-to-branch # Prevent committing to main
+
+  # Ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.14
+    hooks:
+      - id: ruff-format # Run the formatter
+      - id: ruff-check # Run the linter
+        args: ['--fix', '--exit-zero']
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell
+        args: ['--config', '.codespellrc']

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Actus - Trace Viewer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+{{CSS_CONTENT}}
+    </style>
+</head>
+<body class="light-theme">
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">A</div>
+                    <span class="logo-text">Actus</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-title">Observability</div>
+                    <a href="#" class="nav-item active" data-page="traces" onclick="navigateToPage('traces'); return false;">
+                        <span class="nav-icon"></span>
+                        <span>Traces</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="spans" onclick="navigateToPage('spans'); return false;">
+                        <span class="nav-icon"></span>
+                        <span>Spans</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="logs" onclick="navigateToPage('logs'); return false;">
+                        <span class="nav-icon"></span>
+                        <span>Logs</span>
+                    </a>
+                </div>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">Analytics</div>
+                    <a href="#" class="nav-item" data-page="metrics" onclick="navigateToPage('metrics'); return false;">
+                        <span class="nav-icon"></span>
+                        <span>Metrics</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="agents" onclick="navigateToPage('agents'); return false;">
+                        <span class="nav-icon"></span>
+                        <span>Agents</span>
+                    </a>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="sidebar-version">v1.0.0</div>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <div class="header">
+                <div class="header-left">
+                    <h1>Trace Viewer</h1>
+                </div>
+                <div class="header-stats" id="headerStats">
+                        <span class="stat-item"><span class="stat-label">Spans</span> <span class="stat-value" id="totalSpans">—</span></span>
+                        <span class="stat-item"><span class="stat-label">Duration</span> <span class="stat-value" id="totalDuration">—</span></span>
+                        <span class="stat-item" id="totalCostStat" style="display:none"><span class="stat-label">Cost</span> <span class="stat-value" id="totalCost">—</span></span>
+                        <span class="stat-item" id="totalErrorsStat" style="display:none"><span class="stat-label">Errors</span> <span class="stat-value stat-error" id="totalErrors">0</span></span>
+                    </div>
+                <div class="header-right">
+                    <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Toggle light/dark theme">
+                        <svg id="themeIconSun" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="8" cy="8" r="3"/><line x1="8" y1="1" x2="8" y2="3"/><line x1="8" y1="13" x2="8" y2="15"/><line x1="1" y1="8" x2="3" y2="8"/><line x1="13" y1="8" x2="15" y2="8"/><line x1="3.05" y1="3.05" x2="4.46" y2="4.46"/><line x1="11.54" y1="11.54" x2="12.95" y2="12.95"/><line x1="3.05" y1="12.95" x2="4.46" y2="11.54"/><line x1="11.54" y1="4.46" x2="12.95" y2="3.05"/></svg>
+                        <svg id="themeIconMoon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 8.5A6 6 0 117.5 2a4.5 4.5 0 006.5 6.5z"/></svg>
+                    </button>
+                    <label class="filter-checkbox" id="filterMagicLabel">
+                        <input type="checkbox" id="filterMagicTasks" checked onchange="toggleMagicTaskFilter()">
+                        <span>Hide magic tasks</span>
+                    </label>
+                    <div class="view-toggle">
+                        <button id="taskViewBtn" class="view-btn active" onclick="switchView('task')">Task View</button>
+                        <button id="agentViewBtn" class="view-btn" onclick="switchView('agent')">Agent View</button>
+                    </div>
+                    <div class="live-indicator" id="liveIndicator">
+                        <span id="liveStatus" class="live-status">LIVE</span>
+                        <button id="toggleLive" class="live-toggle-btn" onclick="toggleAutoRefresh()">Pause</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="container">
+                <!-- Content populated by renderTracesPage() -->
+            </div>
+        </main>
+    </div>
+
+    <link id="hljsTheme" rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css">
+    <script>
+        let spans = {{SPANS_JSON}};
+        let minTime = {{MIN_TIME}};
+        let totalDuration = {{TOTAL_DURATION}};
+    </script>
+    <script>
+{{JS_CONTENT}}
+    </script>
+    <!-- Load optional libs async so they never block SSE/rendering -->
+    <script async src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+    <script async src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</body>
+</html>

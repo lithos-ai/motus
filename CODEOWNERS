@@ -1,0 +1,24 @@
+# CODEOWNERS — motus
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Last matching pattern takes precedence.
+
+# --- agent ---
+/src/motus/agent/                     @NorthmanPKU @JackFram
+
+# --- memory ---
+/src/motus/memory/                    @JackFram @vasiliskyp
+
+# --- models ---
+/src/motus/models/                    @yzhou442
+
+# --- runtime ---
+/src/motus/runtime/                   @NorthmanPKU
+/src/motus/runtime/tracing/           @JackFram @yzhou442
+
+# --- tools ---
+/src/motus/tools/                     @eliotsolomon18 @coppock
+/src/motus/tools/core/                @eliotsolomon18 @coppock @NorthmanPKU
+
+# --- utils ---
+/src/motus/utils/                     @coppock

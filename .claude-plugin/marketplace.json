@@ -1,0 +1,20 @@
+{
+  "name": "motus",
+  "owner": {
+    "name": "LithosAI",
+    "email": "support@lithosai.com"
+  },
+  "metadata": {
+    "description": "Official plugin for the Motus AI agent platform",
+    "version": "1.1.0"
+  },
+  "plugins": [
+    {
+      "name": "motus",
+      "source": "./plugins/motus",
+      "description": "Build, configure, and deploy AI agents using the Motus framework — guided agent creation and local or cloud deployment.",
+      "category": "development",
+      "tags": ["motus", "agents", "tools", "ReActAgent", "workflow", "deploy", "cloud"]
+    }
+  ]
+}

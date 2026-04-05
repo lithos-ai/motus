@@ -1,0 +1,57 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# API keys and environment files
+.env
+.env.*
+
+# Virtual environments
+.venv
+
+# Logs and databases
+*.DS_Store
+
+# Sphinx documentation build artifacts
+docs/_build/
+docs/_static/.doctrees/
+docs/_templates/.doctrees/
+docs/structure.txt
+docs/api/generated/
+docs/getting-started/generated/
+docs/components/generated/
+docs/guides/generated/
+docs/examples/generated/
+docs/advanced/generated/
+docs/generated/
+
+# assets
+*.png
+*.pptx
+node_modules
+
+# Tracer Output
+traces/
+*.html
+!**/templates/trace_viewer.html
+
+# large skills folder
+# **/skills/
+
+# Development
+.pytest_cache/
+.ruff_cache/
+.vscode/
+
+# Agent memory
+.motus_memory/
+
+# Terminal Benchmarks
+**/jobs/
+
+# Motus configuration
+motus.toml

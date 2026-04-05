@@ -1,0 +1,364 @@
+import asyncio
+import datetime as real_datetime
+import json
+import unittest
+from dataclasses import dataclass, is_dataclass
+from unittest import mock
+
+from pydantic import BaseModel, Field
+
+from motus.tools import (
+    DictTools,
+    FunctionTool,
+    InputSchema,
+    normalize_tools,
+    tool,
+    tools,
+    tools_from,
+)
+
+
+class TestFunctionTool(unittest.IsolatedAsyncioTestCase):
+    async def test_schema_includes_docstring(self):
+        async def add(a: int, b: int) -> int:
+            """Add two numbers."""
+            return a + b
+
+        tool = FunctionTool(add)
+
+        self.assertEqual(tool.description, "Add two numbers.")
+        self.assertEqual(
+            tool.json_schema,
+            {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"},
+                },
+                "required": ["a", "b"],
+            },
+        )
+
+    async def test_call_serializes_primitives(self):
+        async def add(a: int, b: int) -> int:
+            return a + b
+
+        tool = FunctionTool(add)
+
+        result = await tool(json.dumps({"a": 1, "b": 2}))
+
+        self.assertEqual(result, "3")
+
+    async def test_call_serializes_mappings(self):
+        async def build(label: str, count: int) -> dict[str, object]:
+            return {"label": label, "count": count}
+
+        tool = FunctionTool(build)
+
+        result = await tool(json.dumps({"label": "ok", "count": 2}))
+
+        self.assertEqual(json.loads(result), {"label": "ok", "count": 2})
+
+    async def test_call_handles_nested_dataclasses(self):
+        @dataclass
+        class Child:
+            name: str
+
+        @dataclass
+        class Parent:
+            child: Child
+            children: list[Child]
+
+        async def echo(parent: Parent) -> Parent:
+            self.assertTrue(is_dataclass(parent))
+            self.assertTrue(is_dataclass(parent.child))
+            self.assertTrue(
+                all(is_dataclass(child) for child in parent.children), parent.children
+            )
+            return parent
+
+        tool = FunctionTool(echo)
+
+        result = await tool(
+            json.dumps(
+                {
+                    "parent": {
+                        "child": {"name": "root"},
+                        "children": [{"name": "a"}, {"name": "b"}],
+                    }
+                }
+            )
+        )
+
+        self.assertEqual(
+            json.loads(result),
+            {
+                "child": {"name": "root"},
+                "children": [{"name": "a"}, {"name": "b"}],
+            },
+        )
+
+    async def test_call_handles_nested_basemodels(self):
+        class Inner(BaseModel):
+            name: str
+
+        class Outer(BaseModel):
+            child: Inner
+            children: list[Inner]
+            meta: dict[str, Inner]
+
+        async def echo(payload: Outer) -> Outer:
+            self.assertIsInstance(payload, Outer)
+            self.assertIsInstance(payload.child, Inner)
+            self.assertTrue(all(isinstance(child, Inner) for child in payload.children))
+            self.assertTrue(
+                all(isinstance(child, Inner) for child in payload.meta.values())
+            )
+            return payload
+
+        tool = FunctionTool(echo)
+
+        result = await tool(
+            json.dumps(
+                {
+                    "payload": {
+                        "child": {"name": "root"},
+                        "children": [{"name": "a"}, {"name": "b"}],
+                        "meta": {"x": {"name": "x"}},
+                    }
+                }
+            )
+        )
+
+        self.assertEqual(
+            json.loads(result),
+            {
+                "child": {"name": "root"},
+                "children": [{"name": "a"}, {"name": "b"}],
+                "meta": {"x": {"name": "x"}},
+            },
+        )
+
+
+class TestCron(unittest.IsolatedAsyncioTestCase):
+    async def test_cron_uses_mocked_time_and_reschedules(self):
+        class FixedDatetime(real_datetime.datetime):
+            _now = real_datetime.datetime(2025, 1, 1, 0, 0)
+
+            @classmethod
+            def now(cls, tz=None):
+                if tz is not None:
+                    return cls._now.astimezone(tz)
+                return cls._now
+
+        def fake_time():
+            return FixedDatetime._now.timestamp()
+
+        real_sleep = asyncio.sleep
+
+        async def fake_sleep(_):
+            await real_sleep(0)
+
+        sleep_mock = mock.AsyncMock(side_effect=fake_sleep)
+
+        with (
+            mock.patch("motus.utils.cron.datetime.datetime", FixedDatetime),
+            mock.patch("motus.utils.cron.time.time", new=fake_time),
+            mock.patch("motus.utils.cron.asyncio.sleep", new=sleep_mock),
+        ):
+            from motus.utils.cron import Cron
+
+            cron = Cron()
+            asyncio.create_task(cron.run())
+            calls: list[real_datetime.datetime] = []
+
+            def record_call():
+                calls.append(FixedDatetime._now)
+
+            cron.create_cron(
+                minute=None,
+                hour=None,
+                day_of_month=None,
+                month=None,
+                day_of_week=None,
+                func=record_call,
+            )
+
+            # Job is scheduled for 00:01, current time is 00:00 - no call yet
+            await asyncio.sleep(0)  # Yield control so the scheduler can run
+            self.assertEqual(len(calls), 0)
+
+            # Advance time to 00:01 and let the background task run
+            FixedDatetime._now = FixedDatetime._now + real_datetime.timedelta(minutes=1)
+            await asyncio.sleep(0)
+
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(cron.scheduler.queue), 1)
+            next_time = cron.scheduler.queue[0].time
+            expected_time = real_datetime.datetime(2025, 1, 1, 0, 2).timestamp()
+            self.assertEqual(next_time, expected_time)
+
+
+class TestToolWrappers(unittest.IsolatedAsyncioTestCase):
+    async def test_class_tool_factory_supports_constructor_args(self):
+        class ListFilesInput(InputSchema):
+            path: str = Field(description="Root path")
+            limit: int | None = Field(default=None, description="Limit results")
+
+        @tools(prefix="sand_", method_schemas={"list_files": ListFilesInput})
+        class Sandbox:
+            def __init__(self, root_dir: str):
+                self.root_dir = root_dir
+
+            async def list_files(
+                self, path: str, limit: int | None = None
+            ) -> list[str]:
+                return [self.root_dir, path, str(limit)]
+
+            async def echo(self, value: str) -> str:
+                return value
+
+        tool_list = Sandbox("/tmp")
+        tool_map = normalize_tools(tool_list)
+        self.assertIn("sand_list_files", tool_map)
+        self.assertIn("sand_echo", tool_map)
+
+        list_schema = tool_map["sand_list_files"].json_schema
+        self.assertEqual(list_schema["type"], "object")
+        self.assertNotIn("title", list_schema)
+        self.assertEqual(list_schema["properties"]["path"]["type"], "string")
+        self.assertEqual(list_schema["properties"]["path"]["description"], "Root path")
+        self.assertEqual(list_schema["properties"]["limit"]["type"], "integer")
+        self.assertNotIn("default", list_schema["properties"]["limit"])
+        self.assertEqual(list_schema["required"], ["path"])
+
+        echo_schema = tool_map["sand_echo"].json_schema
+        self.assertEqual(echo_schema["required"], ["value"])
+
+    async def test_tools_from_requires_instance(self):
+        class Dummy:
+            async def ping(self) -> str:
+                return "pong"
+
+        with self.assertRaises(TypeError):
+            tools_from(Dummy)
+
+    async def test_tool_schema_override_for_function(self):
+        class GreetInput(InputSchema):
+            name: str = Field(description="Person name")
+
+        async def greet(name: str) -> str:
+            return name
+
+        greet = tool(schema=GreetInput)(greet)
+        tool_map = normalize_tools(greet)
+        schema = tool_map["greet"].json_schema
+        self.assertEqual(schema["properties"]["name"]["description"], "Person name")
+
+    async def test_pydantic_schema_drives_argument_parsing(self):
+        class CountInput(InputSchema):
+            count: int
+
+        async def add_one(count: int) -> int:
+            return count + 1
+
+        add_one = tool(schema=CountInput)(add_one)
+        tool_map = normalize_tools(add_one)
+        result = await tool_map["add_one"](json.dumps({"count": "2"}))
+        self.assertEqual(result, "3")
+
+    async def test_normalize_tools_requires_names(self):
+        class NoNameTool:
+            async def __call__(self, args: str) -> str:
+                return args
+
+        with self.assertRaises(ValueError):
+            normalize_tools([NoNameTool()])
+
+    async def test_normalize_tools_accepts_single_tool(self):
+        class NamedTool:
+            name = "named"
+
+            async def __call__(self, args: str) -> str:
+                return args
+
+        tool_map = normalize_tools(NamedTool())
+        self.assertEqual(set(tool_map.keys()), {"named"})
+
+    async def test_normalize_tools_accepts_single_callable(self):
+        async def ping() -> str:
+            return "pong"
+
+        tool_map = normalize_tools(ping)
+        self.assertIn("ping", tool_map)
+
+    async def test_normalize_tools_accepts_dict_tools(self):
+        async def ping(args: str) -> str:
+            return "pong"
+
+        inner_tool = FunctionTool(ping, name="ping")
+        dict_tools = DictTools({"ping": inner_tool})
+        tool_map = normalize_tools(dict_tools)
+        self.assertEqual(set(tool_map.keys()), {"ping"})
+
+    async def test_normalize_tools_accepts_tools_in_list(self):
+        async def ping(args: str) -> str:
+            return "pong"
+
+        async def pong() -> str:
+            return "ping"
+
+        inner_tool = FunctionTool(ping, name="ping")
+        dict_tools = DictTools({"ping": inner_tool})
+        tool_map = normalize_tools([dict_tools, pong])
+        self.assertEqual(set(tool_map.keys()), {"ping", "pong"})
+
+    async def test_tools_method_aliases(self):
+        class Example:
+            async def read(self) -> str:
+                return "read"
+
+            async def write(self) -> str:
+                return "write"
+
+        Example = tools(method_aliases={"read": "load"})(Example)
+        tool_map = normalize_tools(Example())
+        self.assertEqual(set(tool_map.keys()), {"load", "write"})
+
+    async def test_tool_decorator_on_method_sets_metadata(self):
+        class Example:
+            @tool(name="custom_read", schema={"type": "object"})
+            async def read(self) -> str:
+                return "read"
+
+        instance = Example()
+        instance = tools(instance)
+        tool_map = normalize_tools(instance)
+        self.assertIn("custom_read", tool_map)
+
+    async def test_tool_allowlist_and_blocklist(self):
+        class Example:
+            async def a(self) -> str:
+                return "a"
+
+            async def b(self) -> str:
+                return "b"
+
+            async def c(self) -> str:
+                return "c"
+
+        with mock.patch("motus.tools.core.normalize.logging.warning") as warn:
+            Example = tools(allowlist={"a", "c", "missing"})(Example)
+            tool_map = normalize_tools(Example())
+            self.assertEqual(set(tool_map.keys()), {"a", "c"})
+            warn.assert_called()
+
+        Example = tools(blocklist={"b"})(Example)
+        tool_map = normalize_tools(Example())
+        self.assertEqual(set(tool_map.keys()), {"a", "c"})
+
+        with mock.patch("motus.tools.core.normalize.logging.warning") as warn:
+            Example = tools(allowlist={"b"}, blocklist={"b", "c"})(Example)
+            tool_map = normalize_tools(Example())
+            self.assertEqual(set(tool_map.keys()), {"b"})
+            warn.assert_called()

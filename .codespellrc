@@ -1,0 +1,3 @@
+[codespell]
+ignore-words-list = dependant, iTerm, TE
+skip = **/cassettes/*

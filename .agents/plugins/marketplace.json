@@ -1,0 +1,20 @@
+{
+  "name": "motus-marketplace",
+  "interface": {
+    "displayName": "Motus"
+  },
+  "plugins": [
+    {
+      "name": "motus",
+      "source": {
+        "source": "local",
+        "path": "./plugins/motus"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

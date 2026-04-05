@@ -1,0 +1,22 @@
+[project]
+name = "motus-deep-research"
+version = "0.1.0"
+description = "Multi-SDK deep research agent (motus, Google ADK, OpenAI Agents, Claude Agent)"
+requires-python = ">=3.12"
+dependencies = [
+    "motus",
+    "pydantic>=2.12.5",
+    "colorlog>=6.8.0",
+]
+
+[project.optional-dependencies]
+google-adk = ["google-adk>=1.27.2"]
+openai-agents = ["openai-agents>=0.0.10"]
+claude = ["claude-agent-sdk>=0.1.0"]
+
+[tool.uv.sources]
+motus = { workspace = true }
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
