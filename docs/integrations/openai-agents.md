@@ -1,6 +1,6 @@
 # OpenAI Agents SDK
 
-Run OpenAI Agents SDK code through Motus with full tracing, model proxying, and cloud deployment. Import from `motus.openai_agents` instead of `agents` — everything else stays the same.
+Run OpenAI Agents SDK code through Motus with full tracing and cloud deployment. Import from `motus.openai_agents` instead of `agents` — everything else stays the same.
 
 ## Installation
 
@@ -26,7 +26,7 @@ You get the following without any code changes:
 
 ### Tracing
 
-Every agent turn, tool call, and model generation is captured by `TraceManager`. The `LithosTracingProcessor` replaces the SDK's default `BackendSpanExporter` (which posts traces to `api.openai.com`) on import. Traces flow into the Motus trace viewer, Jaeger export, and analytics pipeline.
+Every agent turn, tool call, and model generation is captured by `TraceManager`. The `MotusTracingProcessor` replaces the SDK's default `BackendSpanExporter` (which posts traces to `api.openai.com`) on import. Traces flow into the Motus trace viewer, Jaeger export, and analytics pipeline.
 
 Tracing is auto-registered when you import `motus.openai_agents`. You can also call `register_tracing()` explicitly:
 
@@ -36,13 +36,9 @@ from motus.openai_agents import register_tracing
 register_tracing()
 ```
 
-### Model proxy
-
-When deployed to Motus cloud, the platform automatically routes OpenAI Responses API calls through the model proxy. No `OPENAI_API_KEY` is needed in the deployed environment — the proxy handles authentication, rate limiting, and cost tracking transparently.
-
 ### Model wrapping
 
-`LithosOpenAIProvider` and `LithosMultiProvider` sit in the model call path as transparent pass-throughs. Future releases will add hooks for caching, routing, and cost control at this layer.
+`MotusOpenAIProvider` and `MotusMultiProvider` sit in the model call path as transparent pass-throughs. Future releases will add hooks for caching, routing, and cost control at this layer.
 
 ### Tool wrapping
 
@@ -50,24 +46,13 @@ Tool invocations are intercepted before execution. Each `function_tool` call pro
 
 ## Deployment
 
-### Local serving
+The same agent can be served via Motus:
 
 ```bash
 motus serve start myapp:agent --port 8000
 ```
 
 Where `agent` is an OpenAI `Agent` instance — Motus auto-detects it.
-
-### Cloud deployment
-
-```bash
-cd my_project
-motus deploy --name my-agent tools:agent
-```
-
-When deploying to Motus cloud, include `requirements.txt` with `openai-agents>=0.13.4` (the SDK is not in the base image). No API key secrets are needed — the platform routes Responses API calls through the model proxy.
-
-Session state (conversation history) is persisted in DynamoDB and survives backend restarts, failovers, and scaling events.
 
 ## Runner methods
 
@@ -84,16 +69,16 @@ result = Runner.run_sync(agent, "Hello!")
 stream = Runner.run_streamed(agent, "Hello!")
 ```
 
-Each method registers tracing, wraps tools, and injects a `LithosOpenAIProvider` into the `RunConfig` before delegating to the original SDK runner.
+Each method registers tracing, wraps tools, and injects a `MotusOpenAIProvider` into the `RunConfig` before delegating to the original SDK runner.
 
 ## Run configuration
 
 You can pass a custom `RunConfig`. Motus upgrades the default `OpenAIProvider` or `MultiProvider` to their Motus counterparts. If you supply your own custom provider, Motus preserves it:
 
 ```python
-from motus.openai_agents import Runner, RunConfig, LithosOpenAIProvider
+from motus.openai_agents import Runner, RunConfig, MotusOpenAIProvider
 
-config = RunConfig(model_provider=LithosOpenAIProvider())
+config = RunConfig(model_provider=MotusOpenAIProvider())
 result = await Runner.run(agent, "Hello!", run_config=config)
 ```
 
@@ -115,14 +100,14 @@ In addition to re-exporting the full `agents` package, `motus.openai_agents` pro
 
 | Export                        | Description                                              |
 |-------------------------------|----------------------------------------------------------|
-| `LithosModel`                 | Base model wrapper                                       |
-| `LithosResponsesModel`        | Responses API model wrapper                              |
-| `LithosChatCompletionsModel`  | Chat Completions API model wrapper                       |
-| `LithosLitellmModel`          | LiteLLM model wrapper                                   |
-| `LithosOpenAIProvider`         | Provider that returns Lithos model wrappers              |
-| `LithosMultiProvider`          | Multi-provider with Lithos interception                  |
-| `LithosLitellmProvider`       | LiteLLM provider with Lithos interception                |
-| `LithosTracingProcessor`      | Bridges OAI SDK spans into `TraceManager`                |
+| `MotusModel`                 | Base model wrapper                                       |
+| `MotusResponsesModel`        | Responses API model wrapper                              |
+| `MotusChatCompletionsModel`  | Chat Completions API model wrapper                       |
+| `MotusLitellmModel`          | LiteLLM model wrapper                                   |
+| `MotusOpenAIProvider`         | Provider that returns Motus model wrappers              |
+| `MotusMultiProvider`          | Multi-provider with Motus interception                  |
+| `MotusLitellmProvider`       | LiteLLM provider with Motus interception                |
+| `MotusTracingProcessor`      | Bridges OAI SDK spans into `TraceManager`                |
 | `register_tracing()`          | Registers the tracing processor (called on import)       |
 | `get_tracer()`                | Returns the `TraceManager` instance                      |
 
@@ -145,12 +130,3 @@ tracer = get_tracer()
 if tracer:
     tracer.export_trace()
 ```
-
-## Traced span types
-
-The integration produces span types in `TraceManager` via the `LithosTracingProcessor`, which bridges OpenAI Agents SDK span events:
-
-- **`agent`** — Agent invocation spans. Contains agent name, instructions, and handoff information.
-- **`model_call`** — LLM generation spans. Contains model name, token usage, and request/response data.
-- **`tool_call`** — Tool execution spans. Contains tool name, input arguments, output, and error status.
-- **`guardrail`** — Guardrail evaluation spans. Contains guardrail name and pass/fail result.

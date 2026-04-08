@@ -249,7 +249,7 @@ def _make_in_process_submit(mock_parse_factory):
     """
 
     async def _in_process_submit(
-        self, import_path, message, state, *, timeout=0, session_id=None
+        self, import_path, message, state, *, timeout=0, session_id=None, **kwargs
     ):
         from motus.serve.worker import (
             WorkerResult,
@@ -423,7 +423,7 @@ class TestAnthropicSDKServe:
 
         # Custom submit that builds a ToolRunner with a fake MCP tool
         async def _mcp_submit(
-            self, import_path, message, state, *, timeout=0, session_id=None
+            self, import_path, message, state, *, timeout=0, session_id=None, **kwargs
         ):
             mock_parse = _mock_mcp_parse_factory()
             with patch("motus.anthropic.AsyncAnthropic") as MockClient:

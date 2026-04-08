@@ -76,18 +76,18 @@ Ordered by dependency and user journey. Each batch is 1–3 pages that make sens
 
 - [x] **Batch 5**: `user-guide/agents.md` + `user-guide/models.md` — ReActAgent lifecycle, model client abstraction, provider switching
 - [x] **Batch 6**: `user-guide/tools.md` + `user-guide/mcp-integration.md` — FunctionTool, @tool decorator, Tool protocol, MCP sessions and transports
-- [x] **Batch 7**: `user-guide/memory.md` — BasicMemory → CompactionMemory → DatabaseMemory progression, when to use which
+- [x] **Batch 7**: `user-guide/memory.md` — BasicMemory → CompactionMemory progression, when to use which
 
 ### Phase 4: Advanced Features
 
 - [x] **Batch 8**: `user-guide/runtime.md` + `user-guide/tracing.md` — @agent_task, AgentFuture, task graph, TraceManager, collection levels
 - [x] **Batch 9**: `user-guide/guardrails.md` — Input/output guardrails on agents and tools, structured output guardrails
-- [x] **Batch 10**: `user-guide/serving.md` + `user-guide/deployment.md` — AgentServer, sessions, FastAPI endpoints, lithos deploy
+- [x] **Batch 10**: `user-guide/serving.md` + `user-guide/deployment.md` — AgentServer, sessions, FastAPI endpoints, motus deploy
 
 ### Phase 5: CLI & Integrations
 
-- [x] **Batch 11**: `user-guide/cli.md` — lithos serve, lithos deploy, pluggable command system
-- [x] **Batch 12**: `integrations/openai-agents.md` + `integrations/anthropic.md` + `integrations/google-adk.md` — SDK bridges, tracing, model proxy
+- [x] **Batch 11**: `user-guide/cli.md` — motus serve, motus deploy, pluggable command system
+- [x] **Batch 12**: `integrations/openai-agents.md` + `integrations/claude-agent.md` — SDK bridges, when to use which
 
 ### Phase 6: Contributor Docs
 
@@ -119,15 +119,15 @@ Ordered by dependency and user journey. Each batch is 1–3 pages that make sens
 |------|-------|---------------|-------|
 | 2026-03-16 | 1 | `index.md` | Landing page: hero example, feature list, card links, learn-more table |
 | 2026-03-16 | 2 | `installation.md`, `quickstart.md` | Install via uv/pip, tabbed provider examples, 5-step first agent tutorial |
-| 2026-04-02 | 3 | `configuration.md` | Env vars, API keys, lithos.toml, .env pattern |
+| 2026-04-02 | 3 | `configuration.md` | Env vars, API keys, motus.toml, .env pattern |
 | 2026-04-02 | 4 | `overview.md` | Architecture diagram (Mermaid), module table, reading guide |
 | 2026-04-02 | 5 | `agents.md`, `models.md` | ReActAgent lifecycle + params, 4-provider clients, CachePolicy |
 | 2026-04-02 | 6 | `tools.md` (moved from root), `mcp-integration.md` | Moved existing tools.md; MCP patterns, transports, filtering |
 | 2026-04-02 | 7 | `memory.md` | Three strategies, CompactionMemory config, session restore |
 | 2026-04-02 | 8 | `runtime.md`, `tracing.md` | @agent_task, AgentFuture, resolve(), TraceManager, hooks |
 | 2026-04-02 | 9 | `guardrails.md` | Agent + tool guardrails, structured output, chaining |
-| 2026-04-02 | 10 | `serving.md`, `deployment.md` | serve2 endpoints, lithos deploy, secrets |
+| 2026-04-02 | 10 | `serving.md`, `deployment.md` | serve2 endpoints, motus deploy, secrets |
 | 2026-04-02 | 11 | `cli.md` | Command reference tables for serve + deploy |
-| 2026-04-02 | 12 | `openai-agents.md`, `anthropic.md`, `google-adk.md` | SDK bridges, tracing, model proxy, deployment |
+| 2026-04-02 | 12 | `openai-agents.md`, `claude-agent.md` | SDK bridges, tracing, deployment |
 | 2026-04-02 | 13 | `development-setup.md`, `code-style.md` | Dev env, pre-commit, ruff, naming, docstrings |
 | 2026-04-02 | 14 | `testing.md`, `pull-requests.md` | 3-tier testing, VCR cassettes, PR process, code owners |

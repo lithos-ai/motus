@@ -157,8 +157,7 @@ Pick a path based on what you want to do.
 **Integrate with other frameworks**
 
 1. [OpenAI Agents SDK compatibility](../integrations/openai-agents.md)
-2. [Anthropic SDK compatibility](../integrations/anthropic.md)
-3. [Google ADK compatibility](../integrations/google-adk.md)
+2. [Claude Agent SDK compatibility](../integrations/claude-agent.md)
 
 ## Next Steps
 

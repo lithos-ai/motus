@@ -362,3 +362,89 @@ class TestToolWrappers(unittest.IsolatedAsyncioTestCase):
             tool_map = normalize_tools(Example())
             self.assertEqual(set(tool_map.keys()), {"b"})
             warn.assert_called()
+
+
+def test_tool_decorator_sets_requires_approval_attribute():
+    from motus.tools import tool
+
+    @tool(requires_approval=True)
+    def delete_file(path: str):
+        """Delete a file."""
+        import os
+
+        os.remove(path)
+
+    assert getattr(delete_file, "__tool_requires_approval__", False) is True
+
+
+def test_tool_decorator_default_requires_approval_false():
+    from motus.tools import tool
+
+    @tool
+    def read_file(path: str):
+        """Read a file."""
+        return open(path).read()
+
+    assert getattr(read_file, "__tool_requires_approval__", False) is False
+
+
+def test_tool_with_requires_approval_injects_guardrail():
+    """Tool.__init__ with requires_approval=True should insert an approval
+    guardrail at position 0 of _input_guardrails."""
+    from motus.tools.core.tool import Tool
+
+    class DummyTool(Tool):
+        async def _invoke(self, **kwargs):
+            return "ok"
+
+    t = DummyTool(
+        name="dummy",
+        description="test",
+        json_schema={},
+        requires_approval=True,
+    )
+    assert t.requires_approval is True
+    assert len(t._input_guardrails) == 1
+    # guardrail is a closure function
+    assert callable(t._input_guardrails[0])
+    assert t._input_guardrails[0].__name__ == "_builtin_approval_guardrail"
+
+
+def test_tool_without_requires_approval_no_guardrail_injected():
+    from motus.tools.core.tool import Tool
+
+    class DummyTool(Tool):
+        async def _invoke(self, **kwargs):
+            return "ok"
+
+    t = DummyTool(name="dummy", description="test", json_schema={})
+    assert t.requires_approval is False
+    assert t._input_guardrails == []
+
+
+def test_function_tool_forwards_requires_approval_from_decorator():
+    from motus.tools import tool
+    from motus.tools.core.function_tool import FunctionTool
+
+    @tool(requires_approval=True)
+    def delete_file(path: str):
+        """Delete a file."""
+
+    ft = FunctionTool(delete_file)
+    assert ft.requires_approval is True
+    # approval guardrail was injected at position 0
+    assert len(ft._input_guardrails) >= 1
+
+
+def test_function_tool_explicit_requires_approval_overrides_decorator():
+    from motus.tools import tool
+    from motus.tools.core.function_tool import FunctionTool
+
+    @tool(requires_approval=True)
+    def delete_file(path: str):
+        """Delete a file."""
+
+    # Explicit False should override the decorator's True
+    ft = FunctionTool(delete_file, requires_approval=False)
+    assert ft.requires_approval is False
+    assert ft._input_guardrails == []

@@ -15,8 +15,10 @@ from motus.models import ChatMessage
 from .schemas import (
     CreateSessionRequest,
     HealthResponse,
+    InterruptInfo,
     MessageRequest,
     MessageResponse,
+    ResumeRequest,
     SessionResponse,
     SessionStatus,
     SessionSummary,
@@ -209,11 +211,23 @@ class AgentServer:
                 if session is None:
                     raise HTTPException(status_code=404, detail="Session deleted")
 
+            interrupts = None
+            if session.status == SessionStatus.interrupted:
+                interrupts = [
+                    InterruptInfo(
+                        interrupt_id=iid,
+                        type=msg.payload.get("type", "unknown"),
+                        payload=msg.payload,
+                    )
+                    for iid, msg in session.pending_interrupts.items()
+                ]
+
             return SessionResponse(
                 session_id=session.session_id,
                 status=session.status,
                 response=session.response,
                 error=session.error,
+                interrupts=interrupts,
             )
 
         @app.delete("/sessions/{session_id}", status_code=204)
@@ -248,10 +262,10 @@ class AgentServer:
             # create_task schedules but doesn't yield, so everything from
             # the status check through start_turn is atomic under asyncio
             # cooperative scheduling (no other coroutine can interleave).
-            if session.status == SessionStatus.running:
+            if session.status in (SessionStatus.running, SessionStatus.interrupted):
                 raise HTTPException(
                     status_code=409,
-                    detail="Session is already processing a message",
+                    detail=f"Session is {session.status.value}",
                 )
 
             webhook = request.webhook
@@ -271,6 +285,23 @@ class AgentServer:
                 status=SessionStatus.running,
             )
 
+        @app.post("/sessions/{session_id}/resume", status_code=200)
+        async def resume_session(session_id: str, body: ResumeRequest) -> dict:
+            """Submit a resume for a pending interrupt."""
+            session = self._sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            if session.status != SessionStatus.interrupted:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Session is {session.status.value}, not interrupted",
+                )
+            try:
+                session.submit_resume(body.interrupt_id, body.value)
+            except ValueError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            return {"session_id": session_id, "status": session.status.value}
+
         return app
 
     async def _run_turn(
@@ -287,6 +318,15 @@ class AgentServer:
 
         logger.info(f"Turn started: session={session_id}")
 
+        resume_queue: asyncio.Queue = asyncio.Queue()
+        session._resume_queue = resume_queue
+
+        def on_interrupt(msg) -> None:
+            session.interrupt_turn(msg)
+
+        def on_worker_done() -> None:
+            session._resume_queue = None
+
         result: WorkerResult | None = None
         try:
             result = await self._executor.submit_turn(
@@ -295,6 +335,9 @@ class AgentServer:
                 state=list(session.state),
                 timeout=self._timeout,
                 session_id=session_id,
+                on_interrupt=on_interrupt,
+                resume_queue=resume_queue,
+                on_worker_done=on_worker_done,
             )
 
             session = self._sessions.get(session_id)
@@ -314,6 +357,10 @@ class AgentServer:
             session = self._sessions.get(session_id)
             if session is not None:
                 session.fail_turn("Turn cancelled")
+        finally:
+            session = self._sessions.get(session_id)
+            if session is not None:
+                session._resume_queue = None
 
         if webhook is not None:
             session = self._sessions.get(session_id)

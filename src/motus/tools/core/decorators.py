@@ -25,6 +25,7 @@ def tool(
     schema: dict | type[BaseModel] | None = None,
     name: str | None = None,
     description: str | None = None,
+    requires_approval: bool = False,
     input_guardrails: list[Callable] | None = None,
     output_guardrails: list[Callable] | None = None,
     on_start: HookCallback | List[HookCallback] | None = None,
@@ -72,6 +73,7 @@ def tool(
                 _set_tool_attr(target, "__doc__", description)
             if schema:
                 _set_tool_attr(target, "__tool_schema__", schema)
+            _set_tool_attr(target, "__tool_requires_approval__", requires_approval)
             if input_guardrails is not None:
                 _set_tool_attr(target, "__tool_input_guardrails__", input_guardrails)
             if output_guardrails is not None:

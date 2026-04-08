@@ -1,5 +1,6 @@
 """Tests for the Ray-style init() / shutdown() runtime lifecycle."""
 
+import asyncio
 import threading
 import time
 
@@ -316,3 +317,166 @@ class TestSchedulerGC:
         assert len(sched.agent_futures) == 0, (
             f"agent_futures not cleaned: {sched.agent_futures}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Single-loop mode
+# ---------------------------------------------------------------------------
+
+
+class TestSingleLoopMode:
+    """Tests for single-loop mode where the runtime reuses the caller's loop."""
+
+    def setup_method(self):
+        _ensure_clean()
+
+    def teardown_method(self):
+        _ensure_clean()
+
+    @pytest.mark.asyncio
+    async def test_single_loop_init(self):
+        loop = asyncio.get_running_loop()
+        rt = init(loop=loop)
+        assert rt._owns_loop is False
+        assert rt._loop is loop
+        assert rt._thread is threading.current_thread()
+
+    @pytest.mark.asyncio
+    async def test_single_loop_auto_detect(self):
+        rt = get_runtime()
+        assert rt._owns_loop is False
+        assert rt._loop is asyncio.get_running_loop()
+
+    @pytest.mark.asyncio
+    async def test_single_loop_agent_task(self):
+        @agent_task
+        async def add(a, b):
+            return a + b
+
+        result = await add(1, 2)
+        assert result == 3
+
+    @pytest.mark.asyncio
+    async def test_single_loop_task_chain(self):
+        @agent_task
+        async def step_a():
+            return 1
+
+        @agent_task
+        async def step_b(x):
+            return x + 10
+
+        a = step_a()
+        b = step_b(a)
+        result = await b
+        assert result == 11
+
+    @pytest.mark.asyncio
+    async def test_single_loop_parallel_tasks(self):
+        @agent_task
+        async def double(x):
+            return x * 2
+
+        futures = [double(i) for i in range(5)]
+        results = [await f for f in futures]
+        assert results == [0, 2, 4, 6, 8]
+
+    @pytest.mark.asyncio
+    async def test_single_loop_sync_task(self):
+        @agent_task
+        def heavy(x):
+            return x**2
+
+        result = await heavy(7)
+        assert result == 49
+
+    @pytest.mark.asyncio
+    async def test_single_loop_shutdown_no_loop_stop(self):
+        loop = asyncio.get_running_loop()
+        init(loop=loop)
+        shutdown()
+        assert loop.is_running()
+
+    def test_dual_loop_still_works(self):
+        rt = init()
+        assert rt._owns_loop is True
+        assert rt._thread.name == "AgentEngine"
+
+    @pytest.mark.asyncio
+    async def test_no_agent_engine_thread_in_single_loop(self):
+        get_runtime()
+        agent_threads = [t for t in threading.enumerate() if t.name == "AgentEngine"]
+        assert len(agent_threads) == 0
+
+    @pytest.mark.asyncio
+    async def test_single_loop_error_propagation(self):
+        @agent_task
+        async def fail():
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError, match="boom"):
+            await fail()
+
+    @pytest.mark.asyncio
+    async def test_single_loop_af_result_raises(self):
+        @agent_task
+        async def slow():
+            return 42
+
+        f = slow()
+        with pytest.raises(RuntimeError, match="deadlock"):
+            f.af_result()
+        await f
+
+    @pytest.mark.asyncio
+    async def test_single_loop_sync_spawns_async(self):
+        """Sync task in executor spawns async subtask via run_coroutine_threadsafe."""
+
+        @agent_task
+        async def async_child(x):
+            return x + 1
+
+        @agent_task
+        def sync_parent(x):
+            child_future = async_child(x * 10)
+            return child_future.af_result()
+
+        result = await sync_parent(3)
+        assert result == 31
+
+    @pytest.mark.asyncio
+    async def test_single_loop_cancel(self):
+        from motus.runtime.task_instance import TaskCancelledError
+
+        started = asyncio.Event()
+
+        @agent_task
+        async def slow():
+            started.set()
+            await asyncio.sleep(100)
+            return "done"
+
+        fut = slow()
+        await started.wait()
+        fut.af_cancel()
+        with pytest.raises(TaskCancelledError):
+            await fut
+
+    @pytest.mark.asyncio
+    async def test_single_loop_double_shutdown(self):
+        from motus.runtime.agent_runtime import AgentRuntime
+
+        loop = asyncio.get_running_loop()
+        rt = AgentRuntime(loop=loop)
+        rt.shutdown()
+        rt.shutdown()  # should not raise
+        assert loop.is_running()
+
+    @pytest.mark.asyncio
+    async def test_single_loop_closed_loop_rejected(self):
+        from motus.runtime.agent_runtime import AgentRuntime
+
+        closed_loop = asyncio.new_event_loop()
+        closed_loop.close()
+        with pytest.raises(ValueError, match="closed"):
+            AgentRuntime(loop=closed_loop)

@@ -113,6 +113,11 @@ class CloudLiveExporter:
         self._session_id = session_id
         self._cloud_trace_id: str | None = None
         self._closed = False
+        # Build a urllib opener that skips macOS system proxy detection.
+        # The default urlopen() calls SCDynamicStoreCopyProxiesWithOptions
+        # via _scproxy, which uses CoreFoundation — not fork-safe on macOS.
+        # In forkserver workers this causes SIGSEGV.
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self._queue: queue.Queue[tuple[int, dict]] = queue.Queue()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._flush_loop, daemon=True)
@@ -170,7 +175,7 @@ class CloudLiveExporter:
                 headers=self._headers,
                 method="POST",
             )
-            urllib.request.urlopen(req, timeout=30)
+            self._opener.open(req, timeout=30)
             logger.debug(f"Flushed {len(spans)} spans to cloud")
         except (urllib.error.URLError, OSError) as e:
             logger.debug(f"Cloud span flush failed (non-fatal): {e}")
@@ -186,7 +191,7 @@ class CloudLiveExporter:
                 headers=self._headers,
                 method="POST",
             )
-            urllib.request.urlopen(req, timeout=30)
+            self._opener.open(req, timeout=30)
             logger.debug(f"Marked cloud trace complete: {self._cloud_trace_id}")
         except (urllib.error.URLError, OSError) as e:
             logger.debug(f"Cloud trace complete failed (non-fatal): {e}")
@@ -210,7 +215,7 @@ class CloudLiveExporter:
                 headers=self._headers,
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with self._opener.open(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode())
             self._cloud_trace_id = data.get("trace_id")
             logger.debug(f"Created cloud trace: {self._cloud_trace_id}")

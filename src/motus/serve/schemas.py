@@ -1,7 +1,7 @@
 """Pydantic models for the serve REST API."""
 
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -11,7 +11,23 @@ from motus.models import ChatMessage
 class SessionStatus(str, Enum):
     idle = "idle"
     running = "running"
+    interrupted = "interrupted"
     error = "error"
+
+
+class InterruptInfo(BaseModel):
+    """Information about a pending interrupt, returned to clients via GET /sessions/{id}."""
+
+    interrupt_id: str
+    type: str  # "tool_approval" | "user_input" (extensible)
+    payload: dict
+
+
+class ResumeRequest(BaseModel):
+    """POST /sessions/{id}/resume body."""
+
+    interrupt_id: str
+    value: Any  # shape depends on interrupt type
 
 
 class CreateSessionRequest(BaseModel):
@@ -23,6 +39,7 @@ class SessionResponse(BaseModel):
     status: SessionStatus
     response: ChatMessage | None = None
     error: str | None = None
+    interrupts: list[InterruptInfo] | None = None
 
 
 class SessionSummary(BaseModel):

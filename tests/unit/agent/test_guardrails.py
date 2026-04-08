@@ -1,5 +1,6 @@
 """Tests for the guardrail system."""
 
+import asyncio
 import json
 
 import pytest
@@ -1081,3 +1082,70 @@ class TestRunStructuredOutputGuardrails:
         assert rebuilt.raw_data == "[REDACTED]"
         assert rebuilt.score == 0.9
         assert rebuilt.summary == "ok"
+
+
+# ---------------------------------------------------------------------------
+# _execute_tool_input_guardrail — VAR_KEYWORD support
+# ---------------------------------------------------------------------------
+
+
+def test_var_keyword_guardrail_receives_all_kwargs():
+    """A `**kwargs` guardrail should receive every kwarg passed to the tool."""
+    captured = {}
+
+    async def universal_guardrail(**kwargs):
+        captured.update(kwargs)
+
+    kwargs = {"path": "/tmp/foo", "force": True}
+    asyncio.run(_execute_tool_input_guardrail(universal_guardrail, kwargs))
+    assert captured == {"path": "/tmp/foo", "force": True}
+
+
+def test_var_keyword_guardrail_with_mixed_required_param():
+    """A `(path, **kwargs)` guardrail should be skipped if `path` is missing."""
+
+    async def mixed_guardrail(path: str, **kwargs):
+        raise AssertionError("should have been skipped")
+
+    # kwargs missing required 'path'
+    result = asyncio.run(
+        _execute_tool_input_guardrail(mixed_guardrail, {"force": True})
+    )
+    assert result is None  # skipped
+
+
+def test_var_keyword_guardrail_with_mixed_required_param_present():
+    """A `(path, **kwargs)` guardrail should be called when path is present."""
+    seen = {}
+
+    async def mixed_guardrail(path: str, **kwargs):
+        seen["path"] = path
+        seen["rest"] = kwargs
+
+    asyncio.run(
+        _execute_tool_input_guardrail(
+            mixed_guardrail, {"path": "/tmp/foo", "force": True}
+        )
+    )
+    assert seen["path"] == "/tmp/foo"
+    # Python binds 'path' to its named parameter; remaining kwargs go to **kwargs
+    assert seen["rest"] == {"force": True}
+
+
+def test_empty_signature_guardrail_still_called():
+    """An empty-signature guardrail should be called with no args."""
+    called = []
+
+    async def empty_guardrail():
+        called.append(True)
+
+    asyncio.run(_execute_tool_input_guardrail(empty_guardrail, {"a": 1}))
+    assert called == [True]
+
+
+def test_tool_rejected_is_subclass_of_tool_input_guardrail_tripped():
+    from motus.guardrails import ToolInputGuardrailTripped, ToolRejected
+
+    assert issubclass(ToolRejected, ToolInputGuardrailTripped)
+    exc = ToolRejected("user said no")
+    assert str(exc) == "user said no"

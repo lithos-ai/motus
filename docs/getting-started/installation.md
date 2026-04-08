@@ -25,12 +25,10 @@ To include optional SDK integrations:
     uv sync --extra openai-agents
     ```
 
-=== "Anthropic SDK"
-
-    The Anthropic SDK is included as a core dependency. For tool runner support, ensure `anthropic>=0.49.0`:
+=== "Claude Agent SDK"
 
     ```bash
-    uv pip install 'anthropic>=0.49.0'
+    uv sync --extra claude-agent-sdk
     ```
 
 === "Google ADK"

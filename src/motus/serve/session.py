@@ -5,8 +5,10 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
 from motus.models import ChatMessage
+from motus.serve.interrupt import InterruptMessage
 
 from .schemas import SessionStatus
 
@@ -32,6 +34,8 @@ class Session:
     running_since: float | None = None
     _task: asyncio.Task | None = field(default=None, repr=False)
     _done: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    pending_interrupts: dict = field(default_factory=dict, repr=False)
+    _resume_queue: "asyncio.Queue | None" = field(default=None, repr=False)
 
     def start_turn(self, task: asyncio.Task) -> None:
         """Transition to running state for a new turn."""
@@ -53,6 +57,7 @@ class Session:
         self.error = None
         self.last_message_at = time.monotonic()
         self._done.set()
+        self.pending_interrupts.clear()
 
     def fail_turn(self, error: str) -> None:
         """Record a turn failure and transition to error state."""
@@ -62,12 +67,14 @@ class Session:
         self.error = error
         self.last_message_at = time.monotonic()
         self._done.set()
+        self.pending_interrupts.clear()
 
     def cancel(self) -> None:
         """Cancel any running task and signal waiters."""
         if self._task is not None:
             self._task.cancel()
         self._done.set()
+        self.pending_interrupts.clear()
 
     async def wait(self, timeout: float | None = None) -> None:
         """Wait for the current turn to complete."""
@@ -80,6 +87,29 @@ class Session:
                 pass
         else:
             await self._done.wait()
+
+    def interrupt_turn(self, msg: "InterruptMessage") -> None:
+        """Transition to interrupted. Drops late deliveries after terminal states."""
+        if self.status not in (SessionStatus.running, SessionStatus.interrupted):
+            return
+        self.status = SessionStatus.interrupted
+        self.pending_interrupts[msg.interrupt_id] = msg
+        self._done.set()  # wake long-poll waiters
+
+    def submit_resume(self, interrupt_id: str, value: Any) -> None:
+        """Forward user's reply to the worker. Raises ValueError on bad state."""
+        if self._resume_queue is None:
+            raise ValueError("Session not actively waiting for resume")
+        if interrupt_id not in self.pending_interrupts:
+            raise ValueError(f"Unknown interrupt_id: {interrupt_id}")
+
+        from motus.serve.interrupt import ResumeMessage
+
+        del self.pending_interrupts[interrupt_id]
+        self._resume_queue.put_nowait(ResumeMessage(interrupt_id, value))
+        if not self.pending_interrupts:
+            self.status = SessionStatus.running
+            self._done.clear()
 
 
 class SessionStore:
@@ -122,14 +152,15 @@ class SessionStore:
         return True
 
     def sweep(self) -> int:
-        """Delete expired idle/error sessions. Returns count of deleted sessions."""
+        """Delete expired idle/error sessions. Skip active sessions (running, interrupted)."""
         if self.ttl <= 0:
             return 0
         now = time.monotonic()
         expired = [
             sid
             for sid, s in self._sessions.items()
-            if s.status != SessionStatus.running and now - s.last_message_at > self.ttl
+            if s.status not in (SessionStatus.running, SessionStatus.interrupted)
+            and now - s.last_message_at > self.ttl
         ]
         for sid in expired:
             self._sessions[sid].cancel()

@@ -1,8 +1,8 @@
-# Lithos
+# Motus
 
 Build AI agents in Python. Deploy them to the cloud in one command.
 
-Lithos handles the full lifecycle — from local prototyping to production-scale serving — so you focus on agent logic, not infrastructure.
+Motus handles the full lifecycle — from local prototyping to production-scale serving — so you focus on agent logic, not infrastructure.
 
 === "ReAct Agent"
 
@@ -13,7 +13,7 @@ Lithos handles the full lifecycle — from local prototyping to production-scale
         return f"Result for: {query}"
 
     agent = ReActAgent(client, "gpt-4o", tools=[lookup])
-    response = await agent("What can you tell me about Lithos?")
+    response = await agent("What can you tell me about Motus?")
     ```
 
 === "Task-Graph Workflow"
@@ -25,7 +25,7 @@ Lithos handles the full lifecycle — from local prototyping to production-scale
     @agent_task
     async def summarize(text_a, text_b): ...
 
-    # No DAG definition, no edge wiring — lithos infers the graph from data flow.
+    # No DAG definition, no edge wiring — motus infers the graph from data flow.
     a = fetch("https://source-a.com")  # ╮
     b = fetch("https://source-b.com")  # ├─ parallel (independent args)
     result = summarize(a, b)            # ╰─ waits for both (a, b are deps)
@@ -34,22 +34,22 @@ Lithos handles the full lifecycle — from local prototyping to production-scale
 
 ```bash
 # One command to go from local code to cloud endpoint
-lithos deploy my-project myapp:agent
+motus deploy my-project myapp:agent
 ```
 
-## Why Lithos
+## Why Motus
 
 ### Ship to production, not just a notebook
 
-Most agent frameworks stop at local execution. Lithos gives you `lithos serve` to expose agents as session-based HTTP APIs and `lithos deploy` to push them to managed cloud infrastructure — auto-scaling, load balancing, zero Docker knowledge required.
+Most agent frameworks stop at local execution. Motus gives you `motus serve` to expose agents as session-based HTTP APIs and `motus deploy` to push them to managed cloud infrastructure — auto-scaling, load balancing, zero Docker knowledge required.
 
 ### See what your agents are doing
 
-Built-in distributed tracing captures every LLM call, tool invocation, and task dependency in real time. View execution traces in a live HTML viewer, export to OpenTelemetry/Jaeger, or stream to the Lithos cloud dashboard. No blind spots.
+Built-in distributed tracing captures every LLM call, tool invocation, and task dependency in real time. View execution traces in a live HTML viewer, export to OpenTelemetry/Jaeger, or stream to the Motus cloud dashboard. No blind spots.
 
 ### Two ways to build: ReAct or workflow
 
-Use `ReActAgent` when the LLM should decide which tools to call. Use `@agent_task` to compose deterministic multi-step pipelines — no DAG definitions, no edge wiring, no scaffolding. Decorate your functions and pass outputs as inputs; Lithos infers the dependency graph automatically. Mix both in the same application — an agent task can invoke a ReAct agent, and a ReAct agent can delegate to a task graph.
+Use `ReActAgent` when the LLM should decide which tools to call. Use `@agent_task` to compose deterministic multi-step pipelines — no DAG definitions, no edge wiring, no scaffolding. Decorate your functions and pass outputs as inputs; Motus infers the dependency graph automatically. Mix both in the same application — an agent task can invoke a ReAct agent, and a ReAct agent can delegate to a task graph.
 
 ### Production-ready from day one
 
@@ -65,11 +65,11 @@ A built-in meta-agent continuously analyzes your agent's traces, user interactio
 
 ### Agent-aware serving infrastructure (coming soon)
 
-The Lithos serving layer is designed around agent workloads, not generic HTTP traffic. Adaptive batching, intelligent request routing, and auto-scaling policies that respond to agent-level metrics — token throughput, tool latency, step count — rather than raw request volume.
+The Motus serving layer is designed around agent workloads, not generic HTTP traffic. Adaptive batching, intelligent request routing, and auto-scaling policies that respond to agent-level metrics — token throughput, tool latency, step count — rather than raw request volume.
 
 ## Key Features
 
-- **Cloud deployment** — `lithos deploy` packages and ships your agent to production with one command
+- **Cloud deployment** — `motus deploy` packages and ships your agent to production with one command
 - **Production serving** — session-based HTTP APIs with worker pools, TTL management, and webhook callbacks
 - **Observability** — distributed tracing with live viewer, OpenTelemetry export, and configurable collection levels
 - **Two agent paradigms** — ReAct loop for autonomous tool use; `@agent_task` for lightweight dependency-tracked workflows with zero boilerplate
@@ -77,7 +77,7 @@ The Lithos serving layer is designed around agent workloads, not generic HTTP tr
 - **Composable tools** — `@tool` decorator wraps any function; MCP sessions connect external tool servers; Docker sandboxes isolate untrusted code
 - **Lifecycle hooks** — tap into `task_start`, `task_end`, `task_error` for custom logging, metrics, or side effects
 - **Multi-provider models** — unified client for OpenAI, Anthropic, Gemini, and OpenRouter
-- **Persistent memory** — basic, compaction, and database-backed strategies with automatic context management
+- **Persistent memory** — basic and compaction strategies with boundary-aware auto-compaction and session restore
 - **Meta-agent** :material-clock-fast:{ title="Coming soon" } — analyzes traces and user feedback to optimize prompts, reduce cost, debug failures, and strengthen agent configurations
 - **Agent-aware infra** :material-clock-fast:{ title="Coming soon" } — serving infrastructure with adaptive batching, intelligent routing, and auto-scaling tuned to agent-level metrics
 
@@ -87,7 +87,7 @@ The Lithos serving layer is designed around agent workloads, not generic HTTP tr
 
 - **Installation**
 
-    Install Lithos and set up your environment.
+    Install Motus and set up your environment.
 
     [:octicons-arrow-right-24: Install](getting-started/installation.md)
 
@@ -113,7 +113,7 @@ The Lithos serving layer is designed around agent workloads, not generic HTTP tr
 
 ## Already using another agent runtime?
 
-Lithos integrates with existing agent SDKs. Bring your OpenAI Agents, Anthropic SDK, or Google ADK agents and deploy them through Lithos with full observability, tracing, and cloud serving — no rewrite needed.
+Motus integrates with existing agent SDKs. Bring your OpenAI Agents or Claude Agent SDK agents and deploy them through Motus with full observability and cloud serving — no rewrite needed.
 
 === "OpenAI Agents SDK"
 
@@ -124,48 +124,23 @@ Lithos integrates with existing agent SDKs. Bring your OpenAI Agents, Anthropic 
     result = await Runner.run(agent, "Hello!")
     ```
 
-=== "Anthropic SDK"
+=== "Claude Agent SDK"
 
     ```python
-    from motus.anthropic import ToolRunner, beta_async_tool
+    from motus.claude_agent import query
 
-    @beta_async_tool
-    async def get_weather(location: str) -> str:
-        """Get the weather for a city."""
-        return '{"temperature": "20C", "condition": "Sunny"}'
-
-    runner = ToolRunner(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1024,
-        tools=[get_weather],
-    )
+    async for message in query(prompt="Summarize this document."):
+        print(message)
     ```
 
-=== "Google ADK"
-
-    ```python
-    from motus.google_adk.agents.llm_agent import Agent
-
-    def get_current_time(city: str) -> dict:
-        """Returns the current time in a specified city."""
-        return {"status": "success", "city": city, "time": "10:30 AM"}
-
-    root_agent = Agent(
-        model="gemini-2.5-flash",
-        name="root_agent",
-        instruction="You are a helpful assistant.",
-        tools=[get_current_time],
-    )
-    ```
-
-[:octicons-arrow-right-24: OpenAI Agents](integrations/openai-agents.md) | [:octicons-arrow-right-24: Anthropic SDK](integrations/anthropic.md) | [:octicons-arrow-right-24: Google ADK](integrations/google-adk.md)
+[:octicons-arrow-right-24: OpenAI Agents integration](integrations/openai-agents.md) | [:octicons-arrow-right-24: Claude Agent integration](integrations/claude-agent.md)
 
 ## Learn More
 
 | Section | What you will find |
 |---------|-------------------|
 | [User Guide](user-guide/overview.md) | Architecture, agents, tools, models, memory, serving |
-| [Integrations](integrations/openai-agents.md) | Bridges to OpenAI Agents SDK, Anthropic SDK, and Google ADK |
+| [Integrations](integrations/openai-agents.md) | Bridges to OpenAI Agents SDK and Claude Agent SDK |
 | [Examples](examples/index.md) | Runnable demos: runtime patterns, MCP, multi-agent bots |
 | [API Reference](api/index.md) | Auto-generated reference for every public class and function |
 | [Contributing](contributing/development-setup.md) | Dev environment, tests, PRs |

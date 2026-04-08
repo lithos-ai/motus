@@ -70,6 +70,12 @@ class ToolInputGuardrailTripped(GuardrailTripped):
     """Raised when a tool input guardrail blocks execution."""
 
 
+class ToolRejected(ToolInputGuardrailTripped):
+    """Raised when a user rejects a tool call via HITL approval."""
+
+    pass
+
+
 class ToolOutputGuardrailTripped(GuardrailTripped):
     """Raised when a tool output guardrail blocks execution."""
 
@@ -132,16 +138,33 @@ async def run_guardrails(
 async def _execute_tool_input_guardrail(fn: Callable, kwargs: dict) -> dict | None:
     """Execute one tool input guardrail.
 
-    The guardrail receives only the kwargs it declares.
+    The guardrail receives either only the kwargs it declares (by-name matching),
+    OR all kwargs if it declares **kwargs (universal guardrail).
+
     Returns ``dict`` (partial update) or ``None`` (no change).
-    Skipped (returns ``None``) when required parameters are missing from kwargs.
+    Skipped (returns ``None``) when required named parameters are missing.
     """
     sig = inspect.signature(fn)
-    matched = {k: kwargs[k] for k in sig.parameters if k in kwargs}
-    # Skip if any required param is missing
+
+    has_var_keyword = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+
+    # Required-param check must run regardless of has_var_keyword.
     for name, param in sig.parameters.items():
-        if param.default is inspect.Parameter.empty and name not in matched:
+        if param.kind in (
+            inspect.Parameter.VAR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        ):
+            continue
+        if param.default is inspect.Parameter.empty and name not in kwargs:
             return None
+
+    if has_var_keyword:
+        matched = kwargs
+    else:
+        matched = {k: kwargs[k] for k in sig.parameters if k in kwargs}
+
     if iscoroutinefunction(fn):
         result = await fn(**matched)
     else:

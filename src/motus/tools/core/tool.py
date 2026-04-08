@@ -24,12 +24,34 @@ class Tool(ABC):
         json_schema: dict,
         input_guardrails: list | None = None,
         output_guardrails: list | None = None,
+        requires_approval: bool = False,
     ) -> None:
         self.name = name
         self.description = description
         self.json_schema = json_schema
         self._input_guardrails = input_guardrails or []
         self._output_guardrails = output_guardrails or []
+
+        self.requires_approval = requires_approval
+
+        if requires_approval:
+            tool_self = self  # closure capture
+
+            async def _builtin_approval_guardrail(**kwargs):
+                from motus.guardrails import ToolRejected
+                from motus.serve.interrupt import interrupt
+
+                decision = await interrupt(
+                    {
+                        "type": "tool_approval",
+                        "tool_name": tool_self.name,
+                        "tool_args": kwargs,
+                    }
+                )
+                if not decision.get("approved"):
+                    raise ToolRejected(f"User rejected {tool_self.name}")
+
+            self._input_guardrails.insert(0, _builtin_approval_guardrail)
 
     def __call__(self, args: str):
         """Parse JSON args, then delegate to _execute."""

@@ -233,6 +233,7 @@ class FunctionTool(Tool):
         schema: dict | type[BaseModel] | None = None,
         input_guardrails: list[Callable] | None = None,
         output_guardrails: list[Callable] | None = None,
+        requires_approval: bool | None = None,
     ) -> None:
         # Unwrap @agent_task wrappers to get the raw function/method.
         # This avoids triple-nesting: FunctionTool.__call__ (@agent_task) →
@@ -300,12 +301,20 @@ class FunctionTool(Tool):
         if output_guardrails is None:
             output_guardrails = _get_tool_attr(func, "__tool_output_guardrails__") or []
 
+        # Resolve requires_approval: explicit True/False wins; None means "inherit
+        # from decorator-set attribute".
+        if requires_approval is None:
+            requires_approval = bool(
+                _get_tool_attr(func, "__tool_requires_approval__") or False
+            )
+
         super().__init__(
             name=tool_name,
             description=description,
             json_schema=tool_json_schema,
             input_guardrails=input_guardrails,
             output_guardrails=output_guardrails,
+            requires_approval=requires_approval,
         )
 
     def __call__(self, args: str):

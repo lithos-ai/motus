@@ -135,8 +135,59 @@ def start_server(args):
     server.run(host=host, port=port, log_level=log_level)
 
 
+def _prompt_user_for_interrupt(client, base_url, session_id, intr):
+    """Prompt the user for a single interrupt and POST the resume."""
+    interrupt_id = intr["interrupt_id"]
+    intr_type = intr["type"]
+    payload = intr.get("payload", {})
+
+    if intr_type == "tool_approval":
+        tool_name = payload.get("tool_name", "<unknown tool>")
+        tool_args = payload.get("tool_args", {})
+        print(f"\n[approval] Agent wants to call: {tool_name}")
+        print(f"           Args: {tool_args}")
+        answer = input("           Approve? [y/N]: ").strip().lower()
+        approved = answer == "y"
+        client.post(
+            f"{base_url}/sessions/{session_id}/resume",
+            json={"interrupt_id": interrupt_id, "value": {"approved": approved}},
+            timeout=10.0,
+        ).raise_for_status()
+
+    elif intr_type == "user_input":
+        questions = payload.get("questions", [])
+        answers = {}
+        for q in questions:
+            qtext = q.get("question", "")
+            options = q.get("options", [])
+            print(f"\n[ask] {qtext}")
+            for i, opt in enumerate(options, start=1):
+                print(f"  {i}. {opt.get('label')} — {opt.get('description', '')}")
+            print(f"  {len(options) + 1}. (Other — type your own answer)")
+            choice = input("  Choice: ").strip()
+            try:
+                idx = int(choice)
+                if 1 <= idx <= len(options):
+                    answers[qtext] = options[idx - 1]["label"]
+                else:
+                    answers[qtext] = input("  Your answer: ").strip()
+            except ValueError:
+                answers[qtext] = choice
+        client.post(
+            f"{base_url}/sessions/{session_id}/resume",
+            json={
+                "interrupt_id": interrupt_id,
+                "value": {"answers": answers},
+            },
+            timeout=10.0,
+        ).raise_for_status()
+
+    else:
+        print(f"[warn] unknown interrupt type: {intr_type}, ignoring")
+
+
 def _send_and_wait(client, base_url, session_id, message, params=None):
-    """Send a message and wait for the result."""
+    """Send a message and wait for the result, handling interrupts."""
     import httpx
 
     body = {"content": message}
@@ -152,14 +203,26 @@ def _send_and_wait(client, base_url, session_id, message, params=None):
         print(f"Error: {e.response.status_code} - {e.response.text}")
         return
 
-    r = client.get(f"{base_url}/sessions/{session_id}", params={"wait": "true"})
-    r.raise_for_status()
-    data = r.json()
+    while True:
+        r = client.get(f"{base_url}/sessions/{session_id}", params={"wait": "true"})
+        r.raise_for_status()
+        data = r.json()
+        status = data["status"]
 
-    if data["status"] == "error":
-        print(f"Error: {data['error']}")
-    elif data.get("response"):
-        print(data["response"]["content"])
+        if status == "error":
+            print(f"Error: {data['error']}")
+            return
+        elif status == "interrupted":
+            for intr in data.get("interrupts", []):
+                _prompt_user_for_interrupt(client, base_url, session_id, intr)
+            # continue polling — worker is still running, waiting for resume
+        elif status == "idle":
+            if data.get("response"):
+                print(data["response"]["content"])
+            return
+        else:
+            # running or unknown — keep polling
+            pass
 
 
 def chat_command(args):

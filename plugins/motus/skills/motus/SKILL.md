@@ -42,38 +42,41 @@ Your job is to understand the user's requirements and help them build a fully fu
 
 ## Before writing any code
 
-Infer as much as possible from what the user already said and from the project context (existing code, dependencies, env vars). **Do not ask questions you can answer from context.** Start building and let the user course-correct.
+Gather requirements, but **do not bombard the user with a list of questions**. Instead:
 
-**Choosing a framework** — pick based on context, don't ask:
+- Infer as much as possible from what the user already said and from the project context (existing code, dependencies, env vars).
+- Use a single concise multi-choice question to confirm the remaining unknowns. Prefer selection-based prompts (e.g., "Which provider? 1) OpenAI 2) Anthropic 3) Gemini 4) OpenRouter") over open-ended questions.
+- Only ask follow-ups for things you truly cannot infer.
 
-- If the user mentions a specific SDK (Anthropic, OpenAI Agents, Google ADK), use that SDK's wrapper.
-- Otherwise, default to `motus.agent.ReActAgent` with `OpenAIChatClient`.
+You need to understand:
 
-| User says | Framework |
-|-----------|-----------|
-| "Anthropic SDK" | `motus.anthropic.ToolRunner` |
-| "OpenAI SDK" / "OpenAI Agents" | `motus.openai_agents.Agent` |
-| "Google ADK" / "Gemini" | `motus.google_adk.agents.llm_agent.Agent` |
-| No preference / "Motus" | `motus.agent.ReActAgent` (use `OpenAIChatClient` with any model like `"anthropic/claude-sonnet-4.5"` or `"gpt-4o"`) |
+1. **Agent framework** — Which framework to use? Pick based on the user's preferred SDK:
+   - **"Anthropic SDK"** → `motus.anthropic.ToolRunner` (wraps the native Anthropic tool-use API)
+   - **"OpenAI SDK" / "OpenAI Agents"** → `motus.openai_agents.Agent` (wraps the OpenAI Agents SDK)
+   - **"Google ADK" / "Gemini"** → `motus.google_adk.agents.llm_agent.Agent` (wraps Google ADK)
+   - **No preference / "Motus"** → `motus.agent.ReActAgent` (Motus's built-in agent loop; use `OpenAIChatClient` with any model like `"anthropic/claude-sonnet-4.5"` or `"gpt-4o"`)
 
-**Important:** `ReActAgent` is a generic agent loop that uses model clients (`OpenAIChatClient`, etc.) as backends. It is *not* the same as using a provider's native SDK. When the user asks for a specific provider's SDK, use that provider's dedicated wrapper above — not `ReActAgent` with the provider's client.
+   **Important:** `ReActAgent` is a generic agent loop that uses model clients (`OpenAIChatClient`, etc.) as backends. It is *not* the same as using a provider's native SDK. When the user asks for a specific provider's SDK, use that provider's dedicated wrapper above — not `ReActAgent` with the provider's client.
+2. **Tools needed** — Custom functions, web search, MCP servers, or nested agents? (Note: Docker `Sandbox` is local-only — it cannot be deployed to cloud. See [Deployable agent types](#deployable-agent-types) below.)
+3. **Memory strategy** — Basic (short) or compaction (long conversations)?
+4. **Safety requirements** — Any guardrails needed?
+5. **Observability needs** — Tracing, hooks?
 
 When the agent is ready to **deploy**: if the user's original request includes deploying, proceed directly to [Cloud Deploy](#cloud-deploy) — do not stop and ask the user to run `/motus deploy` separately. "Deploy" always means cloud deployment. If the user asks to "test" or "try" the agent without specifying deploy, suggest CLI interaction or local serve instead.
 
-**Always prefer `uv`** for package management (`uv add`, `uv sync`). Use `uv run` for running user scripts (e.g. `uv run python agent.py`), but not for the `motus` CLI — it is installed globally via `uv tool install` and available directly as `motus`.
-
-**Python version** — When creating a new project, pin Python 3.12 (e.g. `uv init --python 3.12` or `requires-python = ">=3.12"` in pyproject.toml). The cloud runtime supports up to Python 3.13. Do not use Python 3.14, which uv may select by default.
+**Always prefer `uv`** for package management and running commands (`uv sync`, `uv pip install`, `uv run`). Only fall back to `pip`/`python` if the user explicitly asks or `uv` is unavailable.
 
 ## Environment check
 
 Before writing any agent code, verify the user's environment is ready. Run these checks silently and only report problems:
 
-1. **Motus installed** — Check that `lithosai-motus` is installed as a project dependency. If not, install it:
+1. **Python version** — Must be 3.12+. Check with `python3 --version`.
+2. **Motus installed** — Try `python3 -c "import motus"`. If it fails, install as a dependency:
    ```bash
    uv add git+ssh://git@github.com/lithos-ai/motus.git
    ```
-2. **API keys** — LLM provider keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, etc.) are **only needed for local testing**, not for cloud deployment. If no keys are set, **do not block** — note it and continue. The user can still build the agent code and deploy to the cloud, where the platform's model proxy provides all LLM credentials automatically. Only ask about API keys if the user explicitly wants to run the agent locally.
-3. **Optional: Docker** — Only check if the user needs sandbox or MCP-in-container features. `docker info` should succeed.
+3. **API keys** — LLM provider keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, etc.) are **only needed for local testing**, not for cloud deployment. If no keys are set, **do not block** — note it and continue. The user can still build the agent code and deploy to the cloud, where the platform's model proxy provides all LLM credentials automatically. Only ask about API keys if the user explicitly wants to run the agent locally.
+4. **Optional: Docker** — Only check if the user needs sandbox or MCP-in-container features. `docker info` should succeed.
 
 If everything is fine, proceed without mentioning the checks.
 

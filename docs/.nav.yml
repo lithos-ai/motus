@@ -19,8 +19,7 @@ nav:
       - CLI Reference: user-guide/cli.md
   - Integrations:
       - OpenAI Agents SDK: integrations/openai-agents.md
-      - Anthropic SDK: integrations/anthropic.md
-      - Google ADK: integrations/google-adk.md
+      - Claude Agent SDK: integrations/claude-agent.md
   - Examples: examples
   - API Reference:
       - api/index.md

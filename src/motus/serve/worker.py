@@ -7,15 +7,21 @@ A semaphore limits concurrency to max_workers.
 import asyncio
 import importlib
 import inspect
+import logging
 import multiprocessing as mp
 import os
 import sys
 import threading
+import time
 import traceback
 from dataclasses import dataclass
-from typing import Any
+from multiprocessing.connection import Connection
+from typing import Any, Callable
 
 from motus.models import ChatMessage
+from motus.serve.interrupt import InterruptMessage
+
+logger = logging.getLogger("motus.serve.worker")
 
 DEFAULT_MAX_WORKERS = 4
 
@@ -152,12 +158,15 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
 
-    try:
+    async def _main():
+        from motus.serve.interrupt import _init_interrupt_channel
+
+        _init_interrupt_channel(conn)
+
         from motus.serve.protocol import ServableAgent
 
         agent_or_fn = _resolve_import_path(import_path)
 
-        # Also set via mutable setter in case runtime already initialized (forkserver)
         if session_id:
             try:
                 from motus.runtime.agent_runtime import get_runtime
@@ -166,73 +175,156 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
                 if hasattr(rt, "scheduler") and hasattr(rt.scheduler, "tracer"):
                     rt.scheduler.tracer.set_session_id(session_id)
             except Exception:
-                pass
+                pass  # tracer unavailable is not fatal
 
         if isinstance(agent_or_fn, ServableAgent):
-            # ServableAgent protocol (AgentBase, Google ADK, Anthropic ToolRunner, etc.)
-            result = asyncio.run(agent_or_fn.run_turn(message, state))
-            response, new_state = _validate_result(result)
+            return await agent_or_fn.run_turn(message, state)
         elif _is_openai_agent(agent_or_fn):
-            # OpenAI Agents SDK mode: dataclass, needs adapter
             adapted = _adapt_openai_agent(agent_or_fn)
-            result = asyncio.run(adapted(message, state))
-            response, new_state = _validate_result(result)
+            return await adapted(message, state)
         elif callable(agent_or_fn):
-            # Custom function mode: fn(message, state) -> (response, state)
             if inspect.iscoroutinefunction(agent_or_fn):
-                result = asyncio.run(agent_or_fn(message, state))
+                return await agent_or_fn(message, state)
             else:
-                result = agent_or_fn(message, state)
-            response, new_state = _validate_result(result)
+                # Sync callables must run off-loop to avoid deadlocking
+                # any @agent_task they call internally.
+                return await asyncio.to_thread(agent_or_fn, message, state)
         else:
             raise TypeError(
                 f"'{import_path}' resolved to {type(agent_or_fn).__name__}, "
                 f"expected a ServableAgent, OpenAI Agent, or callable"
             )
 
+    try:
+        result = asyncio.run(_main())
+        response, new_state = _validate_result(result)
         metrics = _get_trace_metrics()
-        _finalize_trace()  # flush spans + mark trace complete before sending result
+        _finalize_trace()
         conn.send(
             WorkerResult(
-                success=True, value=(response, new_state), trace_metrics=metrics
+                success=True,
+                value=(response, new_state),
+                trace_metrics=metrics,
             )
         )
-
     except Exception:
         metrics = _get_trace_metrics()
         _finalize_trace()
         conn.send(
             WorkerResult(
-                success=False, error=traceback.format_exc(), trace_metrics=metrics
+                success=False,
+                error=traceback.format_exc(),
+                trace_metrics=metrics,
             )
         )
-
     finally:
         conn.close()
         try:
             from motus.runtime.agent_runtime import shutdown as _rt_shutdown
 
-            _rt_shutdown()  # Shut down motus runtime to release executor threads
+            _rt_shutdown()
         except Exception:
             pass
 
 
-def _run_worker(conn, proc) -> WorkerResult:
-    """Receive result, join process, close pipe. Runs in thread pool."""
-    try:
+def _run_worker(
+    conn,
+    loop: asyncio.AbstractEventLoop,
+    on_interrupt: Callable | None = None,
+) -> "WorkerResult":
+    """Thread-pool recv loop. Dispatches InterruptMessages to main loop,
+    returns on WorkerResult. Threading: this thread recv()s only, main loop send()s only.
+    """
+    import pickle
+
+    while True:
         try:
-            result = conn.recv()
-        except EOFError:
-            result = WorkerResult(
+            msg = conn.recv()
+        except (EOFError, OSError, ConnectionResetError):
+            return WorkerResult(
                 success=False, error="Worker process exited unexpectedly"
             )
-        return result
-    finally:
-        proc.join(timeout=15)  # allow time for trace flush + complete
-        if proc.is_alive():
+        except pickle.UnpicklingError as e:
+            return WorkerResult(success=False, error=f"Worker pipe corrupted: {e}")
+
+        if isinstance(msg, InterruptMessage):
+            if on_interrupt is not None:
+                loop.call_soon_threadsafe(on_interrupt, msg)
+        elif isinstance(msg, WorkerResult):
+            return msg
+        else:
+            logger.warning("Unknown message from worker: %s", type(msg).__name__)
+
+
+async def _cleanup_worker(
+    proc: "mp.Process",
+    timeout: float = 3.0,
+) -> None:
+    """Reap worker subprocess via is_alive() polling; SIGKILL on timeout.
+
+    Avoids proc.join() and asyncio.to_thread to prevent thread-pool contention.
+    """
+    deadline = time.monotonic() + timeout
+    while proc.is_alive():
+        if time.monotonic() >= deadline:
             proc.kill()
-            proc.join()
-        conn.close()
+            for _ in range(20):
+                await asyncio.sleep(0.05)
+                if not proc.is_alive():
+                    return
+            logger.warning("Worker pid=%s still alive after SIGKILL", proc.pid)
+            return
+        await asyncio.sleep(0.05)  # 50ms poll interval
+
+
+async def _teardown_worker(
+    proc: "mp.Process",
+    parent_conn: "Connection",
+    resume_task: "asyncio.Task | None",
+    on_worker_done: Callable | None,
+) -> None:
+    """Clean up after a worker turn finishes (success, timeout, or cancel).
+
+    Steps are ordered deliberately:
+    1. Signal "worker done" — so the session immediately rejects any late
+       POST /resume instead of silently dropping it into a dead queue.
+    2. Cancel forward_resumes — it's no longer needed and holds a pipe ref.
+    3. Reap subprocess — wait for exit, SIGKILL if stuck.
+    4. Close pipe — release the fd.
+    """
+    # 1. Notify caller the worker is done (closes resume channel)
+    if on_worker_done is not None:
+        try:
+            on_worker_done()
+        except Exception:
+            logger.exception("on_worker_done callback failed")
+
+    # 2. Stop forwarding resumes to the (now-dead) worker
+    if resume_task is not None:
+        resume_task.cancel()
+
+    # 3. Wait for subprocess to exit; kill after 3s
+    await _cleanup_worker(proc, timeout=3.0)
+
+    # 4. Close parent side of the pipe
+    parent_conn.close()
+
+
+async def _forward_resumes(
+    queue: "asyncio.Queue",
+    conn: "Connection",
+) -> None:
+    """Main-loop coroutine: reads ResumeMessages from queue, sends to worker via pipe.
+
+    Threading: runs on the main loop — the ONLY thread allowed to conn.send().
+    """
+    while True:
+        msg = await queue.get()
+        try:
+            conn.send(msg)
+        except (BrokenPipeError, OSError) as e:
+            logger.debug("forward_resumes: pipe closed: %s", e)
+            return
 
 
 class WorkerExecutor:
@@ -274,31 +366,58 @@ class WorkerExecutor:
         *,
         timeout: float = 0,
         session_id: str | None = None,
+        on_interrupt: Callable | None = None,
+        resume_queue: "asyncio.Queue | None" = None,
+        on_worker_done: Callable | None = None,
     ) -> WorkerResult:
         """Run an agent turn in a fresh worker process.
 
-        Waits if max_workers processes are already running.  Always returns a
-        ``WorkerResult``; only raises ``CancelledError`` (task cancellation).
+        Always returns a WorkerResult; only raises CancelledError.
+
+        Args:
+            on_interrupt: Called on the main loop (via call_soon_threadsafe)
+                each time the worker sends an InterruptMessage.
+            resume_queue: If provided, a coroutine forwards ResumeMessages
+                from this queue to the worker over the pipe.
+            on_worker_done: Called once in finally, BEFORE cleanup starts.
+                Use this to atomically close the resume channel so late
+                POST /resume requests get a clean 404 instead of being
+                silently dropped.
         """
         try:
             async with self._semaphore:
-                parent_conn, child_conn = self._mp_context.Pipe(duplex=False)
+                parent_conn, child_conn = self._mp_context.Pipe(duplex=True)
                 proc = self._mp_context.Process(  # type: ignore[attr-defined]
                     target=_worker_entry,
                     args=(child_conn, import_path, message, state, session_id),
                 )
                 proc.start()
                 child_conn.close()
+
+                loop = asyncio.get_running_loop()
+                recv_future = loop.run_in_executor(
+                    None, _run_worker, parent_conn, loop, on_interrupt
+                )
+                resume_task = (
+                    loop.create_task(_forward_resumes(resume_queue, parent_conn))
+                    if resume_queue is not None
+                    else None
+                )
+
                 try:
-                    loop = asyncio.get_running_loop()
-                    coro = loop.run_in_executor(None, _run_worker, parent_conn, proc)
                     if timeout > 0:
-                        return await asyncio.wait_for(coro, timeout=timeout)
-                    return await coro
+                        return await asyncio.wait_for(recv_future, timeout=timeout)
+                    return await recv_future
                 except (asyncio.CancelledError, asyncio.TimeoutError):
-                    proc.kill()  # _run_worker thread handles join and close
+                    proc.kill()
                     raise
+                finally:
+                    await _teardown_worker(
+                        proc, parent_conn, resume_task, on_worker_done
+                    )
         except asyncio.TimeoutError:
             return WorkerResult(success=False, error="Agent timed out")
+        except asyncio.CancelledError:
+            raise
         except Exception:
             return WorkerResult(success=False, error=traceback.format_exc())

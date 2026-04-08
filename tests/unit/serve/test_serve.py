@@ -1089,6 +1089,51 @@ class TestSessionExpiry:
         assert count == 0
         assert len(store.list()) == 1
 
+    def test_fail_turn_clears_pending_interrupts(self):
+        from motus.serve.interrupt import InterruptMessage
+        from motus.serve.session import Session
+
+        s = Session(session_id="s1")
+        s.status = SessionStatus.interrupted
+        s.pending_interrupts = {"i1": InterruptMessage(interrupt_id="i1", payload={})}
+        s.fail_turn("worker crashed")
+        assert s.pending_interrupts == {}
+        assert s.status == SessionStatus.error
+
+    def test_complete_turn_clears_pending_interrupts(self):
+        s = Session(session_id="s1")
+        s.status = SessionStatus.interrupted
+        from motus.serve.interrupt import InterruptMessage
+
+        s.pending_interrupts = {"i1": InterruptMessage(interrupt_id="i1", payload={})}
+        resp = ChatMessage.assistant_message(content="done")
+        s.complete_turn(resp, [resp])
+        assert s.pending_interrupts == {}
+
+    def test_cancel_clears_pending_interrupts(self):
+        from motus.serve.interrupt import InterruptMessage
+
+        s = Session(session_id="s1")
+        s.status = SessionStatus.interrupted
+        s.pending_interrupts = {"i1": InterruptMessage(interrupt_id="i1", payload={})}
+        s.cancel()
+        assert s.pending_interrupts == {}
+
+    def test_sweep_skips_interrupted_sessions(self):
+        """Sessions in interrupted state must not be swept, even if TTL elapsed."""
+        from motus.serve.session import SessionStore
+
+        store = SessionStore(ttl=0.01)  # 10ms TTL
+        session = store.create()
+        session.status = SessionStatus.interrupted
+        # Simulate TTL elapsing
+        session.last_message_at = time.monotonic() - 1.0  # 1s ago
+
+        store.sweep()
+
+        # Session should still exist
+        assert store.get(session.session_id) is not None
+
 
 # ---------------------------------------------------------------------------
 # Agent Timeout
@@ -1707,6 +1752,95 @@ class TestSessionMethods:
 
 
 # ---------------------------------------------------------------------------
+# Session interrupt_turn / submit_resume
+# ---------------------------------------------------------------------------
+
+
+def test_session_interrupt_turn_basic():
+    import asyncio
+
+    from motus.serve.interrupt import InterruptMessage
+    from motus.serve.schemas import SessionStatus
+    from motus.serve.session import Session
+
+    async def run():
+        s = Session(session_id="s1")
+        s.status = SessionStatus.running
+        msg = InterruptMessage(interrupt_id="i1", payload={"type": "test"})
+        s.interrupt_turn(msg)
+        assert s.status == SessionStatus.interrupted
+        assert "i1" in s.pending_interrupts
+        assert s._done.is_set()
+
+    asyncio.run(run())
+
+
+def test_session_interrupt_turn_guards_terminal_states():
+    """Late on_interrupt delivery after session is failed/completed must not
+    resurrect the session."""
+    import asyncio
+
+    from motus.serve.interrupt import InterruptMessage
+    from motus.serve.schemas import SessionStatus
+    from motus.serve.session import Session
+
+    async def run():
+        s = Session(session_id="s1")
+        s.status = SessionStatus.error
+        msg = InterruptMessage(interrupt_id="i1", payload={"type": "test"})
+        s.interrupt_turn(msg)
+        # Guard: should silently drop the late interrupt
+        assert s.status == SessionStatus.error
+        assert "i1" not in s.pending_interrupts
+
+    asyncio.run(run())
+
+
+def test_session_submit_resume_none_queue_raises():
+    import asyncio
+
+    import pytest
+
+    from motus.serve.interrupt import InterruptMessage
+    from motus.serve.schemas import SessionStatus
+    from motus.serve.session import Session
+
+    async def run():
+        s = Session(session_id="s1")
+        s.status = SessionStatus.interrupted
+        s._resume_queue = None  # worker already finished
+        s.pending_interrupts = {"i1": InterruptMessage(interrupt_id="i1", payload={})}
+        with pytest.raises(ValueError, match="not actively waiting"):
+            s.submit_resume("i1", {"approved": True})
+
+    asyncio.run(run())
+
+
+def test_session_submit_resume_happy_path():
+    import asyncio
+
+    from motus.serve.interrupt import InterruptMessage, ResumeMessage
+    from motus.serve.schemas import SessionStatus
+    from motus.serve.session import Session
+
+    async def run():
+        s = Session(session_id="s1")
+        s.status = SessionStatus.interrupted
+        s._resume_queue = asyncio.Queue()
+        s.pending_interrupts = {"i1": InterruptMessage(interrupt_id="i1", payload={})}
+        s.submit_resume("i1", {"approved": True})
+        assert "i1" not in s.pending_interrupts
+        assert s.status == SessionStatus.running
+        # Queue should have one ResumeMessage
+        rm = s._resume_queue.get_nowait()
+        assert isinstance(rm, ResumeMessage)
+        assert rm.interrupt_id == "i1"
+        assert rm.value == {"approved": True}
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
 # Webhooks
 # ---------------------------------------------------------------------------
 
@@ -2150,6 +2284,40 @@ class TestPutSession:
 
         data = await _poll_until(client, custom_id, "idle")
         assert data["response"]["content"] == "7"
+
+
+class TestSchemas:
+    def test_session_status_has_interrupted(self):
+        from motus.serve.schemas import SessionStatus
+
+        assert SessionStatus.interrupted.value == "interrupted"
+
+    def test_interrupt_info_model(self):
+        from motus.serve.schemas import InterruptInfo
+
+        info = InterruptInfo(
+            interrupt_id="abc123",
+            type="tool_approval",
+            payload={"tool_name": "delete_file", "tool_args": {"path": "/tmp"}},
+        )
+        assert info.interrupt_id == "abc123"
+        assert info.type == "tool_approval"
+
+    def test_resume_request_model(self):
+        from motus.serve.schemas import ResumeRequest
+
+        req = ResumeRequest(interrupt_id="abc123", value={"approved": True})
+        assert req.interrupt_id == "abc123"
+        assert req.value == {"approved": True}
+
+    def test_session_response_has_interrupts_field(self):
+        from motus.serve.schemas import SessionResponse, SessionStatus
+
+        resp = SessionResponse(
+            session_id="s1",
+            status=SessionStatus.idle,
+        )
+        assert resp.interrupts is None  # default
 
 
 class TestSessionStoreCustomId:

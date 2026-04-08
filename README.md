@@ -31,45 +31,77 @@
 
 ## About
 
-Agentic inference is exploding. Motus is the open-source agent serving project that enables higher capability, lower cost, and faster agents that are easy to deploy locally or to the cloud at any scale.
+Agentic inference is exploding. Motus is an open-source agent serving project that enables higher capability, lower cost, and faster agents---while making deployment simple across local and cloud environments at any scale.
 
-## Quickstart
+## Use with your coding agent
 
-### Build with any coding agent and serve locally or deploy in the cloud with the Motus plugin
+The fastest way to get started is to let your coding agent handle building, serving, and deploying with Motus.
 
-Motus is build from the ground up to work with any coding agent (e.g., Claude Code, Codex, or Cursor) out of the box. Install the motus plugin with one command:
+Motus works out of the box with any coding agent (e.g., Claude Code, Codex, or Cursor). Install the plugin with one command:
 
 ```sh
 curl -fsSL https://www.lithosai.com/install.sh | sh
 ```
 
-Then use it in conversation with your coding agent:
+Then use it directly in your workflow:
 
 ```
-/motus                          # activate motus skills
+/motus                          # activate Motus skills
 
 build your agent                # start building your agent
 
-/motus serve                    # serve the agent locally
+/motus serve                    # serve locally
 
 /motus deploy                   # deploy to the cloud
 ```
 
 See [`plugins/motus/README.md`](plugins/motus/README.md) for marketplace installs and more details.
 
-### Install the Motus Python library
+
+
+## Serve & deploy any agent
+
+Install Motus to serve agents locally and deploy them to [Motus Cloud](http://console.lithosai.com/). Motus supports agents built with:
+
+* Motus
+*  OpenAI Agents SDK
+*  Claude Agent SDK
+*  Google ADK
+*  Plain Python
+
+### Install the Motus Python library and CLI tool
 
 Using uv:
 
 ```bash
 uv add motus
 ```
-Alternatively, with pip:
+
+Or with pip:
 
 ```bash
 pip install motus
 ```
 
+### Serve locally and deploy to the cloud
+
+```bash
+# Serve locally
+motus serve start myapp:agent --port 8000
+
+# Chat with your local agent
+motus serve chat http://localhost:8000 "Hello!"
+
+# Deploy to Motus Cloud
+motus deploy --name myapp myapp:agent
+
+# Chat with your deployed agent
+motus serve chat https://myapp.lithosai.com "Hello!"
+```
+
+## Build with Motus
+
+Motus provides a complete agent toolkit---including agents, tools, memory, guardrails, and tracing---powered by a runtime that automatically converts Python code into parallel, resilient workflows. Everything is designed to be simple, intuitive, and customizable.
 
 ### Build an agent
 
@@ -88,88 +120,58 @@ async def search(query: str) -> str:
 agent = ReActAgent(client=OpenAIChatClient(), model_name="gpt-4o", tools=[search])
 print(resolve(agent("Hello World!")))
 ```
-Simple by default, check out the [agents documentation](docs/user-guide/agents.md) when you are ready to go deeper.
 
-### Build a simple workflow
+Start simple, and explore the [agents documentation](docs/user-guide/agents.md) for more advanced usage.
 
-Fetch an article, summarize and extract hashtags in parallel, then publish:
+### Build a workflow
+
+Example: fetch an article, summarize it, extract hashtags in parallel, then publish:
 
 ```python
 from motus.runtime import resolve
 from motus.runtime.agent_task import agent_task
 
-# define tasks in your workflow
-@agent_task
-async def summarize(article): ... # just normal functions
+@agent_task # wrap functions as tasks in your workflow
+async def summarize(article): ... # just a normal function
 
-# extract hashtags
 @agent_task
-async def extract(article): ...
+async def extract(article): ... # extract hashtags
 
-# augment agent tasks with retries and timeouts
-@agent_task(retries=3, timeout=10.0)
+@agent_task(retries=3, timeout=10.0) # augment tasks with retries and timeouts
 async def fetch(url): ...
 
-# publish on LinkedIn
 @agent_task
-async def publish(summary, hashtags): ...
+async def publish(summary, hashtags): ... # publish on LinkedIn
 
-# Your logic is your code:
+# Your logic becomes your code directly:
 article = fetch("https://www.lithosai.com")
 summary = summarize(article)            # Motus infers the dependency graph from data flow.
 hashtags = extract(article)             # Both depend on `article`, run in parallel.
-post = publish(summary, hashtags)    # Waits for both upstream tasks.
+post = publish(summary, hashtags)       # Waits for both upstream tasks.
 
-# get final result
-print(resolve(post))
+print(resolve(post)) # get final result
 ```
 
-No DAGs, just simple python. Leverage @agent_task decorators to turn functions into scheduled tasks.
-Motus handles scheduling, parallelism, ordering, resilience, tracing. [Learn more about the Motus runtime](docs/user-guide/runtime.md)
+No explicit DAGs—just Python. Motus leverages `@agent_task` decorators to turn Python functions into asynchrous tasks.
+Motus handles scheduling, parallelism, caching, resilience, tracing, and so on. [Learn more about the Motus runtime](docs/user-guide/runtime.md).
 
-### Serve locally or deploy to the cloud
+### Examples
+
+Run the included examples:
 
 ```bash
-# Serve locally
-@Jianan use workable example
-motus serve start myapp:agent --port 8000
+# Basic ReAct agent — interactive console chat
+uv run python examples/agent.py
 
-# Chat with your locally served agent
-motus serve chat http://localhost:8000 "Hello!"
-
-# Deploy to Motus Cloud
-motus deploy --name myapp myapp:agent
-
-# Chat with your cloud deployed agent
-motus serve chat https://myapp.lithosai.com "Hello!"
+# Task graph demo — parallelism, dependency tracking, multi-return
+uv run python examples/runtime/task_graph_demo.py
 ```
 
-## Examples
-@jianana will check and fix these. Start one without the warning and explain what it does when you show it.
-```bash
-# Task graph — parallelism, dependency tracking, multi-return
-MOTUS_LOG_LEVEL=WARNING python examples/runtime/task_graph_demo.py
+Learn more from our [comprehensive examples](examples/).
 
-# Resilience — retries, timeouts, policy overrides
-MOTUS_LOG_LEVEL=WARNING python examples/runtime/resilient_tasks.py
+### Motus features
 
-# Hooks — global, per-task, per-type lifecycle callbacks
-MOTUS_LOG_LEVEL=WARNING python examples/runtime/hooks_demo.py
-
-# MCP — seven integration patterns (lazy, context manager, sandbox, remote)
-MOTUS_LOG_LEVEL=WARNING python examples/mcp_tools.py lazy
-
-# Memory — compaction, session save/restore
-python examples/memory.py memory_restore
-
-# Multi-agent — orchestrator delegates to researcher + writer
-python examples/runtime/agent_as_tool.py
-
-```
-
-## Framework Features
-
-### Start simple
+#### Start simple
 
 | | |
 |---|---|
@@ -180,7 +182,7 @@ python examples/runtime/agent_as_tool.py
 | **[Tracing & debugging](docs/user-guide/tracing.md)** | Every LLM call, tool invocation, and task dependency traced automatically. Interactive HTML viewer, Jaeger export, or cloud dashboard — enabled with one env var. |
 | **[Local serving](docs/user-guide/serving.md)** | `motus serve` exposes any agent as a session-based HTTP API locally. Test the full serving stack before deploying to the cloud. |
 
-### Go deeper
+#### Go deeper
 
 | | |
 |---|---|
@@ -193,12 +195,12 @@ python examples/runtime/agent_as_tool.py
 | **SDK compatibility** | Drop-in for [OpenAI Agents SDK](docs/integrations/openai-agents.md), [Claude Agent SDK](docs/integrations/claude-agent.md), and Google ADK. Change the import, keep your code — get tracing and cloud deployment for free. |
 | **[Lifecycle hooks](docs/user-guide/tracing.md)** | Three-level hook system (global, per-task name, per-task type). Tap into `task_start`, `task_end`, `task_error` for logging, metrics, or custom logic. |
 
-
+---
 
 ## Contributing
 
 **Open source from Day 1.** We believe the infrastructure for agentic inference should be open.
-See the **[Contributing Guide](docs/contributing/development-setup.md)** to get started, or come say hi on [Slack](). Let's build together!
+See the **[Contributing Guide](docs/contributing/development-setup.md)** to get started, or come say hi on [Slack](https://join.slack.com/t/lithosaicommunity/shared_invite/zt-3uf2cykza-P9VETbJAUx7WKjwxMk~06Q). Let's build together!
 
 ## License
 

@@ -24,6 +24,7 @@ class MCPTool(Tool):
         tool: mcp.Tool,
         input_guardrails: list | None = None,
         output_guardrails: list | None = None,
+        requires_approval: bool = False,
     ):
         self._mcp_session = mcp_session
         self._mcp_name = tool.name  # original server-side name for RPC
@@ -33,6 +34,7 @@ class MCPTool(Tool):
             json_schema=tool.inputSchema,
             input_guardrails=input_guardrails,
             output_guardrails=output_guardrails,
+            requires_approval=requires_approval,
         )
 
     async def _invoke(self, **kwargs) -> str:

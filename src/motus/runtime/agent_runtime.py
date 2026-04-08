@@ -56,8 +56,10 @@ class GraphScheduler:
 
         # Executor for sync @agent_task functions (run_in_executor).
         # Owned here so shutdown() can clean it up explicitly.
+        # Note: we pass self._executor explicitly to run_in_executor() rather
+        # than calling loop.set_default_executor() — in single-loop mode the
+        # loop belongs to the caller and we must not clobber its default.
         self._executor = ThreadPoolExecutor(thread_name_prefix="motus-task")
-        loop.set_default_executor(self._executor)
 
         # All task state lives here.
         self.tasks: Dict[AgentTaskId, TaskInstance] = {}
@@ -97,7 +99,7 @@ class GraphScheduler:
             pass  # Analytics module not available
 
     def shutdown(self) -> None:
-        """Poison all pending futures, then shut down the executor."""
+        """Cancel in-flight tasks, poison pending futures, shut down executor."""
         # 1. Deregister tracing hooks to prevent accumulation across
         #    runtime lifecycles (the hooks registry is a module-level global).
         if self._tracing_hooks_registered:
@@ -110,7 +112,15 @@ class GraphScheduler:
                 hooks.deregister(event_type, callback)
             self._tracing_hooks_registered = False
 
-        # 2. Poison futures → unblocks executor threads waiting on resolve()
+        # 2. Cancel in-flight asyncio.Tasks.  In single-loop mode the
+        #    caller's loop keeps running after shutdown, so without this
+        #    wrapper() coroutines would continue executing on a dead
+        #    scheduler.
+        for task in list(self.tasks.values()):
+            if task._asyncio_task is not None and not task._asyncio_task.done():
+                task._asyncio_task.cancel()
+
+        # 3. Poison futures → unblocks executor threads waiting on resolve()
         shutdown_err = RuntimeError("Motus runtime is shutting down")
         for af in list(self.agent_futures.values()):
             if not af.af_done():
@@ -119,7 +129,7 @@ class GraphScheduler:
                 except Exception:
                     pass  # race: another thread resolved it first
 
-        # 3. Shut down the executor (threads are already unblocked)
+        # 4. Shut down the executor (threads are already unblocked)
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
@@ -252,9 +262,12 @@ class GraphScheduler:
                     "[Scheduler] Task is a normal function, offloading to the "
                     "background loop"
                 )
+                executor = self._executor
+                if executor is None:
+                    raise RuntimeError("Motus runtime is shutting down")
                 p_func = partial(func, *real_args, **real_kwargs)
                 ctx = contextvars.copy_context()
-                coro = self.loop.run_in_executor(None, ctx.run, p_func)
+                coro = self.loop.run_in_executor(executor, ctx.run, p_func)
 
             if task.policy.timeout is not None:
                 return await asyncio.wait_for(coro, timeout=task.policy.timeout)
@@ -609,8 +622,13 @@ class GraphScheduler:
 
 
 class AgentRuntime:
-    def __init__(self):
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None):
         """Initialize AgentRuntime.
+
+        Args:
+            loop: If provided, reuse this event loop (single-loop mode).
+                  If *None*, create a dedicated background thread with its
+                  own event loop (dual-loop mode, the default for sync callers).
 
         Tracing is configured via environment variables:
         - MOTUS_COLLECTION_LEVEL: disabled/basic/standard/detailed (default: standard)
@@ -618,22 +636,33 @@ class AgentRuntime:
         - MOTUS_TRACING_EXPORT=1: Enable trace export to files
         - MOTUS_TRACING_ONLINE=1: Enable live tracing with auto-refresh viewer
         """
-        self._loop = asyncio.new_event_loop()
+        if loop is not None:
+            # Single-loop mode: reuse caller's loop, no background thread.
+            if loop.is_closed():
+                raise ValueError("Cannot use a closed event loop")
+            self._loop = loop
+            self._thread = threading.current_thread()
+            self._owns_loop = False
+        else:
+            # Dual-loop mode: create dedicated loop + thread.
+            self._loop = asyncio.new_event_loop()
+            self._owns_loop = True
+
+            def run_loop():
+                asyncio.set_event_loop(self._loop)
+                self._loop.run_forever()
+
+            self._thread = threading.Thread(
+                target=run_loop, daemon=True, name="AgentEngine"
+            )
+            self._thread.start()
+
+            # LIFO: our shutdown runs before _python_exit (ThreadPoolExecutor
+            # import at module level ensures _python_exit is registered first).
+            threading._register_atexit(self.shutdown)
+
         self._scheduler = GraphScheduler(self._loop)
         self._shutdown = False
-
-        def run_loop():
-            asyncio.set_event_loop(self._loop)
-            self._loop.run_forever()
-
-        self._thread = threading.Thread(
-            target=run_loop, daemon=True, name="AgentEngine"
-        )
-        self._thread.start()
-
-        # LIFO: our shutdown runs before _python_exit (ThreadPoolExecutor
-        # import at module level ensures _python_exit is registered first).
-        threading._register_atexit(self.shutdown)
 
     @property
     def scheduler(self):
@@ -724,11 +753,15 @@ class AgentRuntime:
         if self._scheduler.tracer._cloud_exporter is not None:
             self._scheduler.tracer._cloud_exporter.close()
         self._scheduler.shutdown()
-        self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._owns_loop:
+            self._loop.call_soon_threadsafe(self._loop.stop)
 
     def __del__(self):
         try:
-            self.shutdown()
+            # In single-loop mode the caller owns the loop; touching
+            # scheduler state from a GC thread would be a data race.
+            if self._owns_loop:
+                self.shutdown()
         except Exception:
             pass
 
@@ -764,12 +797,17 @@ _runtime: AgentRuntime | None = None
 _lock = threading.Lock()
 
 
-def init() -> AgentRuntime:
+def init(loop: asyncio.AbstractEventLoop | None = None) -> AgentRuntime:
     """Initialize the motus runtime.
 
     Call this before using ``@agent_task`` or other runtime features.
     If not called explicitly, the runtime will auto-initialize with
     defaults on first use.
+
+    Args:
+        loop: If provided, reuse this event loop (single-loop mode).
+              If *None*, create a dedicated background thread with its
+              own event loop (dual-loop mode).
 
     Tracing is configured via environment variables:
         - MOTUS_COLLECTION_LEVEL: disabled/basic/standard/detailed
@@ -790,7 +828,7 @@ def init() -> AgentRuntime:
                 "motus runtime is already initialized. "
                 "Call motus.shutdown() before re-initializing."
             )
-        _runtime = AgentRuntime()
+        _runtime = AgentRuntime(loop=loop)
         return _runtime
 
 
@@ -821,14 +859,25 @@ def get_runtime() -> AgentRuntime:
     Internal helper used by :func:`agent_task` and other runtime
     components.  Provides backward compatibility: code that never calls
     :func:`init` will get a runtime with default settings on first use.
+
+    Auto-detection: if called from within a running event loop, the
+    runtime is created in single-loop mode (reusing the caller's loop).
+    Otherwise, a dedicated background thread is created (dual-loop mode).
     """
     global _runtime
-    if _runtime is not None and not _runtime._shutdown:
-        return _runtime
+    rt = _runtime
+    if rt is not None and not rt._shutdown:
+        return rt
     with _lock:
         # Double-check inside lock
-        if _runtime is not None and not _runtime._shutdown:
-            return _runtime
+        rt = _runtime
+        if rt is not None and not rt._shutdown:
+            return rt
+        # Auto-detect: if already in async context, reuse that loop.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
         logger.info("motus runtime auto-initializing with default settings")
-        _runtime = AgentRuntime()
+        _runtime = AgentRuntime(loop=loop)
         return _runtime
