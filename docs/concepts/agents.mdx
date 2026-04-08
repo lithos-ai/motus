@@ -210,3 +210,64 @@ print(agent.context_window_usage)
 | `agent.usage` | Accumulated token counts across all LLM calls in the run |
 | `agent.cost` | Total cost in USD based on model pricing, or `None` if the model has no pricing entry |
 | `agent.context_window_usage` | Current memory utilization relative to the compaction threshold |
+
+## Guardrails
+
+Input guardrails run before the agent's `_run()` method. Output guardrails run after the final response. Declare the parameters you care about — return `None` to pass through, return a value to replace, or raise to block.
+
+```python
+from motus.agent import ReActAgent
+from motus.guardrails import InputGuardrailTripped
+from motus.models import OpenAIChatClient
+
+def block_profanity(value: str):
+    if "badword" in value.lower():
+        raise InputGuardrailTripped("Input rejected by guardrail.")
+
+client = OpenAIChatClient()
+agent = ReActAgent(
+    client=client,
+    model_name="gpt-4o",
+    input_guardrails=[block_profanity],
+)
+```
+
+<Note>
+See [Guardrails](/guides/guardrails) for the full guardrail API.
+</Note>
+
+## Reasoning
+
+The `reasoning` parameter controls extended thinking for models that support it. By default, reasoning is set to `auto`, which enables adaptive thinking on supported models (Opus 4.6, Sonnet 4.6).
+
+```python
+from motus.agent import ReActAgent
+from motus.models import AnthropicChatClient
+from motus.models.base import ReasoningConfig
+
+client = AnthropicChatClient()
+
+# Adaptive (default) — model decides how much to think
+agent = ReActAgent(client=client, model_name="claude-opus-4-6")
+
+# Lower effort for faster, cheaper responses
+agent = ReActAgent(
+    client=client,
+    model_name="claude-opus-4-6",
+    reasoning=ReasoningConfig(effort="low"),
+)
+
+# Explicit token budget (older models like Sonnet 4.5)
+agent = ReActAgent(
+    client=client,
+    model_name="claude-sonnet-4-5-20250929",
+    reasoning=ReasoningConfig(budget_tokens=5000),
+)
+
+# Disable thinking entirely
+agent = ReActAgent(
+    client=client,
+    model_name="claude-opus-4-6",
+    reasoning=ReasoningConfig.disabled(),
+)
+```

@@ -11,8 +11,20 @@ Memory manages the conversation context that gets sent to the LLM on each call. 
 |----------|-----------------|-------------|----------|
 | `basic` | None — grows unbounded | In-memory only | Short conversations, testing |
 | `compact` | Auto-compacts at threshold | Optional log-based restore | Production agents, long sessions |
+| `background` | Auto-compacts + agent-managed memory | Cross-session persistence | Coming soon |
 
 Both extend `BaseMemory` and share an async interface: `add_message()`, `compact()`, `get_context()`, and `get_memory_trace()`.
+
+## Architecture
+
+```
+BaseMemory (abstract)
+├── BasicMemory              — append-only, no compaction
+└── CompactionBase (abstract) — boundary detection, compact(), set_model()
+    └── CompactionMemory     — + conversation log store, session restore
+```
+
+`CompactionBase` provides the core compaction logic shared by all compacting memory types: turn boundary detection, token threshold management, and LLM-based summarization. `CompactionMemory` adds conversation log persistence and session restore on top.
 
 ### BasicMemory
 
@@ -69,7 +81,13 @@ agent = ReActAgent(client=client, model_name="gpt-4o", memory=memory)
 | `max_tool_result_tokens` | `50000` | Maximum tokens per tool result before truncation |
 
 <Note>
-Compaction only triggers at clean turn boundaries to avoid corrupting in-progress tool call sequences. It defers until all tool results from a parallel tool call batch have arrived.
+Compaction only triggers at clean turn boundaries to avoid corrupting in-progress tool call sequences. A ReAct agent loop produces three types of turn units:
+
+- **Unit A** — `[user message]`
+- **Unit B** — `[assistant + tool_calls]` followed by `[tool_result x N]`
+- **Unit C** — `[assistant, no tool calls]` (final response)
+
+Compaction defers until all tool results from a parallel tool call batch have arrived. This is tracked via `_pending_tool_calls` — a counter incremented when the assistant issues tool calls and decremented as each result arrives. Compaction fires only when the counter reaches zero.
 </Note>
 
 ## Session save and restore
@@ -140,3 +158,7 @@ agent = ReActAgent(client=client, model_name="gpt-4o", memory=MyMemory())
 ```
 
 The base class provides working memory management, token estimation, tool result truncation, and trace logging. For compacting memory types, extend `CompactionBase` instead — it provides boundary-aware auto-compaction, `set_model()`, and the default LLM summarization logic.
+
+## BackgroundMemory (coming soon)
+
+A long-term memory solution that works both locally and on the cloud is under active development. `BackgroundMemory` will extend `CompactionBase` with agent-managed cross-session memory, allowing the main agent to remember facts, preferences, and context across conversations without distraction.
