@@ -1,6 +1,0 @@
-/* Motus documentation custom styles */
-
-/* Invert logo in dark mode so black icon becomes white */
-[data-md-color-scheme="slate"] .md-header__button.md-logo img {
-  filter: invert(1);
-}
