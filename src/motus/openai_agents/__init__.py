@@ -24,7 +24,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "motus.openai_agents requires the OpenAI Agents SDK. "
-        "Install it with: uv pip install motus[openai-agents]"
+        "Install it with: uv pip install lithosai-motus[openai-agents]"
     ) from exc
 
 from ._motus_model import (

@@ -75,6 +75,7 @@ class _BetaMessage:
         self.usage = _Usage(input_tokens=input_tokens, output_tokens=output_tokens)
         self.model = model
         self.stop_reason = stop_reason
+        self.container = None
 
 
 def _make_beta_message(**kwargs):

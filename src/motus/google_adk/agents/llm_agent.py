@@ -22,7 +22,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "motus.google_adk requires the Google ADK. "
-        "Install it with: uv pip install motus[google-adk]"
+        "Install it with: uv pip install lithosai-motus[google-adk]"
     ) from exc
 
 if TYPE_CHECKING:

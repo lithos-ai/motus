@@ -7,11 +7,10 @@ dependencies = [
     "lithosai-motus",
     "pydantic>=2.12.5",
     "colorlog>=6.8.0",
+    "google-adk>=1.27.2",
+    "openai-agents>=0.0.10",
+    "claude-agent-sdk>=0.1.0",
 ]
-
-[project.optional-dependencies]
-google-adk = ["google-adk>=1.27.2"]
-openai-agents = ["openai-agents>=0.0.10"]
 
 [tool.uv.sources]
 lithosai-motus = { workspace = true }

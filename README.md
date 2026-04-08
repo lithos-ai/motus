@@ -40,7 +40,7 @@ The fastest way to get started is to let your coding agent handle building, serv
 Motus works out of the box with any coding agent (e.g., Claude Code, Codex, or Cursor). Install the plugin with one command:
 
 ```sh
-curl -fsSL https://www.lithosai.com/install.sh | sh
+curl -fsSL https://www.lithosai.com/motus/install.sh | sh
 ```
 
 Then use it directly in your workflow:
@@ -65,7 +65,7 @@ Install Motus to serve agents locally and deploy them to [Motus Cloud](http://co
 
 * Motus
 *  OpenAI Agents SDK
-*  Claude Agent SDK
+*  Anthropic SDK
 *  Google ADK
 *  Plain Python
 
@@ -74,13 +74,13 @@ Install Motus to serve agents locally and deploy them to [Motus Cloud](http://co
 Using uv:
 
 ```bash
-uv add motus
+uv add lithosai-motus
 ```
 
 Or with pip:
 
 ```bash
-pip install motus
+pip install lithosai-motus
 ```
 
 ### Serve locally and deploy to the cloud
@@ -192,7 +192,8 @@ Learn more from our [comprehensive examples](examples/).
 | **[MCP integration](docs/user-guide/mcp-integration.md)** | Connect any MCP-compatible server with `get_mcp()` — local via stdio, remote via HTTP, or inside a Docker container. Filter and rename tools with `prefix`, `blocklist`, and guardrails. |
 | **[Docker sandboxes](docs/user-guide/tools.md)** | Run untrusted code in isolated containers. Mount volumes, expose ports, execute shell and Python — attach to any agent as a tool provider. |
 | **[Prompt caching](docs/user-guide/models.md)** | Prompt caching via `CachePolicy` — `STATIC` (system + tools) or `AUTO` (+ conversation prefix). Reduce latency and cost on long conversations. |
-| **SDK compatibility** | Drop-in for [OpenAI Agents SDK](docs/integrations/openai-agents.md), [Claude Agent SDK](docs/integrations/claude-agent.md), and Google ADK. Change the import, keep your code — get tracing and cloud deployment for free. |
+| **SDK compatibility** | Drop-in for [OpenAI Agents SDK](docs/integrations/openai-agents.md), [Anthropic SDK](docs/integrations/claude-agent.md), and Google ADK. Change the import, keep your code — get tracing and cloud deployment for free. |
+| **Human-in-the-loop** | Built-in support for interactive approval, clarification, and feedback during agent execution. Pause the agent, ask for human input, and resume — works in both local serving and cloud deployment. |
 | **[Lifecycle hooks](docs/user-guide/tracing.md)** | Three-level hook system (global, per-task name, per-task type). Tap into `task_start`, `task_end`, `task_error` for logging, metrics, or custom logic. |
 
 ---
