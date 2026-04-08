@@ -94,6 +94,11 @@ def login(api_url: str) -> dict:
         headers={"Authorization": f"Bearer {access_token}"},
         timeout=10,
     )
+    if resp.status_code == 403:
+        raise RuntimeError(
+            "You're on the waitlist. "
+            "We're rolling out access gradually. You'll receive an email when your account is ready."
+        )
     resp.raise_for_status()
     key_data = resp.json()
 
