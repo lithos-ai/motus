@@ -158,6 +158,42 @@ A session in `error` state can receive new messages and transitions back to `run
 
 When `--ttl` is set, idle and errored sessions whose last activity exceeds the TTL are swept by a background task. When `--timeout` is set, agent turns that exceed the limit are killed and the session transitions to `error` with an `"Agent timed out"` message.
 
+## Architecture
+
+```mermaid
+graph TD
+    A["HTTP Requests"] --> B["AgentServer"]
+    B --> C["WorkerExecutor"]
+    C --> D1["Process 1 (one-shot worker)"]
+    C --> D2["Process 2 (one-shot worker)"]
+    C --> DN["Process N (one-shot worker)"]
+```
+
+Each message spawns a fresh subprocess via `multiprocessing.Process` with pipe-based IPC. An `asyncio.Semaphore` limits concurrency to `max_workers`. Processes are not reused — each one starts, runs the agent function, sends the result over the pipe, and exits. On timeout or cancellation, the process is killed immediately.
+
+This subprocess isolation model means:
+
+- A crash in one agent turn never affects other sessions or the server itself.
+- No shared state leaks between requests.
+- Resource cleanup is automatic — when the process exits, all memory is reclaimed.
+
+<Accordion title="File structure">
+```
+serve/
+├── __init__.py       # Public exports: AgentServer, ServableAgent
+├── protocol.py       # ServableAgent runtime-checkable protocol
+├── server.py         # AgentServer class (FastAPI routes, background tasks)
+├── worker.py         # WorkerExecutor, subprocess execution, agent type dispatch
+├── schemas.py        # Pydantic models (SessionStatus, request/response types)
+├── session.py        # Session dataclass and in-memory SessionStore
+└── cli.py            # CLI (start, chat, health, create, sessions, get, delete, messages, send)
+```
+</Accordion>
+
+<Tip>
+For detailed CLI usage and all available flags, see the [CLI reference for `motus serve`](/reference/cli-serve).
+</Tip>
+
 ## Server options
 
 Start options for `motus serve start`:
