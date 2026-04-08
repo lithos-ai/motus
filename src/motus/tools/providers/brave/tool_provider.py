@@ -1,3 +1,4 @@
+import os
 import urllib.parse
 from typing import Optional
 
@@ -5,6 +6,8 @@ import httpx
 
 from ...core import FunctionTool
 from ...core.function_tool import InputSchema
+
+BASE_URL = os.getenv("BRAVE_BASE_URL", "https://api.search.brave.com/res/v1/web/search")
 
 
 class WebSearchInputSchema(InputSchema):
@@ -45,7 +48,7 @@ class WebSearch:
             List of dicts with keys: title, url, description, age (optional).
         """
         encoded_query = "q=" + urllib.parse.quote(query)
-        url = "https://api.search.brave.com/res/v1/web/search?" + encoded_query
+        url = f"{BASE_URL}?{encoded_query}"
         headers = {"X-Subscription-Token": self.api_key}
 
         client = await self._get_client()
