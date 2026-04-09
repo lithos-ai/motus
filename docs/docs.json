@@ -19,78 +19,85 @@
     }
   },
   "navigation": {
-    "tabs": [
+    "anchors": [
       {
-        "tab": "Documentation",
-        "groups": [
+        "anchor": "Untitled Anchorghfgfhgdhfgjh",
+        "tabs": [
           {
-            "group": "Get Started",
-            "pages": [
-              "introduction",
-              "getting-started/installation",
-              "getting-started/quickstart",
-              "getting-started/configuration"
+            "tab": "Documentation",
+            "groups": [
+              {
+                "group": "Get Started",
+                "pages": [
+                  "introduction",
+                  "getting-started/installation",
+                  "getting-started/quickstart",
+                  "getting-started/configuration"
+                ]
+              },
+              {
+                "group": "Core Concepts",
+                "pages": [
+                  "concepts/overview",
+                  "concepts/agents",
+                  "concepts/tools",
+                  "concepts/runtime",
+                  "concepts/models",
+                  "concepts/memory",
+                  "concepts/skills",
+                  "concepts/todo-sandbox"
+                ]
+              },
+              {
+                "group": "Guides",
+                "pages": [
+                  "guides/serving",
+                  "guides/deployment",
+                  "guides/tracing",
+                  "guides/guardrails",
+                  "guides/mcp-integration",
+                  "guides/multi-agent",
+                  "guides/plugins",
+                  "guides/untitled-page"
+                ]
+              },
+              {
+                "group": "Integrations",
+                "pages": [
+                  "integrations/openai-agents",
+                  "integrations/anthropic-sdk",
+                  "integrations/google-adk"
+                ]
+              },
+              {
+                "group": "Contributing",
+                "pages": [
+                  "contributing/development-setup",
+                  "contributing/code-style",
+                  "contributing/testing",
+                  "contributing/pull-requests"
+                ]
+              }
             ]
           },
           {
-            "group": "Core Concepts",
-            "pages": [
-              "concepts/overview",
-              "concepts/agents",
-              "concepts/tools",
-              "concepts/runtime",
-              "concepts/models",
-              "concepts/memory",
-              "concepts/skills"
-            ]
-          },
-          {
-            "group": "Guides",
-            "pages": [
-              "guides/serving",
-              "guides/deployment",
-              "guides/tracing",
-              "guides/guardrails",
-              "guides/mcp-integration",
-              "guides/multi-agent",
-              "guides/untitled-page"
-            ]
-          },
-          {
-            "group": "Integrations",
-            "pages": [
-              "integrations/openai-agents",
-              "integrations/anthropic-sdk",
-              "integrations/google-adk"
-            ]
-          },
-          {
-            "group": "Contributing",
-            "pages": [
-              "contributing/development-setup",
-              "contributing/code-style",
-              "contributing/testing",
-              "contributing/pull-requests"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "Reference",
-        "groups": [
-          {
-            "group": "CLI",
-            "pages": [
-              "reference/cli-serve",
-              "reference/cli-deploy"
-            ]
-          },
-          {
-            "group": "REST API",
-            "pages": [
-              "reference/api-sessions",
-              "reference/api-messages",
-              "reference/api-webhooks"
+            "tab": "Reference",
+            "groups": [
+              {
+                "group": "CLI",
+                "pages": [
+                  "reference/cli-serve",
+                  "reference/cli-deploy"
+                ]
+              },
+              {
+                "group": "REST API",
+                "pages": [
+                  "reference/api-sessions",
+                  "reference/api-messages",
+                  "reference/api-webhooks"
+                ]
+              }
             ]
           }
         ]

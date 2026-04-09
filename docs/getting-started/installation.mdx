@@ -13,9 +13,11 @@ Before you install Motus, make sure you have:
 
 ## Install Motus
 
+#TODO: uv add
+
 <CodeGroup>
 
-```bash uv (from source)
+```bash uv
 git clone https://github.com/lithosai/motus.git
 cd motus
 uv sync
@@ -25,9 +27,17 @@ uv sync
 pip install lithosai-motus
 ```
 
+```text TODO: From source
+git clone https://github.com/lithosai/motus.git
+cd motus
+uv sync
+```
+
 </CodeGroup>
 
-<Tip>uv resolves dependencies faster and produces more reliable environments than pip. If you don't have it yet, install it with `curl -Lsf https://astral.sh/uv/install.sh | sh`.</Tip>
+<Tip>
+  uv resolves dependencies faster and produces more reliable environments than pip. If you don't have it yet, install it with `curl -Lsf https://astral.sh/uv/install.sh | sh`.
+</Tip>
 
 ### Optional SDK extras
 
@@ -76,7 +86,9 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
-<Note>You only need the key for the provider you plan to use. If you are not sure which to pick, OpenAI's `gpt-4o` and Anthropic's `claude-sonnet-4-20250514` are both well-tested with Motus.</Note>
+<Note>
+  You only need the key for the provider you plan to use. If you are not sure which to pick, OpenAI's `gpt-4o` and Anthropic's `claude-sonnet-4-20250514` are both well-tested with Motus.
+</Note>
 
 ## Next steps
 
