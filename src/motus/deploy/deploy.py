@@ -16,7 +16,7 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.table import Table
 
-from motus.auth.credentials import get_api_key, get_api_url
+from motus.auth.credentials import ensure_authenticated
 from motus.config import CONFIG
 from motus.deploy.walk import walk
 
@@ -172,13 +172,7 @@ def deploy(
     secrets: dict[str, str] | None = None,
 ):
     """Validate, pack, and upload a project to the build service."""
-    api_url = get_api_url()
-    api_key = get_api_key()
-    if not api_url or not api_key:
-        print(
-            "Error: Not authenticated. Run 'motus login' to provision API credentials."
-        )
-        sys.exit(1)
+    api_url, api_key = ensure_authenticated()
     auth_headers = {"Authorization": f"Bearer {api_key}"}
 
     project_path = Path.cwd()

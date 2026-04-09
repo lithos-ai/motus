@@ -53,3 +53,44 @@ def clear_credentials() -> None:
     """Delete credentials file."""
     if CREDENTIALS_FILE.exists():
         CREDENTIALS_FILE.unlink()
+
+
+def ensure_authenticated() -> tuple[str, str]:
+    """Return (api_url, api_key), triggering interactive login if needed.
+
+    Checks env vars and credentials file first. If no credentials exist,
+    runs the OAuth device flow to provision an API key.
+    """
+    api_key = get_api_key()
+    api_url = get_api_url()
+    if api_key:
+        return api_url, api_key
+
+    # No credentials — run interactive login
+    import logging
+
+    import httpx
+
+    from motus.auth.login import login
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
+
+    # Revoke stale key if credentials file exists but key is missing (shouldn't
+    # normally happen, but be safe)
+    creds = load_credentials()
+    if creds:
+        try:
+            httpx.delete(
+                f"{creds.cloud_api_url}/api-keys/{creds.key_id}",
+                headers={"Authorization": f"Bearer {creds.api_key}"},
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+    result = login(api_url)
+    new_creds = Credentials(**result)
+    save_credentials(new_creds)
+    prefix = new_creds.api_key[:12]
+    print(f"Logged in to {new_creds.cloud_api_url} ({prefix}...)")
+    return new_creds.cloud_api_url, new_creds.api_key

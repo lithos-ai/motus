@@ -4,11 +4,10 @@ import logging
 import sys
 
 from motus.auth.credentials import (
-    Credentials,
     clear_credentials,
+    ensure_authenticated,
     get_api_url,
     load_credentials,
-    save_credentials,
 )
 
 
@@ -31,27 +30,24 @@ def _revoke_existing_key():
 
 def _login_handler(args):
     logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
-    from motus.auth.login import login
 
     api_url = args.api_url
     if not api_url:
         logging.error("No API URL provided. Pass --api-url <URL>")
         sys.exit(1)
 
+    # Explicit login always revokes + re-authenticates
     _revoke_existing_key()
+    clear_credentials()
 
     try:
-        result = login(api_url)
+        ensure_authenticated()
     except KeyboardInterrupt:
         print("\nLogin cancelled.")
         sys.exit(1)
     except Exception as e:
         logging.error("Login failed: %s", e)
         sys.exit(1)
-
-    save_credentials(Credentials(**result))
-    prefix = result["api_key"][:12]
-    print(f"Logged in to {result['cloud_api_url']} ({prefix}...)")
 
 
 def _logout_handler(args):
