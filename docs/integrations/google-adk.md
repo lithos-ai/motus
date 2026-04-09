@@ -1,6 +1,6 @@
 # Google ADK
 
-Run Google Agent Development Kit agents through Motus with full tracing, model proxying, and cloud deployment. Import `Agent` from `motus.google_adk.agents.llm_agent` instead of `google.adk.agents` — everything else stays the same.
+Run Google Agent Development Kit agents through Motus with full tracing, model proxying, and cloud deployment. Import `Agent` from `motus.google_adk.agents.llm_agent` instead of `google.adk.agents`.
 
 ## Installation
 
@@ -47,11 +47,11 @@ register_tracing()
 
 ### Model proxy
 
-When deployed to Motus cloud, the platform automatically routes Gemini API calls through the model proxy. No `GOOGLE_API_KEY` is needed in the deployed environment — the proxy handles authentication, rate limiting, and cost tracking transparently.
+When deployed to Motus cloud, the platform automatically routes Gemini API calls through the model proxy. No `GOOGLE_API_KEY` is needed in the deployed environment. The proxy handles authentication, rate limiting, and cost tracking transparently.
 
 ### Session replay
 
-Each `run_turn()` creates a fresh `InMemoryRunner` and replays the conversation state into the ADK session, so the model sees full context across turns. This is handled automatically — you do not need to manage session state manually.
+Each `run_turn()` creates a fresh `InMemoryRunner` and replays the conversation state into the ADK session, so the model sees full context across turns. This is handled automatically, and you do not need to manage session state manually.
 
 ## Deployment
 
@@ -68,7 +68,7 @@ cd my_project
 motus deploy --name my-adk-agent agent:root_agent
 ```
 
-When deploying to Motus cloud, include `requirements.txt` with `google-adk>=1.27.2`. No API key secrets are needed — the platform routes Gemini API calls through the model proxy.
+When deploying to Motus cloud, include `requirements.txt` with `google-adk>=1.27.2`. No API key secrets are needed because the platform routes Gemini API calls through the model proxy.
 
 Session state (conversation history) is persisted in DynamoDB and survives backend restarts, failovers, and scaling events.
 
@@ -80,7 +80,7 @@ Session state (conversation history) is persisted in DynamoDB and survives backe
 async def run_turn(message: ChatMessage, state: list[ChatMessage]) -> tuple[ChatMessage, list[ChatMessage]]
 ```
 
-Only the **root agent** needs to be the Motus `Agent` subclass. Sub-agents — `SequentialAgent`, `ParallelAgent`, vanilla `google.adk.agents.Agent` — work natively without any modification.
+Only the **root agent** needs to be the Motus `Agent` subclass. Sub-agents (i.e., `SequentialAgent`, `ParallelAgent`, and vanilla `google.adk.agents.Agent`) work natively without any modification.
 
 ```python
 from motus.google_adk.agents.llm_agent import Agent
@@ -129,7 +129,7 @@ All Google ADK features are supported:
 from motus.google_adk.agents.llm_agent import Agent
 ```
 
-The underlying PyPI package is `google-adk` (v1.27.2+). Only the root agent import changes — all other ADK imports (`google.adk.agents`, `google.genai.types`, etc.) remain the same.
+The underlying PyPI package is `google-adk` (v1.27.2+). Only the root agent import changes. All other ADK imports (`google.adk.agents`, `google.genai.types`, etc.) remain the same.
 
 ## Trace export
 
@@ -147,6 +147,6 @@ if tracer:
 
 The integration produces three span types in `TraceManager`, mapped from ADK's OTEL semantic conventions:
 
-- **`model_call`** — From `generate_content` spans. Contains model name, input/output tokens, LLM request/response payloads, and finish reasons.
-- **`tool_call`** — From `execute_tool` spans. Contains tool name, call arguments, tool response, and error type if failed.
-- **`agent_call`** — From `invoke_agent` spans. Contains agent name. Parents model and tool spans within the agent invocation.
+- **`model_call`**: From `generate_content` spans. Contains model name, input/output tokens, LLM request/response payloads, and finish reasons.
+- **`tool_call`**: From `execute_tool` spans. Contains tool name, call arguments, tool response, and error type if failed.
+- **`agent_call`**: From `invoke_agent` spans. Contains agent name. Parents model and tool spans within the agent invocation.

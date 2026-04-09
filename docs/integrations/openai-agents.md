@@ -1,6 +1,6 @@
 # OpenAI Agents SDK
 
-Run OpenAI Agents SDK code through Motus with full tracing, model proxying, and cloud deployment. Import from `motus.openai_agents` instead of `agents` — everything else stays the same.
+Run OpenAI Agents SDK code through Motus with full tracing, model proxying, and cloud deployment. Import from `motus.openai_agents` instead of `agents`. Everything else stays the same.
 
 ## Installation
 
@@ -38,7 +38,7 @@ register_tracing()
 
 ### Model proxy
 
-When deployed to Motus cloud, the platform automatically routes OpenAI Responses API calls through the model proxy. No `OPENAI_API_KEY` is needed in the deployed environment — the proxy handles authentication, rate limiting, and cost tracking transparently.
+When deployed to Motus cloud, the platform automatically routes OpenAI Responses API calls through the model proxy. No `OPENAI_API_KEY` is needed in the deployed environment. The proxy handles authentication, rate limiting, and cost tracking transparently.
 
 ### Model wrapping
 
@@ -56,7 +56,7 @@ Tool invocations are intercepted before execution. Each `function_tool` call pro
 motus serve start myapp:agent --port 8000
 ```
 
-Where `agent` is an OpenAI `Agent` instance — Motus auto-detects it.
+Where `agent` is an OpenAI `Agent` instance, which Motus can detect automatically.
 
 ### Cloud deployment
 
@@ -65,7 +65,7 @@ cd my_project
 motus deploy --name my-agent tools:agent
 ```
 
-When deploying to Motus cloud, include `requirements.txt` with `openai-agents>=0.13.4` (the SDK is not in the base image). No API key secrets are needed — the platform routes Responses API calls through the model proxy.
+When deploying to Motus cloud, include `requirements.txt` with `openai-agents>=0.13.4` (the SDK is not in the base image). No API key secrets are needed. The platform routes Responses API calls through the model proxy.
 
 Session state (conversation history) is persisted in DynamoDB and survives backend restarts, failovers, and scaling events.
 
@@ -150,7 +150,7 @@ if tracer:
 
 The integration produces span types in `TraceManager` via the `MotusTracingProcessor`, which bridges OpenAI Agents SDK span events:
 
-- **`agent`** — Agent invocation spans. Contains agent name, instructions, and handoff information.
-- **`model_call`** — LLM generation spans. Contains model name, token usage, and request/response data.
-- **`tool_call`** — Tool execution spans. Contains tool name, input arguments, output, and error status.
-- **`guardrail`** — Guardrail evaluation spans. Contains guardrail name and pass/fail result.
+- **`agent`**: Agent invocation spans. Contains agent name, instructions, and handoff information.
+- **`model_call`**: LLM generation spans. Contains model name, token usage, and request/response data.
+- **`tool_call`**: Tool execution spans. Contains tool name, input arguments, output, and error status.
+- **`guardrail`**: Guardrail evaluation spans. Contains guardrail name and pass/fail result.

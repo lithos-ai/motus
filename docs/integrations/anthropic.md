@@ -1,6 +1,6 @@
 # Anthropic SDK
 
-Run Anthropic Python SDK code through Motus with full tracing, model proxying, and cloud deployment. Import from `motus.anthropic` instead of `anthropic.lib.tools` — everything else stays the same.
+Run Anthropic Python SDK code through Motus with full tracing, model proxying, and cloud deployment. Import from `motus.anthropic` instead of `anthropic.lib.tools`.
 
 ## Installation
 
@@ -48,7 +48,7 @@ register_tracing()
 
 ### Model proxy
 
-When deployed to Motus cloud, the platform automatically routes Anthropic API calls through the model proxy. No `ANTHROPIC_API_KEY` is needed in the deployed environment — the proxy handles authentication, rate limiting, and cost tracking transparently.
+When deployed to Motus cloud, the platform automatically routes Anthropic API calls through the model proxy. No `ANTHROPIC_API_KEY` is needed in the deployed environment. The proxy handles authentication, rate limiting, and cost tracking transparently.
 
 ### Tool wrapping
 
@@ -69,7 +69,7 @@ cd my_project
 motus deploy --name my-agent tools_runner:runner
 ```
 
-When deploying to Motus cloud, include `requirements.txt` with `anthropic>=0.49.0` (the SDK is not in the base image). No API key secrets are needed — the platform routes Anthropic API calls through the model proxy.
+When deploying to Motus cloud, include `requirements.txt` with `anthropic>=0.49.0` (the SDK is not in the base image). No API key secrets are needed. The platform routes Anthropic API calls through the model proxy.
 
 Session state (conversation history) is persisted in DynamoDB and survives backend restarts, failovers, and scaling events.
 
@@ -81,7 +81,7 @@ Session state (conversation history) is persisted in DynamoDB and survives backe
 async def run_turn(message: ChatMessage, state: list[ChatMessage]) -> tuple[ChatMessage, list[ChatMessage]]
 ```
 
-Each `run_turn()` creates a fresh `MotusBetaAsyncToolRunner` — tool runners are single-use generators that cannot be re-iterated. State is managed by the serve layer.
+Each `run_turn()` creates a fresh `MotusBetaAsyncToolRunner`. Tool runners are single-use generators that cannot be re-iterated. State is managed by the serve layer.
 
 ```python
 from motus.anthropic import ToolRunner, beta_async_tool
@@ -152,6 +152,6 @@ if tracer:
 
 The integration produces three span types in `TraceManager`:
 
-- **`model_call`** — Created from `_handle_request()` override. Contains model name, input messages, conversation snapshot, token usage, and timing.
-- **`tool_call`** — Created from `_generate_tool_call_response()` override. Contains tool name, input arguments, output, error status, and timing.
-- **`agent_call`** — Root span created per `run_turn()`. Parents all model and tool spans within the turn. Updated with total duration on completion.
+- **`model_call`**: Created from `_handle_request()` override. Contains model name, input messages, conversation snapshot, token usage, and timing.
+- **`tool_call`**:  Created from `_generate_tool_call_response()` override. Contains tool name, input arguments, output, error status, and timing.
+- **`agent_call`**: Root span created per `run_turn()`. Parents all model and tool spans within the turn. Updated with total duration on completion.
