@@ -133,14 +133,14 @@ Motus integrates with existing agent SDKs. Bring your OpenAI Agents or Claude Ag
         print(message)
     ```
 
-[:octicons-arrow-right-24: OpenAI Agents integration](integrations/openai-agents.md) | [:octicons-arrow-right-24: Claude Agent integration](integrations/claude-agent.md)
+[:octicons-arrow-right-24: OpenAI Agents integration](integrations/openai-agents.md) | [:octicons-arrow-right-24: Anthropic SDK integration](integrations/anthropic.md) | [:octicons-arrow-right-24: Google ADK integration](integrations/google-adk.md)
 
 ## Learn More
 
 | Section | What you will find |
 |---------|-------------------|
 | [User Guide](user-guide/overview.md) | Architecture, agents, tools, models, memory, serving |
-| [Integrations](integrations/openai-agents.md) | Bridges to OpenAI Agents SDK and Claude Agent SDK |
+| [Integrations](integrations/openai-agents.md) | Bridges to OpenAI Agents SDK, Anthropic SDK, and Google ADK |
 | [Examples](examples/index.md) | Runnable demos: runtime patterns, MCP, multi-agent bots |
 | [API Reference](api/index.md) | Auto-generated reference for every public class and function |
 | [Contributing](contributing/development-setup.md) | Dev environment, tests, PRs |

@@ -192,7 +192,7 @@ Learn more from our [comprehensive examples](examples/).
 | **[MCP integration](docs/user-guide/mcp-integration.md)** | Connect any MCP-compatible server with `get_mcp()`. Local via stdio, remote via HTTP, or inside a Docker container. Filter and rename tools with `prefix`, `blocklist`, and guardrails. |
 | **[Docker sandboxes](docs/user-guide/tools.md)** | Run untrusted code in isolated containers. Mount volumes, expose ports, execute shell and Python — attach to any agent as a tool provider. |
 | **[Prompt caching](docs/user-guide/models.md)** | Prompt caching via `CachePolicy` — `STATIC` (system + tools) or `AUTO` (+ conversation prefix). Reduce latency and cost on long conversations. |
-| **SDK compatibility** | Drop-in for [OpenAI Agents SDK](docs/integrations/openai-agents.md), [Anthropic SDK](docs/integrations/claude-agent.md), and Google ADK. Change the import, keep your code. |
+| **SDK compatibility** | Drop-in for [OpenAI Agents SDK](docs/integrations/openai-agents.md), [Anthropic SDK](docs/integrations/anthropic.md), and [Google ADK](docs/integrations/google-adk.md). Change the import, keep your code — get tracing and cloud deployment for free. |
 | **Human-in-the-loop** | Built-in support for interactive approval, clarification, and feedback during agent execution. Pause the agent, ask for human input, and resume. Works in both local serving and cloud deployment. |
 | **[Lifecycle hooks](docs/user-guide/tracing.md)** | Three-level hook system (global, per-task name, per-task type). Tap into `task_start`, `task_end`, `task_error` for logging, metrics, or custom logic. |
 
