@@ -16,7 +16,7 @@
 
 <h3 align="center">
   Higher capability. Lower cost. Faster agents.<br/>
-  Deploy locally or to the cloud in one command. Same code, any scale.
+  Self-managed or cloud deployment in one command. Same code, any scale.
 </h3>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ## About
 
-Agentic inference is exploding. Motus is an open-source agent serving project that enables higher capability, lower cost, and faster agents. It keeps deployment simple across local and cloud environments at any scale.
+Agentic inference is exploding. Motus is an open-source agent serving project that enables higher capability, lower cost, and faster agents. It keeps deployment simple across self-managed and cloud environments at any scale.
 
 ## Use with your coding agent
 
