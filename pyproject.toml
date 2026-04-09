@@ -65,7 +65,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-motus = ["runtime/tracing/templates/*", "plugins/**/*"]
+motus = ["runtime/tracing/templates/*"]
 
 [tool.uv.sources]
 motus-deep-research = { workspace = true }

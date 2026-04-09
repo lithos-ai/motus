@@ -1,9 +1,13 @@
 #!/bin/sh
-# Install the Motus CLI and deploy plugins for detected coding agents.
+# Install the Motus CLI and deploy skills for detected coding agents.
 # Usage: curl -fsSL https://raw.githubusercontent.com/lithos-ai/motus/main/install.sh | sh
 set -eu
 
-echo "Installing motus..." >&2
+org=lithos-ai
+product=motus
+repo=$product
+
+echo "Installing $product..." >&2
 
 # -- Install CLI ---------------------------------------------------------------
 
@@ -21,10 +25,22 @@ else
 	uv tool install lithosai-motus
 fi
 
-# Resolve the installed plugin path
-plugin_dir="$(python3 -c "from pathlib import Path; import motus; print(Path(motus.__file__).parent / 'plugins' / 'motus')")"
+# -- Download skill files from GitHub ------------------------------------------
 
-# -- Deploy plugins for detected agents ----------------------------------------
+tmp=${TMPDIR:-/tmp}/$product.$$
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp"
+
+curl -fsSL "https://github.com/$org/$repo/archive/main.tar.gz" | tar xz -C "$tmp"
+skill_src="$tmp/$repo-main/plugins/$product/skills/$product"
+
+if [ ! -d "$skill_src" ]
+then
+	echo "Error: skill not found in archive" >&2
+	exit 1
+fi
+
+# -- Deploy skills for detected agents ----------------------------------------
 
 installed=""
 skipped=""
@@ -35,42 +51,42 @@ add_skipped()   { skipped="${skipped:+$skipped, }$1"; }
 # Claude Code — marketplace from GitHub, auto-updates independently
 if command -v claude >/dev/null 2>&1
 then
-	claude plugin marketplace add lithos-ai/motus 2>/dev/null || true
-	claude plugin install motus@LithosAI 2>/dev/null || true
-	python3 -m motus.enable_claude_auto_update
+	claude plugin marketplace add "$org/$repo" 2>/dev/null || true
+	claude plugin install "$product@LithosAI" 2>/dev/null || true
 	add_installed "Claude Code"
 else
 	add_skipped "Claude Code"
 fi
 
-# Codex — symlink skill only (full plugin causes duplicate registration)
-if [ -d "$HOME/.codex" ]
+# Codex
+if command -v codex >/dev/null 2>&1 || [ -d "$HOME/.codex" ]
 then
 	mkdir -p "$HOME/.codex/skills"
-	rm -rf "$HOME/.codex/skills/motus"
-	ln -s "$plugin_dir/skills/motus" "$HOME/.codex/skills/motus"
+	rm -rf "$HOME/.codex/skills/$product"
+	cp -R "$skill_src" "$HOME/.codex/skills/$product"
 	add_installed "Codex"
 else
 	add_skipped "Codex"
 fi
 
-# Cursor — symlink skill only (full plugin causes duplicate registration)
+# Cursor
 if [ -d "$HOME/Library/Application Support/Cursor" ] || \
     [ -d "$HOME/.config/Cursor" ]
 then
 	mkdir -p "$HOME/.cursor/skills"
-	rm -rf "$HOME/.cursor/skills/motus"
-	ln -s "$plugin_dir/skills/motus" "$HOME/.cursor/skills/motus"
+	rm -rf "$HOME/.cursor/skills/$product"
+	cp -R "$skill_src" "$HOME/.cursor/skills/$product"
 	add_installed "Cursor"
 else
 	add_skipped "Cursor"
 fi
 
-# Gemini — extension (uses EXTENSIONS.md, not SKILL.md)
-if command -v gemini >/dev/null 2>&1 || [ -d "$HOME/.gemini" ]; then
+# Gemini
+if command -v gemini >/dev/null 2>&1 || [ -d "$HOME/.gemini" ]
+then
 	mkdir -p "$HOME/.gemini/extensions"
-	rm -rf "$HOME/.gemini/extensions/motus"
-	ln -s "$plugin_dir/skills/motus" "$HOME/.gemini/extensions/motus"
+	rm -rf "$HOME/.gemini/extensions/$product"
+	cp -R "$skill_src" "$HOME/.gemini/extensions/$product"
 	add_installed "Gemini"
 else
 	add_skipped "Gemini"
@@ -78,6 +94,6 @@ fi
 
 # -- Report --------------------------------------------------------------------
 
-[ -n "$installed" ] && echo "Installed motus plugin for: $installed"
+[ -n "$installed" ] && echo "Installed $product skill for: $installed"
 [ -n "$skipped" ]   && echo "Skipped (not detected): $skipped"
-[ -n "$installed" ] && echo "Done. Restart your coding agent to pick up the /motus skill."
+[ -n "$installed" ] && echo "Done. Restart your coding agent to pick up the /$product skill."

@@ -12,5 +12,5 @@
   "keywords": ["motus", "agents", "tools", "ReActAgent", "agent_task", "MCP", "guardrails", "workflow", "deploy", "cloud", "serve"],
   "category": "developer-tools",
   "tags": ["ai-agents", "deployment", "workflow"],
-  "skills": "./skills/"
+  "skills": "./plugins/motus/skills/"
 }
