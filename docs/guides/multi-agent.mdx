@@ -1,13 +1,13 @@
 ---
 title: "Multi-Agent"
-description: "Compose agents into supervisor/specialist patterns using as_tool(), fork(), and parallel task graphs."
+description: "Compose agents into supervisor/specialist patterns using as_tool(), fork(), and parallel workflows."
 ---
 
-Motus lets you compose multiple agents into larger workflows. The primary patterns are: wrapping a specialist agent as a tool for a supervisor, forking an agent to create independent conversation branches, and running sub-agents in parallel using the task graph runtime.
+Motus lets you compose multiple agents into larger workflows. The primary patterns are: wrapping a specialist agent as a tool for a supervisor, forking an agent to create independent conversation branches, and running sub-agents in parallel using the task runtime.
 
 ## Agent as tool
 
-`agent.as_tool()` wraps any agent as a callable tool that another agent can invoke. This is the core building block for supervisor/specialist patterns — the supervisor delegates subtasks to specialists by calling their tools.
+`agent.as_tool()` wraps any agent as a callable tool that another agent can invoke. This is the core building block for supervisor/specialist patterns the supervisor delegates subtasks to specialists by calling their tools.
 
 ```python
 from motus.agent import ReActAgent
@@ -34,13 +34,13 @@ response = await supervisor("What are the latest advances in fusion energy?")
 
 The supervisor calls the researcher tool as needed, passing subtask prompts. The researcher runs independently and returns its result, which the supervisor incorporates into its final response.
 
-### as_tool() parameters
+### as\_tool() parameters
 
 | Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | `str \| None` | agent's `name` | Tool name exposed to the supervisor |
-| `description` | `str \| None` | `None` | Tool description sent to the supervisor's LLM |
-| `output_extractor` | `Callable \| None` | `None` | Function to post-process the sub-agent's response before returning it to the supervisor |
+| --- | --- | --- | --- |
+| `name` | `str | None` | agent's `name` | Tool name exposed to the supervisor |
+| `description` | `str | None` | `None` | Tool description sent to the supervisor's LLM |
+| `output_extractor` | `Callable | None` | `None` | Function to post-process the sub-agent's response before returning it to the supervisor |
 | `stateful` | `bool` | `False` | Whether the sub-agent preserves memory across multiple calls within the same parent run |
 
 <Note>
@@ -77,7 +77,7 @@ asyncio.run(main())
 
 Forking is useful for A/B comparisons, parallel exploratory conversations, and any case where you want to branch from a known conversation state without modifying the original.
 
-## Parallel workflows with @agent_task
+## Parallel workflows with @agent\_task
 
 For fully parallel execution, use the `@agent_task` decorator from the Motus runtime. Sub-agent calls submitted as tasks are scheduled concurrently by the task graph engine — no explicit `asyncio.gather` needed.
 
