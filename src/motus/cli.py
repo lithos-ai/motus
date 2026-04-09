@@ -6,6 +6,7 @@ _COMMAND_MODULES = [
     "motus.auth.cli",
     "motus.serve.cli",
     "motus.deploy.cli",
+    "motus.cli_setup",
 ]
 
 
@@ -33,6 +34,10 @@ def main():
     for module_path in _COMMAND_MODULES:
         module = importlib.import_module(module_path)
         module.register_cli(subparsers)
+
+    from motus.version_check import check_for_update
+
+    check_for_update()
 
     args = parser.parse_args()
     if not args.command:

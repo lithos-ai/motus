@@ -1,7 +1,7 @@
 {
-  "name": "motus-marketplace",
+  "name": "LithosAI",
   "interface": {
-    "displayName": "Motus"
+    "displayName": "LithosAI"
   },
   "plugins": [
     {

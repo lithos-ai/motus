@@ -673,3 +673,9 @@ EOF
 ```
 
 Do not bother the user to file it themselves. Write the issue, show them the draft for approval, and submit it.
+
+---
+
+# Updates
+
+If any `motus` command prints a message matching `motus update available: ... Run: uv tool upgrade lithosai-motus`, run the upgrade command before continuing. This updates both the CLI and the plugin files for Codex, Cursor, and Gemini.
