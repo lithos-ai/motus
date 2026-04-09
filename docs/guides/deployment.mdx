@@ -5,25 +5,6 @@ description: "Deploy agents to Motus Cloud with a single command."
 
 Deploy your agent to Motus Cloud with `motus deploy`. On the first run, you provide a project name and an import path. Motus packages your code, uploads it, and streams build progress to your terminal. Every subsequent deploy reads configuration from `motus.toml`, so you only need to run `motus deploy`.
 
-## Authentication
-
-Before deploying, authenticate with your Motus Cloud account:
-
-```bash
-motus login
-```
-
-This opens a browser window for OAuth. Credentials are stored in `~/.motus/credentials.json`.
-
-In CI or other non-interactive environments, set the `LITHOSAI_API_KEY` environment variable instead it overrides the credential file.
-
-Other auth commands:
-
-| Command | Description |
-| --- | --- |
-| `motus whoami` | Check your current identity |
-| `motus logout` | Revoke your key and clear stored credentials |
-
 ## Quick start
 
 <Steps>
@@ -49,6 +30,25 @@ Other auth commands:
     ```
   </Step>
 </Steps>
+
+## Authentication
+
+Before deploying, authenticate with your Motus Cloud account:
+
+```bash
+motus login
+```
+
+This opens a browser window for OAuth. Credentials are stored in `~/.motus/credentials.json`.
+
+In CI or other non-interactive environments, set the `LITHOSAI_API_KEY` environment variable instead it overrides the credential file.
+
+Other auth commands:
+
+| Command | Description |
+| --- | --- |
+| `motus whoami` | Check your current identity |
+| `motus logout` | Revoke your key and clear stored credentials |
 
 ## How it works
 
