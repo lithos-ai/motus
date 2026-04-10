@@ -40,6 +40,8 @@ dependencies = [
     "pathspec>=1.0.4",
     "pyyaml>=6.0",
     "tomli-w>=1.0.0",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
 ]
 
 [project.urls]

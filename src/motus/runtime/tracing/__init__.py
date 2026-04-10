@@ -1,20 +1,10 @@
 from .agent_tracer import TraceManager
 from .config import CollectionLevel, TraceConfig
-from .trace_to_otel import (
-    convert_single_span_to_otel,
-    convert_to_otel_spans,
-    export_jaeger_json,
-    generate_html_viewer,
-    load_trace_data,
-)
+from .span_convert import readable_span_to_viewer_dict
 
 __all__ = [
     "TraceManager",
     "TraceConfig",
     "CollectionLevel",
-    "convert_single_span_to_otel",
-    "convert_to_otel_spans",
-    "export_jaeger_json",
-    "generate_html_viewer",
-    "load_trace_data",
+    "readable_span_to_viewer_dict",
 ]
