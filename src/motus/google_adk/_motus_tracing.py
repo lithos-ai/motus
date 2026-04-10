@@ -133,8 +133,9 @@ class MotusSpanProcessor:
         )
 
         op = _get_attr(span, _OP_NAME)
-        if op is None:
-            # Non-ADK intermediate span (e.g. gRPC/GenAI SDK internals).
+        if op is None or _get_attr(span, _TOOL_NAME) == "(merged tools)":
+            # Non-ADK intermediate span (e.g. gRPC/GenAI SDK internals)
+            # or synthetic "(merged tools)" batch span — skip ingestion.
             # Collapse: re-parent any children that resolved to this span's
             # task_id so they point to this span's own parent instead.
             # Safe because OTEL guarantees children end before parents.

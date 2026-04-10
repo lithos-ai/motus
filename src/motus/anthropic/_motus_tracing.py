@@ -6,6 +6,7 @@ into motus task_meta dicts for TraceManager.ingest_external_span().
 
 from __future__ import annotations
 
+import datetime
 import time
 from typing import Any
 
@@ -18,6 +19,14 @@ _MAX_VALUE_LEN = 4000
 def _now_us() -> int:
     """Current time in microseconds since epoch."""
     return int(time.time() * 1_000_000)
+
+
+def _us_to_iso(us: int) -> str:
+    """Convert microseconds since epoch to ISO 8601 string."""
+    if not us:
+        return ""
+    dt = datetime.datetime.fromtimestamp(us / 1_000_000, tz=datetime.timezone.utc)
+    return dt.isoformat()
 
 
 def _truncate(value: Any, limit: int = _MAX_VALUE_LEN) -> Any:
@@ -37,8 +46,10 @@ def build_agent_call_meta(
         "func": f"anthropic_tool_runner({model})",
         "task_type": AGENT_CALL,
         "parent": None,
+        "started_at": _us_to_iso(start_us),
         "start_us": start_us,
-        "end_us": 0,  # Updated when turn completes
+        "ended_at": "",  # Updated when turn completes
+        "end_us": 0,
         "model_name": model,
     }
 
@@ -57,7 +68,9 @@ def build_model_call_meta(
         "func": model,
         "task_type": MODEL_CALL,
         "parent": parent,
+        "started_at": _us_to_iso(start_us),
         "start_us": start_us,
+        "ended_at": _us_to_iso(end_us),
         "end_us": end_us,
         "model_name": model,
     }
@@ -131,7 +144,9 @@ def build_tool_call_meta(
         "func": tool_name,
         "task_type": TOOL_CALL,
         "parent": parent,
+        "started_at": _us_to_iso(start_us),
         "start_us": start_us,
+        "ended_at": _us_to_iso(end_us),
         "end_us": end_us,
         "tool_input_meta": {
             "name": tool_name,
