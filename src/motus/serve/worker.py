@@ -207,13 +207,17 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
                 trace_metrics=metrics,
             )
         )
-    except Exception:
+    except Exception as exc:
         metrics = _get_trace_metrics()
         _finalize_trace()
+        # Log the full traceback for debugging, but send only the
+        # exception message to the client to avoid walls of red text.
+        logger.error("Agent turn failed:\n%s", traceback.format_exc())
+        error_msg = f"{type(exc).__name__}: {exc}"
         conn.send(
             WorkerResult(
                 success=False,
-                error=traceback.format_exc(),
+                error=error_msg,
                 trace_metrics=metrics,
             )
         )
