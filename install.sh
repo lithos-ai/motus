@@ -62,20 +62,22 @@ if command -v claude >/dev/null 2>&1
 then
 	claude plugin marketplace add "$org/$repo" 2>/dev/null || true
 	claude plugin install "$product@LithosAI" 2>/dev/null || true
-	python3 -c "
-import json; from pathlib import Path
-for p in [
-    Path.home() / '.claude/plugins/known_marketplaces.json',
-    Path.home() / '.claude/settings.json',
-]:
-    if not p.exists(): continue
-    d = json.loads(p.read_text())
-    # settings.json nests under extraKnownMarketplaces
-    m = d.get('extraKnownMarketplaces', d)
-    if 'LithosAI' in m:
-        m['LithosAI']['autoUpdate'] = True
-        p.write_text(json.dumps(d, indent=2) + '\n')
-" 2>/dev/null || true
+	python3 <<-EOF 2>/dev/null
+		import json
+		from pathlib import Path
+
+		for p in [
+		    Path.home() / '.claude/plugins/known_marketplaces.json',
+		    Path.home() / '.claude/settings.json',
+		]:
+		    if not p.exists(): continue
+		    d = json.loads(p.read_text())
+		    # settings.json nests under extraKnownMarketplaces
+		    m = d.get('extraKnownMarketplaces', d)
+		    if 'LithosAI' in m:
+		        m['LithosAI']['autoUpdate'] = True
+		        p.write_text(json.dumps(d, indent=2) + '\n')
+	EOF
 	add_installed "Claude Code"
 else
 	add_skipped "Claude Code"
