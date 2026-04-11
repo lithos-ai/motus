@@ -37,7 +37,6 @@
             "pages": [
               "guides/serving",
               "guides/deployment",
-              "guides/human-in-the-loop",
               "guides/tracing",
               "guides/plugin"
             ]
@@ -49,7 +48,7 @@
             ]
           },
           {
-            "group": "Writing Agents",
+            "group": "Motus Library",
             "pages": [
               "concepts/overview",
               "concepts/agents",
@@ -58,6 +57,7 @@
               "concepts/models",
               "concepts/memory",
               "guides/guardrails",
+              "guides/human-in-the-loop",
               "guides/multi-agent",
               "guides/mcp-integration",
               "concepts/skills"
