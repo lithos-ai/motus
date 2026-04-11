@@ -3,6 +3,7 @@ import os
 from typing import Set
 
 import docker
+from docker.errors import DockerException
 
 from ...core import Sandbox, SandboxProvider
 from .sandbox import SANDBOX_IMAGE, DockerSandbox
@@ -11,30 +12,49 @@ from .sandbox import SANDBOX_IMAGE, DockerSandbox
 class DockerToolProvider(SandboxProvider):
     """Docker-based sandbox provider.
 
-    Manages Docker containers for sandbox creation.
+    Manages Docker containers for sandbox creation. Docker interaction is
+    deferred until the first :meth:`get_sandbox` call so that constructing
+    a ``CompositeToolProvider`` that includes this provider never crashes
+    when Docker is unavailable.
     """
 
     def __init__(self) -> None:
-        self.client = docker.from_env()
+        self.client: docker.DockerClient | None = None
+        self.sandboxes: Set[DockerSandbox] = set()
+
+    def _ensure_client(self) -> bool:
+        """Lazily connect to Docker and ensure the sandbox image exists.
+
+        Returns ``True`` if Docker is ready, ``False`` otherwise.
+        """
+        if self.client is not None:
+            return True
+
+        try:
+            client = docker.from_env()
+        except DockerException:
+            logging.warning("Docker is not available — skipping DockerToolProvider")
+            return False
 
         if not any(
             any(
                 tag == SANDBOX_IMAGE or tag.startswith(SANDBOX_IMAGE + ":")
                 for tag in image.tags
             )
-            for image in self.client.images.list()
+            for image in client.images.list()
         ):
             logging.info(
                 f"Sandbox image '{SANDBOX_IMAGE}' not found locally, building..."
             )
             dir = os.path.dirname(__file__)
-            self.client.images.build(
+            client.images.build(
                 path=dir,
                 dockerfile=dir + "/Dockerfile.sandbox",
                 tag=SANDBOX_IMAGE,
             )
 
-        self.sandboxes: Set[DockerSandbox] = set()
+        self.client = client
+        return True
 
     def get_sandbox(
         self,
@@ -47,6 +67,9 @@ class DockerToolProvider(SandboxProvider):
         connect: str | None = None,
         ports: dict[int, int | None] | None = None,
     ) -> Sandbox | None:
+        if not self._ensure_client():
+            return None
+
         if connect is not None:
             sandbox = DockerSandbox.connect(connect)
         else:
