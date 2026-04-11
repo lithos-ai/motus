@@ -302,24 +302,6 @@ agent = ReActAgent(
 
 See [Models](/concepts/models) for more on prompt caching and provider support.
 
-## MCP and other lazy tools
-
-When you pass tools backed by an MCP server, the recommended pattern is to connect the session with `async with get_mcp(...) as session` and pass the connected session into the agent:
-
-```python
-from motus.tools import get_mcp
-
-async with get_mcp(command="...", args=[...]) as session:
-    agent = ReActAgent(
-        client=OpenAIChatClient(),
-        model_name="gpt-4o",
-        tools=[session],
-    )
-    response = await agent("...")
-```
-
-If you pass an unconnected `get_mcp()` session to the agent without `async with`, the agent will connect it lazily on first run. Both patterns work; the context manager version gives you deterministic cleanup on exit. See [MCP Integration](/guides/mcp-integration) for the full guide.
-
 ## Constructor reference
 
 | Parameter | Type | Default | Purpose |
