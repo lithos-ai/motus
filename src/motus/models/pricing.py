@@ -50,6 +50,20 @@ _PRICING: dict[str, dict[str, float]] = {
         "cache_write": 0.30,
         "cache_read": 0.06,
     },
+    # Kimi (via OpenRouter)
+    "moonshotai/kimi-k2.5": {
+        "input": 0.20,
+        "output": 1.00,
+        "cache_write": 0.20,
+        "cache_read": 0.02,
+    },
+    # DeepSeek (via OpenRouter)
+    "deepseek/deepseek-r2": {
+        "input": 0.14,
+        "output": 2.19,
+        "cache_write": 0.14,
+        "cache_read": 0.014,
+    },
     # OpenAI (via OpenRouter)
     "openai/gpt-5-mini": {
         "input": 0.25,
