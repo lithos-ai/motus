@@ -24,19 +24,44 @@ class CloudSandbox(Sandbox):
     Connects to a pre-provisioned sandbox identified by URL and bearer token.
     Does NOT manage the sandbox lifecycle (create/delete/pause).
 
+    When *sandbox_url* or *token* are omitted the sandbox reads
+    ``SANDBOX_URL`` / ``SANDBOX_TOKEN`` from the environment on every
+    request.  This allows construction before the env vars are set (e.g.
+    at module-import time under ``motus serve``).
+
     Usage::
 
         async with CloudSandbox(sandbox_url="https://...", token="...") as sb:
             output = await sb.sh("echo hello")
     """
 
-    def __init__(self, *, sandbox_url: str, token: str) -> None:
-        self._sandbox_url = sandbox_url.rstrip("/")
+    def __init__(
+        self,
+        *,
+        sandbox_url: str | None = None,
+        token: str | None = None,
+    ) -> None:
+        self._sandbox_url = sandbox_url.rstrip("/") if sandbox_url else None
         self._token = token
-        self._client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=httpx.Timeout(300.0),
-        )
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(300.0))
+
+    def _get_url(self) -> str:
+        url = self._sandbox_url or os.environ.get("SANDBOX_URL")
+        if not url:
+            raise RuntimeError(
+                "Sandbox URL not available. Set the SANDBOX_URL environment "
+                "variable or pass sandbox_url= to CloudSandbox()."
+            )
+        return url.rstrip("/")
+
+    def _get_auth_headers(self) -> dict[str, str]:
+        token = self._token or os.environ.get("SANDBOX_TOKEN")
+        if not token:
+            raise RuntimeError(
+                "Sandbox token not available. Set the SANDBOX_TOKEN environment "
+                "variable or pass token= to CloudSandbox()."
+            )
+        return {"Authorization": f"Bearer {token}"}
 
     @classmethod
     def create(cls, image: str = "python:3.12", **kwargs) -> Self:
@@ -61,7 +86,11 @@ class CloudSandbox(Sandbox):
             body["stdin"] = input
         body["timeout"] = 300
 
-        resp = await self._client.post(f"{self._sandbox_url}/exec", json=body)
+        resp = await self._client.post(
+            f"{self._get_url()}/exec",
+            headers=self._get_auth_headers(),
+            json=body,
+        )
         resp.raise_for_status()
         data = resp.json()
 
@@ -78,7 +107,9 @@ class CloudSandbox(Sandbox):
         with open(local_path, "rb") as f:
             content = f.read()
         resp = await self._client.put(
-            f"{self._sandbox_url}/workspace/{relative}", content=content
+            f"{self._get_url()}/workspace/{relative}",
+            headers=self._get_auth_headers(),
+            content=content,
         )
         resp.raise_for_status()
 
@@ -88,7 +119,8 @@ class CloudSandbox(Sandbox):
 
         relative = _workspace_relative(sandbox_path)
         resp = await self._client.get(
-            f"{self._sandbox_url}/workspace/{relative}"
+            f"{self._get_url()}/workspace/{relative}",
+            headers=self._get_auth_headers(),
         )
         resp.raise_for_status()
         with open(local_path, "wb") as f:

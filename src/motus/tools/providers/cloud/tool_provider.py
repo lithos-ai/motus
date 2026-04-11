@@ -11,6 +11,10 @@ class CloudSandboxToolProvider(SandboxProvider):
     Returns ``None`` from :meth:`get_sandbox` when the env vars are not set,
     allowing a :class:`CompositeToolProvider` to fall through to the next
     provider (e.g. Docker).
+
+    When ``MOTUS_ON_CLOUD=1`` is set, the provider always returns a
+    :class:`CloudSandbox` even if the URL/token vars are not yet available.
+    The sandbox will resolve them from the environment at first use.
     """
 
     def __init__(self) -> None:
@@ -29,10 +33,16 @@ class CloudSandboxToolProvider(SandboxProvider):
     ) -> Sandbox | None:
         sandbox_url = os.environ.get("SANDBOX_URL")
         sandbox_token = os.environ.get("SANDBOX_TOKEN")
-        if not sandbox_url or not sandbox_token:
+        on_cloud = os.environ.get("MOTUS_ON_CLOUD") == "1"
+
+        if not on_cloud and (not sandbox_url or not sandbox_token):
             return None
+
         if self._sandbox is None:
-            self._sandbox = CloudSandbox(sandbox_url=sandbox_url, token=sandbox_token)
+            self._sandbox = CloudSandbox(
+                sandbox_url=sandbox_url or None,
+                token=sandbox_token or None,
+            )
         return self._sandbox
 
     def close(self) -> None:
