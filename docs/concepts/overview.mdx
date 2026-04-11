@@ -55,16 +55,25 @@ The two compose. A workflow step can call a `ReActAgent` when part of an otherwi
 
 ## The pieces
 
-A Motus agent, whether you write it as a `ReActAgent` or as a Workflow, is assembled from the same small set of pieces.
+### What you configure on a ReActAgent
 
-- **Model clients** talk to LLM providers. `OpenAIChatClient`, `AnthropicChatClient`, `GeminiChatClient`, and `OpenRouterChatClient` share one interface, so swapping providers is a one line change. Local models work through `base_url`.
-- **Tools** are what an agent can actually call: a plain Python function decorated with `@tool`, a class method decorated with `@tools`, an MCP server wrapped with `get_mcp()`, or another agent wrapped with `as_tool()`.
-- **Memory** is the conversation state an agent carries across turns. `BasicMemory` appends messages in order; `CompactionMemory` summarizes older turns when the context window starts to fill.
-- **Guardrails** are validation hooks you attach to inputs, outputs, or individual tools. They rewrite a value, raise to block, or pass it through.
-- **The runtime** is the task scheduler sitting under everything else. When a `ReActAgent` asks the model for a completion or runs a tool, that call is submitted as an `@agent_task` and the runtime executes it. Independent tasks run in parallel, each one returns an `AgentFuture` that tracks its result and its dependencies, and retries, timeouts, and cancellation all live at this level. This is also what you are using directly when you decorate Workflow steps with `@agent_task`.
-- **Serving** wraps any agent behind a session-based HTTP API. `motus serve` runs the server on your machine, `motus deploy` ships the same code to Motus Cloud, and the REST surface is identical on both. A session is one persistent conversation with an agent.
+- **A model client.** `OpenAIChatClient`, `AnthropicChatClient`, `GeminiChatClient`, and `OpenRouterChatClient` share one interface, so swapping providers is a one-line change. Local models work through `base_url`.
+- **Tools.** A plain Python function decorated with `@tool`, a class method decorated with `@tools`, an MCP server wrapped with `get_mcp()`, or another agent wrapped with `as_tool()`.
+- **Memory.** Conversation state across turns. `BasicMemory` appends messages in order; `CompactionMemory` summarizes older turns when the context window starts to fill.
+- **Optional guardrails, reasoning config, and cache policy.** Guardrails are validation hooks on inputs, outputs, or individual tools; they rewrite a value, raise to block, or pass it through.
 
-Tracing piggybacks on the runtime through lifecycle hooks, so every task that runs gets a span without you instrumenting anything by hand. Turn it on with one environment variable.
+### What a Workflow is
+
+A Workflow is a graph of plain Python functions decorated with `@agent_task`. It has no built-in notion of tools, memory, or guardrails; those are `ReActAgent` concepts. A workflow step is just Python, so it can call a model client directly, invoke a `ReActAgent` on the side, or do anything else Python can do.
+
+### The runtime underneath both
+
+The runtime is a task scheduler. Every model call and every tool call inside a `ReActAgent` is submitted to it as an `@agent_task` under the hood, which is the same thing you are doing directly when you decorate Workflow steps. Independent tasks run in parallel, each one returns an `AgentFuture` that carries its result and its dependencies, and retries, timeouts, and cancellation all live at this level.
+
+### Shipping and observing
+
+- **Serving.** `motus serve` wraps any agent behind a session-based HTTP API on your machine. `motus deploy` ships the same code to Motus Cloud. The REST surface is identical on both, and a session is one persistent conversation with an agent.
+- **Tracing.** Off by default. Flip one environment variable and the runtime starts emitting a span for every task through its lifecycle hooks. No manual instrumentation.
 
 ## Module map
 
