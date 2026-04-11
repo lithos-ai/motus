@@ -33,7 +33,23 @@
             ]
           },
           {
-            "group": "Core Concepts",
+            "group": "Run and Deploy",
+            "pages": [
+              "guides/serving",
+              "guides/deployment",
+              "guides/human-in-the-loop",
+              "guides/tracing",
+              "guides/plugin"
+            ]
+          },
+          {
+            "group": "Motus Cloud",
+            "pages": [
+              "cloud/overview"
+            ]
+          },
+          {
+            "group": "Writing Agents",
             "pages": [
               "concepts/overview",
               "concepts/agents",
@@ -41,22 +57,10 @@
               "concepts/runtime",
               "concepts/models",
               "concepts/memory",
-              "concepts/skills",
-              "concepts/todo-sandbox"
-            ]
-          },
-          {
-            "group": "Guides",
-            "pages": [
-              "guides/serving",
-              "guides/deployment",
-              "guides/tracing",
               "guides/guardrails",
-              "guides/mcp-integration",
               "guides/multi-agent",
-              "guides/human-in-the-loop",
-              "guides/plugin",
-              "guides/untitled-page"
+              "guides/mcp-integration",
+              "concepts/skills"
             ]
           },
           {
