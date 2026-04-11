@@ -82,13 +82,7 @@ class CloudSandbox(Sandbox):
         resp.raise_for_status()
         data = resp.json()
 
-        stdout = data.get("stdout", "")
-        stderr = data.get("stderr", "")
-        exit_code = data.get("exit_code", 0)
-
-        if exit_code != 0:
-            return (stdout + stderr).rstrip("\n")
-        return stdout
+        return data.get("stdout", "") + data.get("stderr", "")
 
     async def put(self, local_path: str, sandbox_path: str) -> None:
         if not sandbox_path.startswith("/"):
