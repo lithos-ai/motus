@@ -5,18 +5,6 @@ import httpx
 
 from ...core import Sandbox
 
-_WORKSPACE_PREFIX = "/home/agent/workspace/"
-
-
-def _workspace_relative(sandbox_path: str) -> str:
-    """Strip the workspace prefix and return the relative path, or raise."""
-    if not sandbox_path.startswith(_WORKSPACE_PREFIX):
-        raise ValueError(
-            f"CloudSandbox only supports paths under {_WORKSPACE_PREFIX!r}, "
-            f"got {sandbox_path!r}"
-        )
-    return sandbox_path[len(_WORKSPACE_PREFIX) :]
-
 
 class CloudSandbox(Sandbox):
     """Cloud-based sandbox backed by the sandbox REST API.
@@ -103,23 +91,25 @@ class CloudSandbox(Sandbox):
         return stdout
 
     async def put(self, local_path: str, sandbox_path: str) -> None:
-        relative = _workspace_relative(sandbox_path)
+        if not sandbox_path.startswith("/"):
+            raise ValueError("Target path must be absolute")
         with open(local_path, "rb") as f:
             content = f.read()
         resp = await self._client.put(
-            f"{self._get_url()}/workspace/{relative}",
+            f"{self._get_url()}/files/{sandbox_path.lstrip('/')}",
             headers=self._get_auth_headers(),
             content=content,
         )
         resp.raise_for_status()
 
     async def get(self, sandbox_path: str, local_path: str) -> str:
+        if not sandbox_path.startswith("/"):
+            raise ValueError("Source path must be absolute")
         if os.path.isdir(local_path):
             local_path = os.path.join(local_path, os.path.basename(sandbox_path))
 
-        relative = _workspace_relative(sandbox_path)
         resp = await self._client.get(
-            f"{self._get_url()}/workspace/{relative}",
+            f"{self._get_url()}/files/{sandbox_path.lstrip('/')}",
             headers=self._get_auth_headers(),
         )
         resp.raise_for_status()
