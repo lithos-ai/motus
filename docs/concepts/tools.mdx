@@ -79,16 +79,22 @@ Define a `BaseModel` subclass with `Field` descriptors. This gives you validatio
 from pydantic import BaseModel, Field
 
 
+class Filter(BaseModel):
+    field: str = Field(description="Column to filter on")
+    value: str = Field(description="Value to match")
+
+
 class SearchInput(BaseModel):
     query: str = Field(description="The search query")
-    max_results: int = Field(ge=1, le=50, description="Max results")
+    filters: list[Filter] = Field(default=[], description="Optional filters")
+    max_results: int = Field(ge=1, le=50, default=10, description="Max results")
 
 
 @tool(schema=SearchInput)
-async def search(query: str, max_results: int) -> str: ...
+async def search(query: str, filters: list, max_results: int = 10) -> str: ...
 ```
 
-The schema describes what the model sees; the function signature is what Motus calls when the tool runs. Make sure the field names match the parameter names so Motus can route the arguments correctly.
+Nested models like `Filter` are expanded into the JSON Schema the model sees. The function signature is what Motus calls when the tool runs, so make sure the field names match the parameter names.
 
 ### `Annotated` for inline descriptions
 
