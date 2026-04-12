@@ -71,16 +71,15 @@ configured = tool(third_party_fn, name="fetch", input_guardrails=[validate_url])
 
 You have three ways to describe what a tool's arguments mean. Pick whichever is most convenient.
 
-### `InputSchema` (recommended)
+### Pydantic model (recommended)
 
-Define an `InputSchema` subclass with Pydantic `Field` descriptors. This gives you validation constraints, nested objects, enums, and rich descriptions all in one place.
+Define a `BaseModel` subclass with `Field` descriptors. This gives you validation constraints, nested objects, enums, and rich descriptions all in one place.
 
 ```python
-from motus.tools import InputSchema
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 
-class SearchInput(InputSchema):
+class SearchInput(BaseModel):
     query: str = Field(description="The search query")
     max_results: int = Field(ge=1, le=50, description="Max results")
 
@@ -89,7 +88,9 @@ class SearchInput(InputSchema):
 async def search(query: str, max_results: int) -> str: ...
 ```
 
-The schema describes what the model sees; the function signature is what Motus calls when the tool runs. Make sure the Pydantic field names match the function parameter names so Motus can route the arguments correctly. Use `InputSchema` instead of plain `BaseModel` so Motus emits a cleaner JSON Schema.
+The schema describes what the model sees; the function signature is what Motus calls when the tool runs. Make sure the field names match the parameter names so Motus can route the arguments correctly.
+
+Motus also exports `InputSchema`, a thin `BaseModel` subclass that strips redundant fields (`title`, `$defs`, `anyOf` wrappers) from the generated JSON Schema to save tokens. Use whichever you prefer; both work identically.
 
 ### `Annotated` for inline descriptions
 
