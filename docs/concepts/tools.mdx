@@ -196,7 +196,9 @@ class DatabaseTools:
 
 ## Built-in tools
 
-`builtin_tools()` returns a ready-made set of code-agent tools for filesystem access, shell execution, search, and a self-maintained checklist. It works out of the box against your local machine.
+Motus ships a ready-made set of tools that cover the common needs of a code-writing agent: running shell commands, reading and writing files, searching the filesystem, and keeping a checklist of its own work. Most agents that do anything with code can drop these in without writing their own.
+
+Get them from `builtin_tools()`, which works out of the box against your local machine.
 
 ```python
 from motus.tools import builtin_tools
