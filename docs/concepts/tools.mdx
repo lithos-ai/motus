@@ -71,23 +71,9 @@ configured = tool(third_party_fn, name="fetch", input_guardrails=[validate_url])
 
 You have three ways to describe what a tool's arguments mean. Pick whichever is most convenient.
 
-### `Annotated` for inline descriptions
+### `InputSchema` (recommended)
 
-The lightest option. Add a string after the type and Motus uses it as the parameter description.
-
-```python
-from typing import Annotated
-
-
-async def search(
-    query: Annotated[str, "The search query"],
-    max_results: Annotated[int, "Max results to return"] = 10,
-) -> str: ...
-```
-
-### `InputSchema` for validation
-
-Use a Pydantic model when you need validation constraints, nested objects, or enums. Subclass `InputSchema` instead of plain `BaseModel` so Motus can emit a cleaner JSON Schema.
+Define an `InputSchema` subclass with Pydantic `Field` descriptors. This gives you validation constraints, nested objects, enums, and rich descriptions all in one place.
 
 ```python
 from motus.tools import InputSchema
@@ -103,7 +89,21 @@ class SearchInput(InputSchema):
 async def search(query: str, max_results: int) -> str: ...
 ```
 
-The schema describes what the model sees; the function signature is what Motus calls when the tool runs. Make sure the Pydantic field names match the function parameter names so Motus can route the model's arguments into your function correctly.
+The schema describes what the model sees; the function signature is what Motus calls when the tool runs. Make sure the Pydantic field names match the function parameter names so Motus can route the arguments correctly. Use `InputSchema` instead of plain `BaseModel` so Motus emits a cleaner JSON Schema.
+
+### `Annotated` for inline descriptions
+
+A lighter alternative when you only need to add descriptions and do not need validation. Add a string after the type in an `Annotated` wrapper.
+
+```python
+from typing import Annotated
+
+
+async def search(
+    query: Annotated[str, "The search query"],
+    max_results: Annotated[int, "Max results to return"] = 10,
+) -> str: ...
+```
 
 ### Raw JSON Schema
 
