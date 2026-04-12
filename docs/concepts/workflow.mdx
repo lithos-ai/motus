@@ -5,20 +5,25 @@ description: "Turn Python functions into a parallel task graph with @agent_task 
 
 A Workflow is a graph of `@agent_task`-decorated Python functions. You write ordinary Python; Motus infers the data-flow dependencies between your functions and runs the graph in parallel underneath. No DAG definitions, no edge declarations, no YAML.
 
-Reach for Workflow when the procedure is already a solved problem and you want stable, repeatable control over it: ETL pipelines, evaluation harnesses, content processing, batch LLM jobs. For open-ended, exploratory problems where you want the model to decide what to do next, use a [ReActAgent](/concepts/agents) instead. The two can be combined: a workflow step can call a `ReActAgent` for a subtask, and a `ReActAgent`'s model and tool calls are themselves `@agent_task`s submitted to the same scheduler.
+Reach for Workflow when the steps are already known and you want stable, repeatable control over them: ETL pipelines, evaluation harnesses, content processing, batch LLM jobs. For open-ended problems where you want the model to decide what to do next, use a [ReActAgent](/concepts/agents) instead.
+
+Both programming models run on the same scheduler. A `ReActAgent`'s model calls and tool calls are themselves `@agent_task`s, which is how the two models share retries, timeouts, cancellation, and tracing, and how a workflow step can freely call a `ReActAgent` (and vice versa).
 
 ## Basic example
 
 ```python
 from motus.runtime import agent_task, resolve, shutdown
 
+
 @agent_task
 def add(a, b):
     return a + b
 
+
 @agent_task
 def multiply(x, y):
     return x * y
+
 
 a = add(3, 4)        # returns AgentFuture, not 7
 b = multiply(a, 10)  # depends on a, runs after a completes
@@ -27,74 +32,117 @@ print(resolve(b))    # 70
 shutdown()
 ```
 
-When you call `add(3, 4)`, the runtime registers a task and returns an `AgentFuture`. When you pass that future into `multiply(a, 10)`, the runtime detects the dependency and waits for `a` to resolve before executing `multiply`. The runtime manages this dependency graph and dispatches tasks as their prerequisites become ready.
+When you call `add(3, 4)`, the runtime registers a task and hands you back an `AgentFuture`, not a concrete value. When you pass that future into `multiply(a, 10)`, the runtime sees the dependency and schedules `multiply` to run after `a` resolves. You write straight-line Python; Motus figures out what can run in parallel and what has to wait.
 
-## Getting results
+## Getting a result
+
+Three ways to pull the value out of a future, depending on where you are.
 
 ```python
 from motus.runtime import resolve
 
-# Block until a single future resolves (sync code)
+# Sync code: block until resolved
 value = resolve(future)
 
-# Block until multiple futures resolve
+# Block on several futures at once and unpack
 a, b, c = resolve([future_a, future_b, future_c])
 
-# Block with a timeout (raises TimeoutError if exceeded)
-value = future.af_result(timeout=5)
+# Block with a timeout
+value = future.af_result(timeout=5)   # raises TimeoutError if exceeded
 ```
 
-Inside an `@agent_task` or any async context, use `await` instead of blocking:
+Inside an async context, `await` the future directly instead of blocking:
 
 ```python
 @agent_task
-async def pipeline():
-    data = await fetch_data("https://api.example.com")
-    return await process(data)
+async def fetch_and_process(url):
+    raw = await download(url)
+    return await parse(raw)
 ```
 
 <Note>
-The public API for blocking resolution is `af_result()` or `resolve()`. There is no `.result()` method on `AgentFuture`.
+  The blocking public API is `resolve()` and `AgentFuture.af_result()`. There is no `.result()` method. Inside an `@agent_task`, prefer `await`: calling `resolve()` from the runtime's own event loop raises `RuntimeError` to protect you from a deadlock.
 </Note>
 
-## Non-blocking operators
+## Building the graph without blocking
 
-Arithmetic, `__getitem__`, and `__getattr__` on futures create new futures that extend the task graph without blocking:
+Most Python operators on an `AgentFuture` return a new future that extends the graph, so you can keep composing without pulling values out.
 
 ```python
 x = add(10, 5)
-total = x + 100       # AgentFuture, not blocking
-doubled = x * 2       # AgentFuture, extends the DAG
+total = x + 100            # AgentFuture, not blocking
+doubled = x * 2            # AgentFuture, another graph node
 
 data = make_data()
 first = data["scores"][0]  # chained getitem, two new futures
+top_score = data.scores    # attribute access is deferred too
+
+get_scorer = find_scorer()
+score = get_scorer(team, year)  # calling a future is deferred too
 ```
 
-`total = x + 100` does not wait for `x` to resolve. It creates a new node in the DAG that executes when `x` is ready. You write normal Python; Motus builds the execution plan.
+`total = x + 100` does not wait for `x` to resolve. It creates a node that executes when `x` is ready. Arithmetic, `__getitem__`, `__getattr__`, `__call__`, and ordering comparisons (`>`, `<`, `>=`, `<=`) all return futures.
 
-Ordering comparisons (`>`, `<`, `>=`, `<=`) also return futures. Equality (`==`) and hashing (`hash()`) are sync barriers that block to resolve the value. See the [critical constraint](#critical-constraint) below.
+Some operators force a blocking wait to return a concrete value. See [Sync barriers](#sync-barriers) below.
+
+## Sync barriers
+
+A handful of Python operators have to return a concrete value rather than another future. On an `AgentFuture` these trigger a blocking wait to resolve the underlying value.
+
+<Warning>
+  The most common trap is putting futures in a `set()` or using them as dict keys, which fires `__hash__`:
+
+  ```python
+  # WRONG: hashing futures is a sync barrier
+  futures = {add(1, 2), add(3, 4)}
+
+  # CORRECT: key by object identity
+  by_id: dict[int, AgentFuture] = {}
+  f = add(1, 2)
+  by_id[id(f)] = f
+  ```
+
+  Inside an `@agent_task`, a sync barrier on the runtime's own event loop raises `RuntimeError` instead of deadlocking. If you need to deduplicate or index futures, key by `id(future)` or an integer you control.
+</Warning>
+
+Here is the full list of operators that force a resolution:
+
+| Operator | Triggered by |
+|---|---|
+| `__bool__` | `if future:`, `bool(future)`, `not future` |
+| `__str__` | `str(future)`, `f"{future}"` |
+| `__len__` | `len(future)` |
+| `__iter__` | `for x in future:`, unpacking `a, b = future` |
+| `__int__` / `__float__` | `int(future)`, `float(future)` |
+| `__eq__` / `__ne__` | `future == x`, `future != x` |
+| `__hash__` | putting a future in `set()` or as a `dict` key |
+| `__contains__` | `x in future` |
+
+Motus warns every time a sync barrier fires so you can catch accidents. Set `MOTUS_QUIET_SYNC=1` to silence the warnings once you have audited your code.
 
 ## Retries and timeouts
 
+Pass retry and timeout policy into the decorator. A task that raises (including `TimeoutError`) is re-queued with the same arguments until retries run out.
+
 ```python
 @agent_task(retries=3, timeout=10.0, retry_delay=1.0)
-async def fetch(url):
+async def download(url):
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             return await resp.json()
 ```
 
 | Parameter | Type | Default | Purpose |
-|-----------|------|---------|---------|
-| `retries` | `int` | `0` | Number of retry attempts after failure |
-| `timeout` | `float \| None` | `None` | Per-execution timeout in seconds |
-| `retry_delay` | `float` | `0.0` | Seconds to wait between retries |
+|---|---|---|---|
+| `retries` | `int` | `0` | Number of retries after the first failure |
+| `timeout` | `float \| None` | `None` | Per-execution timeout in seconds. Exceeding it raises `TimeoutError`, which counts as a failure. |
+| `retry_delay` | `float` | `0.0` | Seconds to wait between attempts |
 
-When a task fails and has retries remaining, the runtime re-queues it with the same arguments after `retry_delay` seconds. If the task exceeds `timeout` seconds, it raises `TimeoutError`, which counts as a failure and triggers retries if available.
+If a task exhausts its retries, the final exception propagates out of the future. `resolve()` or `await` will re-raise it.
 
 ## Multi-return
 
-When a task produces multiple independent outputs, use `num_returns` to split them into separate futures:
+When a task produces multiple independent outputs, use `num_returns` to split them into separate futures. Downstream tasks can depend on individual outputs without waiting on the others.
 
 ```python
 @agent_task(num_returns=2)
@@ -102,26 +150,31 @@ def split(data):
     mid = len(data) // 2
     return data[:mid], data[mid:]
 
-left, right = split([1, 2, 3, 4])
-# left and right are separate AgentFutures
-combined = add(resolve(left)[-1], resolve(right)[0])
+
+@agent_task
+def sum_part(part):
+    return sum(part)
+
+
+left, right = split([1, 2, 3, 4])    # two separate AgentFutures
+left_total = sum_part(left)          # scheduled as soon as `left` is ready
+right_total = sum_part(right)        # scheduled as soon as `right` is ready
+print(resolve(left_total + right_total))  # 10
 ```
 
-Each future resolves independently, so downstream tasks can depend on individual outputs.
+## Per-call policy overrides
 
-## Policy override per call site
-
-Override the default policy for a specific invocation without changing the decorator:
+Override the default policy for one invocation without touching the decorator.
 
 ```python
-result = fetch.policy(retries=5, timeout=30)("https://api.example.com")
+result = download.policy(retries=5, timeout=30)("https://api.example.com")
 ```
 
-`.policy()` returns a new `AgentTaskDefinition` with the updated settings. The original definition remains unchanged.
+`.policy()` returns a fresh `AgentTaskDefinition` with the updated fields. The original definition is unchanged. You can override `retries`, `timeout`, `retry_delay`, and `num_returns`.
 
 ## Sync and async tasks
 
-Both sync and async functions work with `@agent_task`:
+Both sync and async functions work with `@agent_task`. Sync tasks run in the runtime's `ThreadPoolExecutor`; async tasks run directly on the runtime's event loop. Prefer async for I/O-bound work and sync for CPU-bound work.
 
 ```python
 @agent_task
@@ -129,17 +182,16 @@ def cpu_bound(data):
     """Runs in a thread pool executor."""
     return heavy_computation(data)
 
+
 @agent_task
 async def io_bound(url):
     """Runs as a coroutine on the runtime event loop."""
     return await fetch(url)
 ```
 
-Sync tasks run in the runtime's `ThreadPoolExecutor`. Async tasks run directly on the runtime event loop. Prefer async for I/O-bound work and sync for CPU-bound work.
-
 ## Class methods
 
-`@agent_task` implements the descriptor protocol, so it works on class methods:
+`@agent_task` implements the descriptor protocol, so it works on class methods: `self` is bound automatically when the method is accessed through an instance.
 
 ```python
 class DataProcessor:
@@ -150,72 +202,64 @@ class DataProcessor:
     def process(self, value):
         return value * self.multiplier
 
-proc = DataProcessor(3)
-result = proc.process(10)  # AgentFuture, resolves to 30
-```
 
-When accessed through an instance, `@agent_task` binds `self` automatically, matching the behavior of regular Python methods.
+proc = DataProcessor(3)
+future = proc.process(10)   # AgentFuture, resolves to 30
+```
 
 ## Per-task hooks
 
-You can attach hooks directly in the decorator:
+Attach lifecycle callbacks directly in the decorator. They fire only for this task. For cross-cutting hooks (global, per task type, or per task name), see [Tracing](/guides/tracing).
 
 ```python
-def log_start(event):
+def on_start(event):
     print(f"Starting {event.name}")
 
-def log_end(event):
+def on_end(event):
     print(f"Finished {event.name}: {event.result}")
 
-@agent_task(on_start=log_start, on_end=log_end)
+def on_error(event):
+    print(f"Failed {event.name}: {event.error}")
+
+
+@agent_task(on_start=on_start, on_end=on_end, on_error=on_error)
 def important_task(data):
     return transform(data)
 ```
 
-<Note>
-These hooks fire only for this specific task. For broader hook patterns, see [Tracing](/guides/tracing).
-</Note>
+## Cancellation
+
+Cancel a future to stop its task and every task that depends on it downstream.
+
+```python
+from motus.runtime import cancel, cancelled
+
+
+future = long_running_task()
+cancel(future)          # or future.af_cancel()
+
+if cancelled(future):   # or future.af_cancelled()
+    print("Cancelled.")
+```
+
+Cancellation is thread-safe and can be called from any thread, including from inside another `@agent_task`. If the future is already resolved, `cancel()` is a no-op and returns `False`.
 
 ## Lifecycle
 
 ```python
 from motus.runtime import init, shutdown, is_initialized
 
-# Explicit initialization
-init()
-
+init()         # optional: starts the runtime thread and event loop
 # ... run tasks ...
-
-# Clean shutdown: waits for in-flight tasks, stops the event loop
-shutdown()
+shutdown()     # cancels in-flight tasks and stops the event loop
 ```
 
-`init()` starts the runtime thread and event loop. If you skip it, the runtime auto-initializes on the first `@agent_task` call. `shutdown()` drains the thread pool executor and releases resources. Call it when your program exits.
-
-`is_initialized()` returns `True` if the runtime is running.
+If you skip `init()`, the runtime auto-initializes on the first `@agent_task` call. `shutdown()` stops the runtime: it signals the event loop to exit, cancels any in-flight tasks, and poisons their futures with `RuntimeError("Motus runtime is shutting down")`. Tasks do not drain; if you need them to finish, `resolve()` or `await` them first. `is_initialized()` tells you whether the runtime is currently running.
 
 ## How the runtime runs it
 
-Under the hood, every `@agent_task` call is submitted to `GraphScheduler`, a small task scheduler that lives in its own thread and drives an async event loop. Sync tasks run on a `ThreadPoolExecutor`; async tasks run directly on that event loop. The scheduler tracks dependencies through `AgentFuture` objects and dispatches each task as soon as its prerequisites are ready.
+Under the hood, every `@agent_task` call is submitted to `GraphScheduler`, a small task scheduler that lives in its own thread and drives an async event loop. The scheduler tracks dependencies through `AgentFuture` objects and dispatches each task as soon as its prerequisites are ready.
 
-The same scheduler backs `ReActAgent`. Every model call and tool call inside a reasoning loop is wrapped as an `@agent_task` and submitted to `GraphScheduler`, which is why both programming models share retries, timeouts, cancellation, and tracing uniformly. It is also why `ReActAgent`'s independent tool calls actually run in parallel.
+The same scheduler backs `ReActAgent`. Every model call and tool call inside a reasoning loop is wrapped as an `@agent_task` and submitted to `GraphScheduler`, which is why both programming models share retries, timeouts, cancellation, and tracing uniformly, and why `ReActAgent`'s independent tool calls run in parallel.
 
 You normally never touch `GraphScheduler` or `AgentRuntime` directly. The decorator is the API.
-
-## Critical constraint
-
-<Warning>
-Never put an `AgentFuture` in a `set()` or use it as a dictionary key. The `__eq__` and `__hash__` methods on `AgentFuture` are **sync barriers**: they block the calling thread to resolve the underlying value. Inside an `@agent_task`, this deadlocks the runtime event loop.
-
-```python
-# WRONG: will deadlock
-futures = {add(1, 2), add(3, 4)}
-
-# CORRECT: key by object identity
-futures = {}
-f = add(1, 2)
-futures[id(f)] = f
-```
-
-Use `dict[int, AgentFuture]` keyed by `id(future)` whenever you need to collect futures in a mapping or set-like structure.
-</Warning>
