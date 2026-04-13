@@ -3,7 +3,6 @@ Anthropic chat client implementation.
 """
 
 import json
-import os
 from typing import Optional, Type
 
 from anthropic import AsyncAnthropic
@@ -20,9 +19,6 @@ from .base import (
     ToolDefinition,
 )
 
-# Required system prompt prefix for OAuth tokens (must identify as Claude Code)
-OAUTH_SYSTEM_PROMPT_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
-
 
 class AnthropicChatClient(BaseChatClient):
     """
@@ -32,26 +28,10 @@ class AnthropicChatClient(BaseChatClient):
 
     Args:
         api_key: API key for authentication (sk-ant-api...)
-        auth_token: OAuth token for authentication (sk-ant-oat...)
-                    When provided, api_key is ignored and env var fallback is disabled.
     """
 
-    def __init__(
-        self, api_key: Optional[str] = None, auth_token: Optional[str] = None, **kwargs
-    ):
-        self._using_oauth = bool(auth_token)
-        if auth_token:
-            # OAuth mode: temporarily remove ANTHROPIC_API_KEY env var to prevent
-            # SDK from reading it (SDK always checks env var when api_key is None)
-            saved_api_key = os.environ.pop("ANTHROPIC_API_KEY", None)
-            try:
-                self._client = AsyncAnthropic(auth_token=auth_token, **kwargs)
-            finally:
-                # Restore env var if it existed
-                if saved_api_key is not None:
-                    os.environ["ANTHROPIC_API_KEY"] = saved_api_key
-        elif api_key:
-            # Explicit API key mode
+    def __init__(self, api_key: Optional[str] = None, **kwargs):
+        if api_key:
             self._client = AsyncAnthropic(api_key=api_key, **kwargs)
         else:
             # Default: let SDK read from ANTHROPIC_API_KEY env var
@@ -194,56 +174,6 @@ class AnthropicChatClient(BaseChatClient):
             },
         )
 
-    def _prepare_oauth_messages(
-        self,
-        system_prompt: Optional[str],
-        anthropic_messages: list[dict],
-    ) -> tuple[str, list[dict]]:
-        """
-        Prepare messages for OAuth authentication.
-
-        OAuth tokens require the system prompt to be EXACTLY the Claude Code identifier.
-        Any custom system instructions must be moved to the first user message.
-        """
-        # OAuth requires this exact system prompt
-        oauth_system = OAUTH_SYSTEM_PROMPT_PREFIX
-
-        if not system_prompt:
-            # No custom instructions, just use OAuth system prompt
-            return oauth_system, anthropic_messages
-
-        # Move custom system prompt to first user message
-        messages_copy = list(anthropic_messages)
-        system_instruction = (
-            f"[SYSTEM INSTRUCTIONS]\n{system_prompt}\n\n[USER MESSAGE]\n"
-        )
-
-        if messages_copy and messages_copy[0].get("role") == "user":
-            # Prepend to first user message
-            first_content = messages_copy[0].get("content", "")
-            if isinstance(first_content, str):
-                messages_copy[0] = {
-                    "role": "user",
-                    "content": system_instruction + first_content,
-                }
-            elif isinstance(first_content, list):
-                # Handle content blocks
-                for i, block in enumerate(first_content):
-                    if block.get("type") == "text":
-                        first_content[i] = {
-                            "type": "text",
-                            "text": system_instruction + block.get("text", ""),
-                        }
-                        break
-                messages_copy[0] = {"role": "user", "content": first_content}
-        else:
-            # Insert as new first message
-            messages_copy.insert(
-                0, {"role": "user", "content": system_instruction.strip()}
-            )
-
-        return oauth_system, messages_copy
-
     @staticmethod
     def _apply_reasoning(
         request_kwargs: dict,
@@ -350,12 +280,6 @@ class AnthropicChatClient(BaseChatClient):
         """
         system_prompt, anthropic_messages = self._convert_messages(messages)
 
-        # Handle OAuth: move system prompt to user message if needed
-        if self._using_oauth:
-            system_prompt, anthropic_messages = self._prepare_oauth_messages(
-                system_prompt, anthropic_messages
-            )
-
         request_kwargs = {
             "model": model,
             "messages": anthropic_messages,
@@ -414,12 +338,6 @@ class AnthropicChatClient(BaseChatClient):
             messages_copy.append(ChatMessage.user_message(schema_instruction))
 
         system_prompt, anthropic_messages = self._convert_messages(messages_copy)
-
-        # Handle OAuth: move system prompt to user message if needed
-        if self._using_oauth:
-            system_prompt, anthropic_messages = self._prepare_oauth_messages(
-                system_prompt, anthropic_messages
-            )
 
         request_kwargs = {
             "model": model,

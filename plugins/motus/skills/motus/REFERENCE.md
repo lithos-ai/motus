@@ -23,7 +23,6 @@ from motus.models import AnthropicChatClient
 
 client = AnthropicChatClient(
     api_key: str | None = None,        # Falls back to ANTHROPIC_API_KEY env
-    auth_token: str | None = None,     # OAuth token (overrides api_key)
 )
 ```
 
