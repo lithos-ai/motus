@@ -226,11 +226,14 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
                 trace_metrics=metrics,
             )
         )
-    except Exception as exc:
+    except BaseException as exc:
         metrics = _get_trace_metrics()
         _finalize_trace()
         # Log the full traceback for debugging, but send only the
         # exception message to the client to avoid walls of red text.
+        # Use BaseException to also catch SystemExit and KeyboardInterrupt
+        # so the parent always receives a WorkerResult instead of seeing
+        # "Worker process exited unexpectedly".
         logger.error("Agent turn failed:\n%s", traceback.format_exc())
         error_msg = f"{type(exc).__name__}: {exc}"
         conn.send(
