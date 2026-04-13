@@ -1,0 +1,192 @@
+---
+title: "Motus Overview"
+description: "Higher capability, lower cost, faster agents. Deploy locally or to the cloud in one command."
+---
+
+Agentic inference is exploding. Motus is open source agent serving that enables **higher capability, lower cost, and faster agents**, and keeps deployment simple across local and cloud environments at any scale.
+
+You bring the agent. Motus runs it, serves it, and deploys it. Agents can come from any framework you already use, and Motus also ships with its own agent toolkit for writing production ready agents in clean Python.
+
+## Set up
+
+<Tabs>
+  <Tab title="With a coding agent (fastest)">
+    One command installs everything and teaches your coding agent how to use Motus.
+
+    <Steps>
+      <Step title="Run the installer">
+        ```bash
+        curl -fsSL https://www.lithosai.com/motus/install.sh | sh
+        ```
+
+        This installs the Motus CLI, the Python library, and adds Motus plugins to Claude Code, Codex, and Cursor.
+      </Step>
+      <Step title="Use it inside your coding agent">
+        ```
+        /motus               # activate Motus skills
+        /motus serve         # serve locally
+        /motus deploy        # ship to the cloud
+        ```
+
+        Your coding agent now handles scaffolding, serving, and deploying for you. See the [Plugin guide](/guides/plugin) for the full list of commands.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Manual">
+    Install the Python library and CLI directly.
+
+    <Steps>
+      <Step title="Install the package">
+        <CodeGroup>
+          ```bash uv
+          uv add lithosai-motus
+          ```
+          ```bash pip
+          pip install lithosai-motus
+          ```
+        </CodeGroup>
+      </Step>
+      <Step title="Verify the install">
+        <CodeGroup>
+          ```bash uv
+          uv run python -c "from motus.agent import ReActAgent; print('Motus is ready')"
+          ```
+          ```bash pip
+          python -c "from motus.agent import ReActAgent; print('Motus is ready')"
+          ```
+        </CodeGroup>
+
+        See [Installation](/getting-started/installation) for optional SDK extras and the full setup.
+      </Step>
+      <Step title="Add the coding agent plugin (optional)">
+        If you also use Claude Code, Codex, or Cursor, install the Motus plugin so your coding agent can serve and deploy on your behalf:
+
+        ```bash
+        curl -fsSL https://www.lithosai.com/motus/install.sh | sh
+        ```
+
+        See the [Plugin guide](/guides/plugin) for details.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Serve and deploy any agent
+
+Motus serves agents from any of these. Bring what you already have.
+
+- **Motus** native `ReActAgent` and workflows
+- **OpenAI Agents SDK**
+- **Anthropic SDK**
+- **Google ADK**
+- **Plain Python**
+
+See the [Integrations](/integrations/openai-agents) section for how each framework plugs in, what Motus adds on top, and the minimal code change needed to switch over.
+
+Once you have an agent, one command exposes it as an HTTP API or ships it to production. The code is the same either way.
+
+<Tabs>
+  <Tab title="Self-managed">
+    ```bash
+    # Serve locally on your own machine
+    motus serve start myapp:agent --port 8000
+
+    # Chat with it
+    motus serve chat http://localhost:8000 "Hello!"
+    ```
+  </Tab>
+  <Tab title="Motus Cloud">
+    ```bash
+    # Ship to Motus Cloud in one command
+    motus deploy --name myapp myapp:agent
+
+    # Chat with the deployed agent
+    motus serve chat https://myapp.lithosai.com "Hello!"
+    ```
+  </Tab>
+</Tabs>
+
+See [Serving](/guides/serving) for session management, worker pools, and webhooks, and [Deployment](/guides/deployment) for the cloud workflow.
+
+## The Motus library
+
+`lithosai-motus` is the Python package. Alongside the serving layer, it ships with an agent toolkit you can use to write agents in clean Python. Here is what you get.
+
+### Start simple
+
+<CardGroup cols={2}>
+  <Card title="Agents" icon="robot" href="/concepts/agents">
+    `ReActAgent` runs the reasoning loop and tool dispatch with multi turn memory, structured output, guardrails, and usage tracking baked in. A working agent in under 10 lines.
+  </Card>
+  <Card title="Tools" icon="screwdriver-wrench" href="/concepts/tools">
+    Write a function, get a tool. Expose class methods with `@tools`, wrap an MCP server with `get_mcp()`, nest another agent with `as_tool()`. Built-in utilities: skills, `bash`, file ops, `glob` / `grep`, todo tracking.
+  </Card>
+  <Card title="Workflows" icon="diagram-project" href="/concepts/workflow">
+    `@agent_task` turns plain Python functions into a parallel, resilient workflow. Motus infers the dependency graph from data flow, so you write normal Python and skip the DAG wiring entirely.
+  </Card>
+  <Card title="Models" icon="layer-group" href="/concepts/models">
+    Unified client for OpenAI, Anthropic, Gemini, and OpenRouter. Switch providers by changing one line. Local models (Ollama, vLLM) work through `base_url`.
+  </Card>
+  <Card title="Tracing and debugging" icon="chart-line" href="/guides/tracing">
+    Every LLM call, tool invocation, and task dependency traced automatically. Interactive HTML viewer, Jaeger export, or cloud dashboard. Enabled with one env var.
+  </Card>
+  <Card title="Local serving" icon="server" href="/guides/serving">
+    `motus serve` exposes any agent as a session based HTTP API locally. Test the full serving stack before deploying to the cloud.
+  </Card>
+</CardGroup>
+
+### Go deeper
+
+<CardGroup cols={2}>
+  <Card title="Memory" icon="database" href="/concepts/memory">
+    Basic append only memory or compaction memory that auto summarizes when the token budget runs thin. Session save and restore built in.
+  </Card>
+  <Card title="Guardrails" icon="shield-halved" href="/guides/guardrails">
+    Input and output validation on both agents and individual tools. Return a dict to modify, raise to block. Structured output guardrails match Pydantic fields.
+  </Card>
+  <Card title="Multi-agent composition" icon="users-gear" href="/guides/multi-agent">
+    `agent.as_tool()` wraps any agent as a tool. The supervisor does not know it is calling another agent. `fork()` creates independent conversation branches.
+  </Card>
+  <Card title="MCP integration" icon="plug" href="/guides/mcp-integration">
+    Connect any MCP-compatible server with `get_mcp()`. Local via stdio, remote via HTTP, or inside a Docker container. Filter and rename tools with `prefix`, `blocklist`, and guardrails.
+  </Card>
+  <Card title="Docker sandboxes" icon="cube" href="/concepts/tools">
+    Run untrusted code in isolated containers. Mount volumes, expose ports, execute shell and Python. Attach to any agent as a tool provider.
+  </Card>
+  <Card title="Prompt caching" icon="bolt" href="/concepts/models">
+    Prompt caching via `CachePolicy`. `STATIC` covers system and tools, `AUTO` adds the conversation prefix. Cut latency and cost on long conversations.
+  </Card>
+  <Card title="Human in the loop" icon="hand" href="/guides/human-in-the-loop">
+    Pause an agent mid turn, ask the user for approval or clarification, then resume from exactly where you left off.
+  </Card>
+  <Card title="Lifecycle hooks" icon="bell" href="/guides/tracing">
+    Three level hook system (global, per task name, per task type). Tap into `task_start`, `task_end`, `task_error` for logging, metrics, or custom logic.
+  </Card>
+  <Card title="Cloud deployment" icon="cloud-arrow-up" href="/guides/deployment">
+    `motus deploy` ships your agent to Motus Cloud with one command. No Dockerfiles, no Kubernetes, no infra code.
+  </Card>
+  <Card title="SDK compatibility" icon="bridge" href="/integrations/openai-agents">
+    Drop in for OpenAI Agents SDK, Anthropic SDK, and Google ADK. Change the import, keep your code.
+  </Card>
+</CardGroup>
+
+<Note>
+  This is a slice of what ships with Motus. Browse the rest of the docs to find what fits your use case.
+</Note>
+
+## Learn more
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="play" href="/getting-started/quickstart">
+    Your first agent running in under 5 minutes.
+  </Card>
+  <Card title="Architecture Overview" icon="compass" href="/concepts/overview">
+    How agents, tools, models, memory, runtime, and serving fit together.
+  </Card>
+  <Card title="Examples" icon="flask" href="https://github.com/lithos-ai/motus/tree/main/examples">
+    Runnable demos covering runtime patterns, MCP, multi-agent bots, and more.
+  </Card>
+  <Card title="Contributing" icon="handshake" href="/contributing/development-setup">
+    Dev environment, tests, and how to send your first PR.
+  </Card>
+</CardGroup>

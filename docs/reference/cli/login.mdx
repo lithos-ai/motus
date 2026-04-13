@@ -1,0 +1,41 @@
+---
+title: "motus login"
+description: "Authenticate with Motus Cloud via browser-based OAuth."
+---
+
+Authenticate with Motus Cloud. Opens a browser-based OAuth flow and stores your credentials in `~/.motus/credentials.json`. You only need to run this once: credentials persist across sessions.
+
+## Usage
+
+```bash
+motus login [options]
+```
+
+## Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--api-url` | `https://api.lithosai.cloud` | Motus Cloud API endpoint URL. Can also be set via the `LITHOSAI_API_URL` environment variable. |
+
+For CI environments where a browser is unavailable, set the `LITHOSAI_API_KEY` environment variable instead of running `motus login`. The environment variable takes precedence over the stored credential file.
+
+## Examples
+
+### Log in to Motus Cloud
+
+```bash
+motus login
+```
+
+### Log in to a custom API endpoint
+
+```bash
+motus login --api-url https://api.staging.lithosai.cloud
+```
+
+### CI authentication via environment variable
+
+```bash
+export LITHOSAI_API_KEY=your-api-key
+motus deploy myapp:agent
+```

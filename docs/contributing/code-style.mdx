@@ -1,0 +1,127 @@
+---
+title: "Code Style"
+description: "Code conventions for contributing to Motus."
+---
+
+Motus enforces code style automatically via ruff. This page documents the conventions that ruff does not catch.
+
+## Automated enforcement
+
+```bash
+uv run ruff check .        # Lint
+uv run ruff format --check . # Format check
+```
+
+Ruff handles formatting, import sorting, and pycodestyle. The active rule sets are:
+
+| Rule set | What it covers |
+|----------|---------------|
+| **E** | pycodestyle errors |
+| **F** | pyflakes (unused imports, undefined names) |
+| **I** | isort (import ordering) |
+| **W** | pycodestyle warnings |
+
+**Ignored rules:** `E501` (line length) and `E402` (module-level import position). The full configuration is in `pyproject.toml` under `[tool.ruff]`.
+
+## Import ordering
+
+Organize imports into four groups, separated by blank lines:
+
+```python
+from __future__ import annotations          # 1. Future
+
+import asyncio                               # 2. Standard library
+import logging
+
+from pydantic import BaseModel               # 3. Third-party
+
+from motus.runtime import agent_task        # 4. Local/relative
+
+if TYPE_CHECKING:                            # 5. TYPE_CHECKING block
+    from motus.runtime.agent_future import AgentFuture
+```
+
+Ruff sorts imports within each group automatically. The `TYPE_CHECKING` block goes last and contains imports used only in type annotations.
+
+## Type annotations
+
+Use modern Python 3.12+ syntax throughout:
+
+```python
+# Correct
+name: str | None
+items: list[Tool]
+mapping: dict[str, int]
+
+# Incorrect — do not use
+name: Optional[str]
+items: List[Tool]
+mapping: Dict[str, int]
+```
+
+Use `TYPE_CHECKING` guards for forward references that cause circular imports:
+
+```python
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from motus.runtime.agent_future import AgentFuture
+```
+
+## Naming conventions
+
+| Element | Convention | Example |
+|---------|-----------|---------|
+| Classes | PascalCase | `TaskPolicy`, `AgentFuture` |
+| Functions / methods | snake_case | `register_hook`, `_deep_unwrap` |
+| Constants | UPPER_SNAKE_CASE | `DEFAULT_POLICY`, `MODEL_CALL` |
+| Private internals | `_` prefix | `_prerequisites`, `_scan_deps` |
+| Type aliases | PascalCase | `HookCallback`, `TaskType` |
+
+## Docstrings
+
+Use Google style. Required for all public classes and functions.
+
+```python
+def register_hook(event: str, callback: HookCallback) -> None:
+    """Register a lifecycle hook for the given event.
+
+    Args:
+        event: The event name to listen for (e.g., "task_start").
+        callback: A callable invoked when the event fires.
+
+    Raises:
+        ValueError: If the event name is not recognized.
+    """
+```
+
+Docstrings are **not** required for private helpers (prefixed with `_`) or test functions.
+
+## Comments
+
+Add comments only where the logic is not self-evident from the code. Do not add comments to code you did not change. Prefer renaming variables or extracting functions over writing explanatory comments.
+
+```python
+# Good — explains a non-obvious constraint
+# AgentFuture overrides __eq__/__hash__ as sync barriers,
+# so never use set() or dict keys with AgentFuture instances.
+pending: dict[int, AgentFuture] = {}
+
+# Bad — restates the code
+# Increment the counter
+counter += 1
+```
+
+## String formatting
+
+Use f-strings for interpolation. Use explicit `str.format()` only when the template is defined separately from its arguments.
+
+```python
+# Correct
+msg = f"Task {task.name} failed after {elapsed:.2f}s"
+
+# Correct — template defined elsewhere
+TEMPLATE = "Task {name} completed in {duration}s"
+msg = TEMPLATE.format(name=task.name, duration=elapsed)
+```

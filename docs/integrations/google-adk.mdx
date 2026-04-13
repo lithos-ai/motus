@@ -1,0 +1,138 @@
+---
+title: "Google ADK"
+description: "Serve Google ADK agents with Motus full session history replay, automatic tracing, and cloud deployment."
+---
+
+Serve Google ADK agents through Motus for full session history replay,
+automatic tracing, and cloud deployment. Import `Agent` from
+`motus.google_adk.agents.llm_agent` instead of the ADK directly. Your model,
+tools, and instructions stay the same.
+
+## Installation
+
+<Tabs>
+  <Tab title="uv">
+    ```bash
+    uv sync --extra google-adk
+    ```
+  </Tab>
+  <Tab title="pip">
+    ```bash
+    pip install "lithosai-motus[google-adk]"
+    ```
+  </Tab>
+</Tabs>
+
+Requires `google-adk>=1.27.2`.
+
+## Basic usage
+
+Import `Agent` from `motus.google_adk.agents.llm_agent` instead of the ADK package:
+
+```python
+from motus.google_adk.agents.llm_agent import Agent
+
+agent = Agent(
+    model="gemini-2.0-flash",
+    name="my_agent",
+    instruction="You are a helpful assistant.",
+)
+```
+
+The `Agent` class is a direct subclass of the Google ADK `Agent`. It accepts
+the same constructor arguments (`model`, `name`, `instruction`, `tools`, and
+any other ADK parameters) and adds a `run_turn()` method that integrates with
+Motus serving.
+
+### Adding tools
+
+Pass standard ADK tools or plain Python functions directly:
+
+```python
+from motus.google_adk.agents.llm_agent import Agent
+
+def get_weather(city: str) -> str:
+    """Get the weather for a city."""
+    return f"Sunny in {city}"
+
+agent = Agent(
+    model="gemini-2.0-flash",
+    name="weather_agent",
+    instruction="You are a helpful weather assistant.",
+    tools=[get_weather],
+)
+```
+
+## Deployment
+
+### Local serving
+
+Pass the `agent` object directly to `motus serve start`:
+
+```bash
+motus serve start myapp:agent --port 8000
+```
+
+Where `agent` is an `Agent` instance defined at module level in `myapp.py`.
+
+```python
+# myapp.py
+from motus.google_adk.agents.llm_agent import Agent
+
+def get_weather(city: str) -> str:
+    """Get the weather for a city."""
+    return f"Sunny in {city}"
+
+agent = Agent(
+    model="gemini-2.0-flash",
+    name="weather_agent",
+    instruction="You are a helpful weather assistant.",
+    tools=[get_weather],
+)
+```
+
+```bash
+motus serve start myapp:agent --port 8000
+```
+
+### Cloud deployment
+
+```bash
+cd my_project
+motus deploy --name my-adk-agent agent:root_agent
+```
+
+When deploying to Motus cloud, include `requirements.txt` with `google-adk>=1.27.2`. No API key secrets are needed - the platform routes Gemini API calls through the model proxy.
+
+Session state (conversation history) is persisted in DynamoDB and survives backend restarts, failovers, and scaling events.
+
+### Session history replay
+
+Each turn, Motus passes the full prior conversation as a list of `ChatMessage` objects to `run_turn()`. The agent replays that history into an ADK `InMemoryRunner` session before executing the new turn, so the model sees full conversation context on every request.
+
+You do not need to manage history yourself. Motus stores the updated state after each turn and provides it to the next one automatically.
+
+<Note>
+  A fresh `InMemoryRunner` and session are created for each turn. History is replayed by appending prior messages as ADK `Event` objects before the new user message is sent.
+</Note>
+
+## Tracing
+
+Tracing is automatic when the Motus runtime is active (as it is inside `motus serve`). The `MotusSpanProcessor` implements the OpenTelemetry `SpanProcessor` interface and is registered with Google ADK's OTEL provider once per worker process.
+
+Google ADK emits OTEL spans for:
+
+| ADK span | Motus span type | Contents |
+|---|---|---|
+| `invoke_agent` | `agent_call` | Agent name, invocation duration |
+| `generate_content` | `model_call` | Model name, token usage, response content |
+| `execute_tool` | `tool_call` | Tool name, input arguments, output, error type |
+
+The processor converts each completed ADK span into Motus `task_meta` format.
+It extracts model name, token usage, tool arguments and responses, and error
+types from ADK's semantic convention attributes and ingests them into
+`TraceManager`. Traces are automatically exported on process exit.
+
+<Note>
+  On the Motus cloud platform, the Google ADK client picks up platform-injected environment variables that route requests through the model proxy. You do not need to set `GOOGLE_API_KEY` at deploy time.
+</Note>

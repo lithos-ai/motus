@@ -1,0 +1,119 @@
+---
+title: "Skills"
+description: "Self-contained knowledge units that agents load on demand."
+---
+
+Skills are self-contained units of knowledge and instructions that an agent can load on demand. Each skill is a directory containing a `SKILL.md` file with metadata and instructions, plus optional companion files (reference docs, templates, checklists).
+
+The agent sees skill descriptions in its tool definitions and decides when to load one. This keeps the system prompt lean while giving the agent access to detailed, task-specific instructions when needed.
+
+## Creating a skill
+
+A skill is a directory with a `SKILL.md` file:
+
+```
+skills/
+  deploy/
+    SKILL.md
+    deploy-reference.md
+  code_review/
+    SKILL.md
+    review_checklist.md
+```
+
+### SKILL.md format
+
+```yaml
+---
+name: deploy
+description: Deploy an agent to the Motus cloud
+---
+# Deploy Skill
+
+Step-by-step instructions the agent follows when this skill is loaded.
+
+1. Check that the project has a valid `motus.toml`
+2. Run `motus deploy` with the appropriate flags
+3. Verify the deployment succeeded
+
+## Reference
+
+See `deploy-reference.md` in this directory for the full API reference.
+```
+
+The YAML frontmatter requires:
+
+| Field | Purpose |
+|-------|---------|
+| `name` | Skill identifier (used by the agent to load it) |
+| `description` | One-line summary (shown to the agent so it knows when to use it) |
+
+Everything after the frontmatter is the skill's instructions, written in markdown.
+
+## Adding skills to an agent
+
+Pass `skills_dir` to `builtin_tools()`:
+
+```python
+from motus.agent import ReActAgent
+from motus.models import AnthropicChatClient
+from motus.tools import builtin_tools
+
+client = AnthropicChatClient()
+tools = builtin_tools(skills_dir="path/to/skills/")
+
+agent = ReActAgent(
+    client=client,
+    model_name="claude-haiku-4-5-20251001",
+    system_prompt="You are a helpful assistant.",
+    tools=tools,
+)
+```
+
+This adds a `load_skill` tool alongside the standard builtin tools (bash, file, search, todo). The tool's description lists all available skills so the agent knows what's available.
+
+Without `skills_dir`, no skill tool is added — the other builtin tools work as usual.
+
+## How it works
+
+<Steps>
+  <Step title="Discovery">
+    At init, `builtin_tools()` scans all subdirectories of `skills_dir` for `SKILL.md` files. Each skill's name and description are collected into the `load_skill` tool description.
+  </Step>
+  <Step title="Invocation">
+    When the agent receives a request that matches a skill, it calls `load_skill(skill_name)`. The tool returns the full instructions plus the skill directory path.
+  </Step>
+  <Step title="Companion files">
+    The agent can use its file tools (`read_file`, `glob_search`) to access companion files in the skill directory. The skill directory path is included in the `load_skill` response.
+  </Step>
+</Steps>
+
+```
+User: "Review this code for bugs: def divide(a, b): return a/b"
+
+Agent thinking: This matches the "code_review" skill → load it first
+Agent calls: load_skill("code_review")
+Agent receives: Instructions + path to skill directory
+Agent calls: read_file("path/to/skills/code_review/review_checklist.md")
+Agent: Follows the loaded instructions to review the code
+```
+
+## Writing effective skills
+
+**Keep descriptions specific.** The agent uses the description to decide when to load a skill. `"Deploy agents"` is better than `"Deployment stuff"`.
+
+**Structure instructions clearly.** Use numbered steps, checklists, and headers. The agent follows these as directives.
+
+**Use companion files for reference material.** Keep the main `SKILL.md` focused on workflow and put detailed reference tables, API docs, or checklists in separate files. The agent reads them only when needed.
+
+**One skill per task type.** A `deploy` skill and a `rollback` skill are better than a single `deployment` skill that covers both. Smaller, focused skills are easier for the agent to match and follow.
+
+## Example
+
+See [examples/skills/](https://github.com/lithos-ai/motus/tree/main/examples/skills) for a working demo with `research` and `code_review` skills.
+
+## Next steps
+
+- [Tools](/concepts/tools) — defining custom tools
+- [Agents](/concepts/agents) — agent configuration and usage
+- [Memory](/concepts/memory) — context management strategies

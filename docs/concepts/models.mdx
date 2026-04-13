@@ -1,0 +1,173 @@
+---
+title: "Model Clients"
+description: "Connect to any LLM provider through the same `BaseChatClient` interface."
+---
+
+A model client is the object that actually talks to an LLM provider. Motus ships four of them (OpenAI, Anthropic, Gemini, OpenRouter), all implementing the same `BaseChatClient` interface. You pick a client, pass it into `ReActAgent`, and switch providers later by changing the import and the model name; the agent code does not move.
+
+```python
+import asyncio
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+
+
+agent = ReActAgent(client=OpenAIChatClient(), model_name="gpt-4o")
+
+
+async def main():
+    print(await agent("Hello!"))
+
+
+asyncio.run(main())
+```
+
+## Supported providers
+
+| Class | Provider | API key env var |
+|---|---|---|
+| `OpenAIChatClient` | OpenAI, and any OpenAI-compatible server (Ollama, vLLM, ...) | `OPENAI_API_KEY` |
+| `AnthropicChatClient` | Anthropic | `ANTHROPIC_API_KEY` |
+| `GeminiChatClient` | Google (Gemini Developer API or Vertex AI) | `GEMINI_API_KEY` |
+| `OpenRouterChatClient` | OpenRouter (multi-provider routing) | `OPENROUTER_API_KEY` |
+
+Each client reads its env var automatically if you do not pass `api_key`. They all also accept arbitrary `**kwargs` that are forwarded to the underlying provider SDK (`timeout`, `max_retries`, `default_headers`, and so on).
+
+## Creating a client
+
+<Tabs>
+  <Tab title="OpenAI">
+    ```python
+    from motus.models import OpenAIChatClient
+
+    client = OpenAIChatClient()
+    client = OpenAIChatClient(api_key="sk-...")
+    ```
+  </Tab>
+  <Tab title="Anthropic">
+    ```python
+    from motus.models import AnthropicChatClient
+
+    client = AnthropicChatClient()
+    client = AnthropicChatClient(api_key="sk-ant-...")
+    ```
+  </Tab>
+  <Tab title="Gemini">
+    ```python
+    from motus.models import GeminiChatClient
+
+    client = GeminiChatClient()
+    client = GeminiChatClient(api_key="...")
+
+    # Vertex AI instead of the Gemini Developer API
+    client = GeminiChatClient(
+        vertexai=True,
+        project="my-project",
+        location="us-central1",
+    )
+    ```
+  </Tab>
+  <Tab title="OpenRouter">
+    ```python
+    from motus.models import OpenRouterChatClient
+
+    client = OpenRouterChatClient()
+    client = OpenRouterChatClient(api_key="sk-or-...")
+    ```
+  </Tab>
+</Tabs>
+
+## Local models
+
+`OpenAIChatClient` works with any OpenAI-compatible server. Point `base_url` at your local service:
+
+```python
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+
+# Ollama
+client = OpenAIChatClient(base_url="http://localhost:11434/v1")
+
+# vLLM
+client = OpenAIChatClient(base_url="http://localhost:8000/v1")
+
+agent = ReActAgent(client=client, model_name="llama3.1")
+```
+
+No API key is required when the server does not enforce authentication.
+
+## Prompt caching
+
+`AnthropicChatClient` supports Anthropic's prompt caching. Set `cache_policy` on the agent; see [Prompt caching on the Agents page](/concepts/agents#prompt-caching) for the full table of options and TTLs. On providers that do not implement prompt caching (OpenAI, Gemini, OpenRouter), `cache_policy` is a no-op.
+
+## Reasoning
+
+Models with extended thinking (Opus 4.6, Sonnet 4.6, and others) are controlled by the `reasoning` parameter on the agent. See [Reasoning on the Agents page](/concepts/agents#reasoning) for `ReasoningConfig.auto()`, `effort=`, `budget_tokens=`, and `ReasoningConfig.disabled()`.
+
+## Message and completion types
+
+The two types every client reads and writes. `ReActAgent` handles them for you, so most of the time you only need to construct them when you write a custom agent or call a client by hand.
+
+### `ChatMessage`
+
+The unified message format that every client reads and writes. Use the factory methods for each role:
+
+```python
+from motus.models import ChatMessage
+
+
+system = ChatMessage.system_message("You are a helpful assistant.")
+user   = ChatMessage.user_message("Hello!")
+assist = ChatMessage.assistant_message("Hi there!")
+tool   = ChatMessage.tool_message(
+    content="result",
+    tool_call_id="call_123",
+    name="my_tool",
+)
+```
+
+`user_message` and `assistant_message` accept an optional `base64_image` for vision inputs.
+
+### `ChatCompletion`
+
+The return value of `client.create()` and `client.parse()`. The fields a caller usually reads:
+
+| Field | Type | What it is |
+|---|---|---|
+| `content` | `str \| None` | Text response |
+| `tool_calls` | `list[ToolCall] \| None` | Tool calls the model requested |
+| `reasoning` | `str \| None` | Readable chain of thought (when the model emits one) |
+| `reasoning_details` | `list[dict] \| None` | Provider-specific reasoning blocks, passed back on follow-up calls so the model can continue its thinking |
+| `finish_reason` | `str` | `"stop"`, `"tool_calls"`, or `"length"` |
+| `usage` | `dict` | Token counts |
+| `parsed` | `Any \| None` | Parsed Pydantic object (populated by `parse()`) |
+| `id` / `model` | `str` / `str` | Response ID and model identifier |
+
+Call `completion.to_message()` to turn a completion into a `ChatMessage` you can append to conversation history.
+
+## Calling a client directly
+
+Every client implements two async methods. `ReActAgent` calls these for you; you only reach for them when building a custom agent or running a one-off completion.
+
+```python
+import asyncio
+from motus.models import ChatMessage, OpenAIChatClient
+
+
+client = OpenAIChatClient()
+
+
+async def main():
+    completion = await client.create(
+        model="gpt-4o",
+        messages=[ChatMessage.user_message("What is 2 + 2?")],
+    )
+    print(completion.content)
+
+
+asyncio.run(main())
+```
+
+| Method | What it does |
+|---|---|
+| `create(model, messages, tools=None, reasoning=..., **kwargs)` | Standard chat completion. Returns `ChatCompletion`. |
+| `parse(model, messages, response_format, tools=None, reasoning=..., **kwargs)` | Structured output. The completion's `parsed` field holds an instance of `response_format`. |

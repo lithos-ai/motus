@@ -1,0 +1,122 @@
+---
+title: "Testing"
+description: "Test tiers, VCR cassettes, and async testing patterns."
+---
+
+Motus uses pytest with three test tiers: unit, integration (VCR replay), and slow (live API).
+
+## Running tests
+
+```bash
+# Unit tests only (fast, no API keys needed)
+uv run pytest tests/unit/ -x -q
+
+# Integration tests (VCR replay, no API keys needed)
+uv run pytest tests/integration/ -x -q
+
+# All tests
+uv run pytest
+```
+
+## Test markers
+
+| Marker | What it means | API keys needed |
+|--------|--------------|-----------------|
+| *(none / unit)* | Fast unit tests | No |
+| `integration` | Uses VCR cassettes for HTTP replay | No (uses fake keys) |
+| `slow` | Real API calls against live services | Yes |
+
+Run a specific marker:
+
+```bash
+uv run pytest -m slow -x -q
+```
+
+## VCR cassette system
+
+VCR cassettes record and replay HTTP interactions so integration tests run without live API access. This is the primary mechanism for testing agent behavior end-to-end.
+
+### Where cassettes live
+
+```
+tests/integration/examples/cassettes_vcrpy/
+```
+
+Each cassette is a YAML file containing the recorded request/response pairs.
+
+### Replay mode (default, CI)
+
+No API keys needed. The `_fake_api_keys` fixture injects placeholder keys so the HTTP client constructs valid-looking requests, and VCR intercepts them before they reach the network.
+
+```bash
+uv run pytest tests/integration/examples/ -x -q
+```
+
+### Record mode
+
+To record new cassettes or re-record existing ones, run with real API keys set in your environment:
+
+```bash
+uv run pytest tests/integration/examples/ -v --vcr-record=all
+```
+
+Cassettes are automatically scrubbed of:
+
+- API keys and authorization headers
+- Base64-encoded binary blobs
+- OpenAI reasoning content
+
+A custom JSON body matcher normalizes whitespace for stable matching across recording sessions.
+
+### When to record
+
+- You add a new integration test that makes HTTP calls
+- An upstream API changes its response format
+- You modify agent behavior that changes the request sequence
+
+## Async tests
+
+`asyncio_mode = "auto"` is set in `pyproject.toml`. All `async def test_*` functions run automatically without the `@pytest.mark.asyncio` decorator.
+
+```python
+async def test_memory_compaction():
+    memory = CompactionMemory(model="gpt-4o-mini")
+    await memory.add_message({"role": "user", "content": "hello"})
+    assert memory.message_count() == 1
+```
+
+For class-based async tests, inherit from `unittest.IsolatedAsyncioTestCase`:
+
+```python
+class TestCompactionMemory(unittest.IsolatedAsyncioTestCase):
+    async def test_auto_compact(self):
+        memory = CompactionMemory(model="gpt-4o-mini")
+        await memory.add_message({"role": "user", "content": "hello"})
+        await memory._auto_compact()
+```
+
+## Writing a new test
+
+Follow this checklist:
+
+- **Place unit tests** in `tests/unit/<module>/` mirroring the `src/motus/` structure.
+- **Place integration tests** in `tests/integration/`.
+- **If your test makes HTTP calls**, record a VCR cassette and commit it with your PR.
+- **If your test uses the runtime**, call `shutdown()` in teardown to avoid leaked tasks.
+- **Name test files** with the `test_` prefix (e.g., `test_agent_task.py`).
+- **Name test functions** with the `test_` prefix describing the behavior under test.
+
+```bash
+# Run your new test in isolation to verify
+uv run pytest tests/unit/runtime/test_agent_task.py -x -v
+```
+
+## Coverage
+
+You can generate a coverage report locally:
+
+```bash
+uv run pytest tests/unit/ --cov=motus --cov-report=term-missing
+```
+
+Focus coverage on the code you changed. Full-repo coverage targets are not enforced, but reviewers may ask for tests if you add untested code paths.

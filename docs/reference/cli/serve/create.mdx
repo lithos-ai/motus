@@ -1,0 +1,27 @@
+---
+title: "motus serve create"
+description: "Create a new session on a running Motus agent server."
+---
+
+Create a new session and print its ID. This maps directly to `POST /sessions` described in the [Sessions API reference](/reference/api/sessions).
+
+## Usage
+
+```bash
+motus serve create <url>
+```
+
+## Examples
+
+### Create a session
+
+```bash
+motus serve create http://localhost:8000
+```
+
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "idle"
+}
+```

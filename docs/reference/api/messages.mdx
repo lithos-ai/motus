@@ -1,0 +1,110 @@
+---
+title: "Messages"
+description: "REST API reference for sending messages to a session and retrieving conversation history."
+---
+
+<Note>
+  Sending a message is asynchronous. `POST /sessions/\{id}/messages` returns `202 Accepted` immediately — the agent runs in the background. To get the result, either poll `GET /sessions/\{id}` (with optional long-polling via `wait=true`) or include a `webhook` field in your request to receive a callback when the turn completes. See [Webhooks](/reference/api/webhooks) for details.
+</Note>
+
+---
+
+## POST /sessions/\{session_id}/messages
+
+Send a message to a session. The agent processes it in the background and the endpoint returns immediately.
+
+### Path parameters
+
+<ParamField path="session_id" type="string" required>
+  The session UUID.
+</ParamField>
+
+### Request body
+
+<ParamField body="content" type="string | null" default="null">
+  The text content of the message.
+</ParamField>
+
+<ParamField body="role" type="string" default="user">
+  Message role. One of `"system"`, `"user"`, `"assistant"`, or `"tool"`.
+</ParamField>
+
+<ParamField body="user_params" type="object | null" default="null">
+  Arbitrary key-value parameters passed through to the agent on the `ChatMessage` object. Useful for per-request context such as user identity or feature flags.
+</ParamField>
+
+<ParamField body="webhook" type="WebhookSpec | null" default="null">
+  Webhook configuration to receive the turn result via HTTP callback instead of polling. See [Webhooks](/reference/api/webhooks) for the full spec.
+</ParamField>
+
+<Note>
+  `MessageRequest` inherits from `ChatMessage`, so additional fields are also accepted: `tool_calls`, `tool_call_id`, `name`, and `base64_image`.
+</Note>
+
+The minimal request body to send a user message:
+
+```json
+{ "content": "hello" }
+```
+
+### Response
+
+**`202 Accepted`** — returns a `MessageResponse` and a `Location` header pointing to the session.
+
+**Headers**: `Location: /sessions/\{session_id}`
+
+```json
+{ "session_id": "550e8400-e29b-41d4-a716-446655440000", "status": "running" }
+```
+
+<ResponseField name="session_id" type="string" required>
+  The session UUID.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Always `"running"` immediately after a message is accepted.
+</ResponseField>
+
+### Errors
+
+| Code | Condition |
+|---|---|
+| `404` | Session not found. |
+| `409` | The session is already processing a message. |
+
+---
+
+## GET /sessions/\{session_id}/messages
+
+Retrieve the full conversation history managed by the agent for this session.
+
+### Path parameters
+
+<ParamField path="session_id" type="string" required>
+  The session UUID.
+</ParamField>
+
+### Response
+
+**`200 OK`** — returns a list of `ChatMessage` objects in chronological order.
+
+```json
+[
+  { "role": "user", "content": "hello" },
+  { "role": "assistant", "content": "hi there" }
+]
+```
+
+<ResponseField name="role" type="string" required>
+  Message role: `"user"`, `"assistant"`, `"system"`, or `"tool"`.
+</ResponseField>
+
+<ResponseField name="content" type="string | null" required>
+  Text content of the message.
+</ResponseField>
+
+### Errors
+
+| Code | Condition |
+|---|---|
+| `404` | Session not found. |

@@ -1,0 +1,99 @@
+---
+title: "Development Setup"
+description: "Set up a local development environment for contributing to Motus."
+---
+
+## Prerequisites
+
+- **Python 3.12+** — check with `python3 --version`
+- **uv** — install from [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/)
+- **git**
+- **Docker Desktop** (optional) — needed for sandbox-related tests
+
+## Clone and install
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/gpuOS-ai/motus.git
+    cd motus
+    ```
+  </Step>
+  <Step title="Install dependencies">
+    ```bash
+    uv sync --all-extras
+    ```
+    `uv sync --all-extras` installs all dependencies including optional groups (dev, docs, test) in a local `.venv`.
+  </Step>
+  <Step title="Set up pre-commit hooks">
+    ```bash
+    uv run pre-commit install
+    ```
+    This registers git hooks that run **ruff** (linting + formatting) on every commit. If ruff finds issues, the commit is blocked until you fix them. You can run the checks manually:
+
+    ```bash
+    uv run pre-commit run --all-files
+    ```
+  </Step>
+  <Step title="Verify setup">
+    ```bash
+    uv run pytest tests/unit/ -x -q
+    ```
+    All unit tests should pass without any API keys or external services. If you see failures, check that you installed with `--all-extras` and are running Python 3.12+.
+  </Step>
+</Steps>
+
+## Editor setup
+
+The ruff configuration lives in `pyproject.toml` under `[tool.ruff]`. Point your editor at this config to get consistent linting and formatting.
+
+<Tabs>
+  <Tab title="VS Code">
+    1. Install the [Ruff extension](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff).
+    2. The extension auto-detects `pyproject.toml` settings.
+    3. Enable format-on-save for `.py` files:
+
+    ```json
+    {
+      "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="PyCharm">
+    1. Install the [Ruff plugin](https://plugins.jetbrains.com/plugin/20574-ruff) from the marketplace.
+    2. Under **Settings > Tools > Ruff**, confirm the config path points to `pyproject.toml`.
+    3. Enable "Run ruff on save" in the plugin settings.
+  </Tab>
+</Tabs>
+
+## Running the docs locally
+
+```bash
+npx mintlify dev
+```
+
+Opens at [http://localhost:3000](http://localhost:3000). The site rebuilds on file changes.
+
+## Project layout
+
+```
+src/motus/
+├── agent/          # Agent implementations (ReActAgent, etc.)
+├── memory/         # Memory systems (CompactionMemory, etc.)
+├── models/         # Model backends
+├── runtime/        # Core runtime (AgentRuntime, AgentFuture, TaskInstance)
+└── tools/          # Built-in tools
+
+tests/
+├── unit/           # Fast tests, no API keys
+└── integration/    # VCR-based replay tests
+```
+
+## Next steps
+
+- Read the [Code Style](/contributing/code-style) guide for conventions beyond what ruff enforces.
+- Read the [Testing](/contributing/testing) guide before writing your first test.
+- Read the [Pull Requests](/contributing/pull-requests) process when you are ready to submit.

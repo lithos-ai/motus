@@ -1,0 +1,179 @@
+---
+title: "Anthropic SDK"
+description: "Use your existing Anthropic SDK code with Motus serving and tracing. Define tools, create a ToolRunner, and deploy."
+---
+
+Use the Anthropic SDK's Beta Tool Runner through Motus to get full tracing and
+HTTP serving with a single import. Define your tools, create a `ToolRunner`,
+and serve it.
+
+## Installation
+
+<Tabs>
+  <Tab title="uv">
+    ```bash
+    uv pip install "anthropic>=0.49.0"
+    ```
+  </Tab>
+  <Tab title="pip">
+    ```bash
+    pip install "anthropic>=0.49.0"
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  The Anthropic SDK is a core dependency of Motus. You need `anthropic>=0.49.0`
+  for tool runner support.
+</Note>
+
+## Basic usage
+
+Import `ToolRunner` and `beta_async_tool` from `motus.anthropic`. Use `@beta_async_tool` to decorate your tool functions, then pass them to `ToolRunner`:
+
+```python
+from motus.anthropic import ToolRunner, beta_async_tool
+
+@beta_async_tool
+async def get_weather(city: str) -> str:
+    """Get the weather for a city."""
+    return f"Sunny in {city}"
+
+runner = ToolRunner(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    tools=[get_weather],
+    system="You are a helpful assistant.",
+)
+```
+
+`ToolRunner` holds your model configuration and tool list. It creates a fresh
+`BetaAsyncToolRunner` on each turn. Tool runners are single-use generators that
+cannot be re-iterated, so `ToolRunner` handles that lifecycle for you.
+
+### Tool types
+
+You can pass several tool types to `ToolRunner.tools`:
+
+- Functions decorated with `@beta_async_tool` or `@beta_tool`
+- Plain async or sync Python functions (auto-wrapped on each turn)
+- Motus `@tool`-decorated functions (unwrapped and re-wrapped automatically)
+
+```python
+from motus.anthropic import ToolRunner, beta_async_tool, beta_tool
+
+@beta_async_tool
+async def search(query: str) -> str:
+    """Search the web."""
+    return f"Results for: {query}"
+
+@beta_tool
+def calculate(expression: str) -> str:
+    """Evaluate a math expression."""
+    return str(eval(expression))  # noqa: S307
+
+runner = ToolRunner(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    tools=[search, calculate],
+)
+```
+
+### Limiting the tool-use loop
+
+Pass `max_iterations` to stop after a fixed number of tool-use rounds:
+
+```python
+runner = ToolRunner(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    tools=[get_weather],
+    max_iterations=5,
+)
+```
+
+## Deployment
+
+### Local serving
+
+Pass the `runner` object directly to `motus serve start`:
+
+```bash
+motus serve start myapp:runner --port 8000
+```
+
+Where `runner` is a `ToolRunner` instance defined at module level in `myapp.py`.
+
+### Cloud deployment
+
+```bash
+cd my_project
+motus deploy --name my-agent tools_runner:runner
+```
+
+When deploying to Motus cloud, include `requirements.txt` with `anthropic>=0.49.0` (the SDK is not in the base image). No API key secrets are needed - the platform routes Anthropic API calls through the model proxy.
+
+Session state (conversation history) is persisted in DynamoDB and survives backend restarts, failovers, and scaling events.
+
+### State management
+
+Motus manages conversation state across turns. Each turn receives the full prior conversation as a list of `ChatMessage` objects. `ToolRunner` converts that state into Anthropic message format and prepends it to every request, so the model always sees the full conversation context.
+
+You do not need to manage history yourself. Motus passes prior state in and
+stores the updated state after each turn automatically.
+
+```python
+# myapp.py
+from motus.anthropic import ToolRunner, beta_async_tool
+
+@beta_async_tool
+async def get_weather(city: str) -> str:
+    """Get the weather for a city."""
+    return f"Sunny in {city}"
+
+runner = ToolRunner(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    tools=[get_weather],
+    system="You are a helpful assistant.",
+)
+```
+
+```bash
+motus serve start myapp:runner --port 8000
+```
+
+## Tracing
+
+Tracing is automatic when the Motus runtime is active (as it is inside `motus serve`). Each turn produces three span types in `TraceManager`:
+
+| Span type | Source | Contents |
+|---|---|---|
+| `agent_call` | Root span for the turn | Model name, start/end timestamps |
+| `model_call` | Each request to the Claude API | Model name, input messages, token usage, response content |
+| `tool_call` | Each tool invocation | Tool name, input arguments, output, error status |
+
+All `model_call` and `tool_call` spans are parented to the root `agent_call` span for the turn. Traces are auto-exported on process exit.
+
+<Note>
+  On the Motus cloud platform, the `AsyncAnthropic()` client picks up platform-injected environment variables that route requests through the model proxy. You do not need to set `ANTHROPIC_API_KEY` at deploy time.
+</Note>
+
+## Exports
+
+`motus.anthropic` re-exports the following from the Anthropic SDK, plus Motus-specific additions:
+
+| Export | Description |
+|---|---|
+| `ToolRunner` | Motus serve adapter which holds config and creates a fresh runner per turn |
+| `beta_async_tool` | Decorator for async tool functions |
+| `beta_tool` | Decorator for sync tool functions |
+| `BetaAsyncFunctionTool` | Anthropic SDK async function tool type |
+| `BetaFunctionTool` | Anthropic SDK sync function tool type |
+| `BetaAsyncBuiltinFunctionTool` | Anthropic SDK async built-in tool type |
+| `BetaBuiltinFunctionTool` | Anthropic SDK sync built-in tool type |
+| `MotusBetaToolRunner` | Instrumented sync tool runner |
+| `MotusBetaAsyncToolRunner` | Instrumented async tool runner |
+| `MotusBetaStreamingToolRunner` | Instrumented sync streaming tool runner |
+| `MotusBetaAsyncStreamingToolRunner` | Instrumented async streaming tool runner |
+| `get_tracer()` | Returns the `TraceManager` instance |

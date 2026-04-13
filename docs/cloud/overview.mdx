@@ -1,0 +1,74 @@
+---
+title: "Motus Cloud"
+description: "The managed platform that runs, scales, and observes your agents. Understand the key abstractions before you deploy."
+---
+
+Motus Cloud is a managed platform for running agents. You push code, Motus builds and runs it, and your agent is reachable over HTTP with no infra on your side.
+
+Everything on Motus Cloud maps one to one to what you get from `motus serve` locally. Sessions, messages, tracing, and human in the loop all work the same way. The difference is that Motus Cloud adds a few cloud native abstractions on top: projects, builds, a model proxy, and authenticated access.
+
+## Core abstractions
+
+<CardGroup cols={2}>
+  <Card title="Project" icon="folder">
+    A logical container for your agent. Identified by `project_id`. Owns builds, traces, secrets, and the running agent endpoint.
+  </Card>
+  <Card title="Build" icon="box">
+    A packaged snapshot of your code. Every `motus deploy` produces a new build with a fresh `build_id` that moves through `queued`, `building`, `built`, `deploying`, and `deployed` states.
+  </Card>
+  <Card title="Running agent" icon="bolt">
+    The live HTTP endpoint for your current build. Exposes the same REST API as `motus serve` and is reachable with `motus serve chat <url>`.
+  </Card>
+  <Card title="Session" icon="comments">
+    A single conversation with your agent. Holds message history, tool call state, and runtime memory. Behaves identically to local serving.
+  </Card>
+  <Card title="Trace" icon="chart-line">
+    A tree of spans captured from every agent turn. Each span is an LLM call, a tool call, or a task run in the workflow runtime. Viewable in the dashboard or exportable to OpenTelemetry.
+  </Card>
+  <Card title="Secret" icon="key">
+    Encrypted configuration values you inject into deploys with `motus deploy --secret KEY=VALUE`. Available to the agent at runtime as environment variables.
+  </Card>
+</CardGroup>
+
+## Model proxy
+
+Motus Cloud proxies LLM calls on your behalf. You do not need to set your own `OPENAI_API_KEY` or any other provider credentials in a deployed agent. When your code instantiates a model client with no arguments, the call is routed through the platform and billed to your Motus account.
+
+Two consequences follow. First, deployed code stays portable across providers without key management. Second, the Motus team can swap in better models or cheaper routes without you having to rebuild. You still pick the model name, the platform handles the rest.
+
+## Authentication
+
+The CLI authenticates through `motus login`, which opens a browser for an OAuth device flow and stores credentials at `~/.motus/credentials.json`. The stored API key is scoped to your account and is used by every `motus deploy`, `motus serve chat`, and REST API call against the cloud.
+
+For CI and other non-interactive environments, set `LITHOSAI_API_KEY` in place of running `motus login`. It overrides the credentials file.
+
+## How it relates to local serving
+
+The same code runs in both places. A local run is `motus serve start myapp:agent`. A cloud run is `motus deploy myapp:agent`. You use the exact same `motus serve chat` command to talk to either URL.
+
+Motus Cloud simply adds:
+
+- Managed packaging and build orchestration
+- Persistent agent endpoints
+- Platform side model routing
+- Trace storage and a dashboard to view them
+- Authenticated multi user access
+
+None of the code in your repo changes between local and cloud.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment" icon="cloud-arrow-up" href="/guides/deployment">
+    The full `motus deploy` workflow, `motus.toml`, ignore rules, and Git based deploys.
+  </Card>
+  <Card title="Serving" icon="server" href="/guides/serving">
+    Session lifecycle, worker pools, webhooks, and the REST API that Motus Cloud exposes.
+  </Card>
+  <Card title="Tracing" icon="chart-line" href="/guides/tracing">
+    How spans are collected, exported, and viewed in the dashboard.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/getting-started/configuration">
+    Environment variables, `motus.toml` project settings, and `.env` file support.
+  </Card>
+</CardGroup>

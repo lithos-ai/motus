@@ -1,0 +1,26 @@
+---
+title: "motus serve health"
+description: "Check the health of a running Motus agent server."
+---
+
+Check the health of a running server. Hits the `/health` endpoint and prints a summary of the server's current state.
+
+## Usage
+
+```bash
+motus serve health <url>
+```
+
+## Examples
+
+### Check server health
+
+```bash
+motus serve health http://localhost:8000
+```
+
+```
+Status: ok
+Workers: 2/4
+Total sessions: 2
+```

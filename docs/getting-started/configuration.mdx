@@ -1,0 +1,129 @@
+---
+title: "Configuration"
+description: "Configure Motus using environment variables and an optional motus.toml project file."
+---
+
+Motus reads configuration from environment variables at runtime. For project-level settings, you can also create a `motus.toml` file in your project root.
+
+## API keys
+
+Set your provider API keys as environment variables before running an agent. You only need the key for the provider you are using.
+
+| Variable | Provider | Example value |
+|---|---|---|
+| `OPENAI_API_KEY` | OpenAI | `sk-...` |
+| `ANTHROPIC_API_KEY` | Anthropic | `sk-ant-...` |
+| `OPENROUTER_API_KEY` | OpenRouter | `sk-or-...` |
+| `BRAVE_API_KEY` | Brave Search | |
+| `JINA_API_KEY` | Jina AI (MCP) | |
+
+`OpenAIChatClient` also reads `OPENAI_BASE_URL` if you want to point it at a custom endpoint, such as a local model server:
+
+```bash
+export OPENAI_BASE_URL="http://localhost:11434/v1"
+```
+
+`OpenRouterChatClient` reads `OPENROUTER_BASE_URL` to override the default endpoint (`https://openrouter.ai/api/v1`).
+
+## Runtime variables
+
+These variables control Motus's logging and tracing behavior.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `MOTUS_LOG_LEVEL` | Log verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` | `DEBUG` |
+| `MOTUS_QUIET_SYNC` | Suppress sync barrier warnings (`1` to enable) | off |
+| `MOTUS_TRACING` | Enable trace collection and file export (`1` to enable) | off |
+| `MOTUS_COLLECTION_LEVEL` | Tracing detail: `disabled`, `basic`, `detailed` | `basic` |
+| `MOTUS_TRACING_ONLINE` | Enable tracing and the live trace viewer (`1` to enable) | off |
+| `MOTUS_TRACING_EXPORT` | Write trace files without the live viewer (`1` to enable) | off |
+| `MOTUS_TRACING_DIR` | Directory to write trace output | `traces/trace_<timestamp>/` |
+
+### Tracing
+
+When tracing is enabled, Motus records task execution, tool calls, and model interactions:
+
+- **`disabled`** — no trace data is collected.
+- **`basic`** — task-level events only (start, end, errors).
+- **`detailed`** — includes model request/response payloads and tool arguments.
+
+Set `MOTUS_TRACING=1` to enable collection and file export. To also open the live trace viewer in your browser, use `MOTUS_TRACING_ONLINE=1` instead. If you want file export without the viewer, set `MOTUS_TRACING_EXPORT=1`.
+
+```bash
+# Enable basic tracing with file export
+export MOTUS_TRACING=1
+
+# Enable detailed tracing with live viewer
+export MOTUS_TRACING_ONLINE=1
+export MOTUS_COLLECTION_LEVEL=detailed
+```
+
+## `motus.toml`
+
+Create a `motus.toml` file in your project root to store project-level settings. Motus searches upward from the current working directory until it finds this file.
+
+```toml
+project_id = "my-project"
+import_path = "myapp:agent"
+```
+
+| Field | Description |
+|---|---|
+| `project_id` | Unique identifier for your project, used in deployment and tracing. |
+| `import_path` | Python import path to your agent instance, in `module:attribute` format. |
+
+With `motus.toml` in place, you can omit these values from CLI commands:
+
+```bash
+# Without motus.toml
+motus serve start --import-path myapp:agent
+
+# With motus.toml (reads import_path automatically)
+motus serve start
+```
+
+<Note>`motus deploy` creates a `motus.toml` automatically when you first deploy a project. You can also create it by hand.</Note>
+
+## `.env` file support
+
+Motus does not auto-load `.env` files. If you prefer to manage secrets in a `.env` file, load it yourself at the top of your entry point using `python-dotenv`:
+
+```bash
+pip install python-dotenv
+```
+
+Create a `.env` file in your project root:
+
+```bash
+# .env
+OPENAI_API_KEY=sk-...
+MOTUS_LOG_LEVEL=INFO
+```
+
+Then load it before any Motus imports:
+
+```python
+from dotenv import load_dotenv
+
+load_dotenv()  # loads .env into os.environ
+
+from motus.agent import ReActAgent
+```
+
+<Warning>Call `load_dotenv()` before importing any Motus modules. Environment variables are read when modules initialize, so loading them afterward has no effect.</Warning>
+
+## Verifying your configuration
+
+Run this snippet to confirm your API key is set and the client can initialize:
+
+```python
+import os
+from motus.models import OpenAIChatClient
+
+assert os.environ.get("OPENAI_API_KEY"), "OPENAI_API_KEY is not set"
+
+client = OpenAIChatClient()
+print("Client initialized successfully")
+```
+
+If the key is missing or invalid, the client raises an error at request time with a descriptive message.

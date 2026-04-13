@@ -1,0 +1,325 @@
+---
+title: "ReActAgent"
+description: "The reasoning-and-acting loop: give the model tools, and let it decide what to do next."
+---
+
+`ReActAgent` is one of the two programming models in Motus, alongside [Workflow](/concepts/workflow). It runs a ReAct loop ("reason, then act"): the agent sends your prompt to the model, runs any tools the model asks for, feeds the results back, and repeats until the model returns a final answer.
+
+Reach for `ReActAgent` when the problem is open-ended and you want the model to decide what to do next. Research, debugging, coding agents, triage, customer support: anything where you cannot write the plan down in advance.
+
+## Minimal example
+
+```python
+import asyncio
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+from motus.tools import tool
+
+
+@tool
+async def weather(city: str) -> str:
+    """Get the current weather for a city."""
+    return f"22°C and sunny in {city}."
+
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    system_prompt="You are a helpful assistant.",
+    tools=[weather],
+)
+
+
+async def main():
+    response = await agent("What's the weather in Tokyo?")
+    print(response)
+
+
+asyncio.run(main())
+```
+
+Three pieces fit together here: a [model client](/concepts/models) that talks to the provider, a [tool](/concepts/tools) (`weather`) defined by decorating a plain Python function, and the agent itself wiring them into a loop.
+
+<Tip>
+  If you don't pass `name` when constructing an agent, Motus infers it from your variable name on first call. The agent above is named `"agent"` automatically. This matters for tracing and for using one agent as another's tool.
+</Tip>
+
+<Note>
+  The examples below show only the lines that matter for each feature. Assume they run inside an `async def main()` wrapper like the one above.
+</Note>
+
+## How the loop runs
+
+A single call to `await agent(...)` runs this loop until the model has nothing more to ask for.
+
+<Steps>
+  <Step title="The user message lands in memory">
+    Your prompt is appended to the agent's conversation history.
+  </Step>
+  <Step title="The model gets called">
+    The agent sends the full conversation and the tool schemas to the model and waits for a completion.
+  </Step>
+  <Step title="The assistant message lands in memory">
+    The completion becomes an assistant message in the history, whether it contains tool calls, a final answer, or both.
+  </Step>
+  <Step title="If there are tool calls, run them">
+    The agent calls each tool. Because every tool call goes through the runtime as a task, independent tool calls execute concurrently rather than one at a time. Each result is appended to memory as a tool message, keyed to its `tool_call_id`.
+  </Step>
+  <Step title="Loop or finish">
+    If the model asked for tool calls, go back to step 2 with the updated history. If it returned a plain response, that response is the final answer and the loop ends.
+  </Step>
+</Steps>
+
+The loop stops early if `max_steps` or `timeout` is exceeded.
+
+## Multi-turn conversations
+
+`ReActAgent` is stateful by default. Each call to the agent appends the user message and the assistant reply to its memory, so the next call sees the full history.
+
+```python
+await agent("My name is Alice.")
+response = await agent("What's my name?")
+print(response)   # "Alice"
+```
+
+The default `memory_type="basic"` keeps every message in order. For long conversations that could run into tens of thousands of tokens, switch to `memory_type="compact"`, which summarizes older turns once the token count crosses a threshold so the context window never overflows. See [Memory](/concepts/memory) for the full picture.
+
+### Resetting and forking
+
+Call `agent.reset()` to clear the conversation history and start fresh with the same configuration.
+
+`agent.fork()` returns an independent copy of the agent with the same configuration and a forked copy of the current conversation. Changes to the fork do not affect the original, so you can branch off a checkpoint and explore alternatives.
+
+```python
+await agent("My name is Alice.")
+
+forked = agent.fork()
+await forked("Call me Bob instead.")
+
+await agent("What's my name?")    # "Alice"
+await forked("What's my name?")   # "Bob"
+```
+
+This is how you run parallel exploratory conversations or A/B comparisons from the same starting point.
+
+## Structured output
+
+Pass a Pydantic model as `response_format` and the agent returns a parsed instance instead of a string. Motus uses the provider's strict structured-output mode to guarantee the JSON matches your schema.
+
+```python
+from pydantic import BaseModel
+
+
+class Sentiment(BaseModel):
+    label: str
+    score: float
+
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    response_format=Sentiment,
+)
+
+result = await agent("Analyze: 'I love this product'")
+print(result.label, result.score)   # result is a Sentiment instance
+```
+
+Structured output composes with tools. The model can still call tools on intermediate steps; only the final assistant message is parsed into your schema.
+
+## Limits
+
+Use `max_steps` to cap the number of reasoning-and-acting cycles. Use `timeout` to set a wall-clock deadline in seconds.
+
+```python
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    max_steps=5,
+    timeout=30.0,
+)
+```
+
+<Warning>
+  Reaching `max_steps` without a final answer raises `RuntimeError`. Exceeding `timeout` raises `TimeoutError`, checked before each new step so the current step finishes first and the execution trace is preserved. Catch these if you need graceful degradation.
+</Warning>
+
+## Usage and cost
+
+After any call to the agent, you can read token usage, estimated cost, and context window usage directly off the agent object. The counts accumulate across every call in the agent's lifetime, not just the most recent one.
+
+```python
+response = await agent("Explain quantum computing.")
+
+agent.usage
+# {"input_tokens": 1234, "output_tokens": 567, "cache_read_input_tokens": 200, ...}
+
+agent.cost
+# 0.0042  (USD, or None if pricing is not available for the model)
+
+agent.context_window_usage
+# {"estimated_tokens": 1801, "threshold": 150000, "ratio": 0.012, "percent": "1%"}
+```
+
+The `threshold` in `context_window_usage` is whatever will trigger memory compaction (from `CompactionMemory`, or a default derived from the model's context window if basic memory is used).
+
+| Attribute | What you get |
+|---|---|
+| `agent.usage` | Accumulated token counts across every LLM call |
+| `agent.cost` | Total cost in USD, or `None` if the model has no pricing entry |
+| `agent.context_window_usage` | Current working-memory size relative to the compaction threshold |
+| `agent.get_execution_trace()` | The memory trace as a dict, enriched with usage, model, and cost |
+
+### Streaming intermediate state
+
+Pass a `step_callback` to observe the agent in real time. The callback fires after every LLM step that has tool calls, before those tools run.
+
+```python
+async def on_step(content, tool_calls):
+    if content:
+        print(f"Thinking: {content}")
+    for call in tool_calls:
+        print(f"Calling {call['name']}({call['arguments']})")
+
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    tools=[weather],
+    step_callback=on_step,
+)
+```
+
+This is how `motus serve` streams intermediate state to connected clients. It does not fire on the final step (the one without tool calls); the caller receives the final answer as the return value.
+
+## Using an agent as a tool
+
+`agent.as_tool()` wraps an agent so another agent can call it as a regular tool. The caller never knows it's talking to another agent.
+
+```python
+researcher = ReActAgent(
+    client=client,
+    model_name="gpt-4o",
+    name="researcher",
+    system_prompt="You research topics thoroughly.",
+)
+
+supervisor = ReActAgent(
+    client=client,
+    model_name="gpt-4o",
+    system_prompt="You coordinate research tasks.",
+    tools=[researcher.as_tool(description="Research a topic in depth")],
+)
+```
+
+By default, each `as_tool()` invocation starts the inner agent with a fresh conversation. Pass `stateful=True` to preserve the inner agent's memory across calls within the same parent run. Other options include overriding the inner agent's `name`, `description`, `max_steps`, and per-call guardrails.
+
+<Note>
+  You can also pass an agent directly in `tools=[...]` without calling `as_tool()`. Motus wraps it automatically with default settings. See [Multi-agent](/guides/multi-agent) for the full composition guide, including output extractors and other advanced options.
+</Note>
+
+## Guardrails
+
+Attach validation functions that run before the agent starts or after it returns. Input guardrails see the user prompt; output guardrails see the final result. A guardrail can do three things: return `None` to let the value through unchanged, return a replacement value, or raise to block the run entirely.
+
+```python
+from motus.guardrails import InputGuardrailTripped
+
+
+def block_profanity(value: str):
+    if "badword" in value.lower():
+        raise InputGuardrailTripped("Input rejected by guardrail.")
+    return None  # pass through; return a string here to rewrite it
+
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    input_guardrails=[block_profanity],
+)
+```
+
+When `response_format` is set, output guardrails can declare individual Pydantic fields and rewrite them. See [Guardrails](/guides/guardrails) for the full API, including tool-level guardrails.
+
+## Reasoning
+
+The `reasoning` parameter controls extended thinking on models that support it. The default is `ReasoningConfig.auto()`, which enables adaptive thinking on Opus 4.6 and Sonnet 4.6.
+
+```python
+from motus.models import AnthropicChatClient, ReasoningConfig
+
+client = AnthropicChatClient()
+
+# Adaptive (default): the model decides how much to think
+agent = ReActAgent(client=client, model_name="claude-opus-4-6")
+
+# Lower effort for faster, cheaper responses on adaptive models
+agent = ReActAgent(
+    client=client,
+    model_name="claude-opus-4-6",
+    reasoning=ReasoningConfig(effort="low"),
+)
+
+# Explicit token budget (for non-adaptive models like Sonnet 4.5)
+agent = ReActAgent(
+    client=client,
+    model_name="claude-sonnet-4-5-20250929",
+    reasoning=ReasoningConfig(budget_tokens=5000),
+)
+
+# Disable thinking entirely
+agent = ReActAgent(
+    client=client,
+    model_name="claude-opus-4-6",
+    reasoning=ReasoningConfig.disabled(),
+)
+```
+
+Adaptive models accept `effort="low" | "medium" | "high" | "max"`. Non-adaptive models use `budget_tokens` to set an explicit thinking budget. `ReasoningConfig.disabled()` turns thinking off on any model.
+
+## Prompt caching
+
+On Anthropic models, the agent places cache breakpoints on the repeating part of your prompt so that system prompt, tool definitions, and prior conversation turns are read from cache instead of billed as fresh input on every call. `cache_policy` controls how aggressive this is.
+
+| Policy | Cache breakpoints | TTL |
+|---|---|---|
+| `"none"` | None | n/a |
+| `"static"` | System prompt and tool definitions | 5 minutes |
+| `"auto"` (default) | Static plus the end of the previous conversation turn | 5 minutes |
+| `"auto_1h"` | Same as `"auto"` | 1 hour |
+
+Under `"auto"`, Motus tags the second-to-last user or tool-result message with a cache breakpoint on every call. The net effect is that on step N+1, the entire prompt prefix up to and including turn N is a cache read, and only the latest turn is fresh tokens. `"auto_1h"` is the same strategy with a longer TTL, useful for long-lived agents where the prefix is reused over timescales greater than five minutes.
+
+```python
+from motus.models import AnthropicChatClient, CachePolicy
+
+agent = ReActAgent(
+    client=AnthropicChatClient(),
+    model_name="claude-opus-4-6",
+    cache_policy=CachePolicy.AUTO_1H,
+)
+```
+
+See [Models](/concepts/models) for more on prompt caching and provider support.
+
+## Constructor reference
+
+| Parameter | Type | Default | Purpose |
+|---|---|---|---|
+| `client` | `BaseChatClient` | required | LLM provider client |
+| `model_name` | `str` | required | Model identifier (e.g. `"gpt-4o"`, `"claude-opus-4-6"`) |
+| `name` | `str \| None` | auto-inferred | Agent name, used in tracing and tool registration |
+| `system_prompt` | `str \| None` | `None` | System prompt prepended to every LLM call |
+| `tools` | list, dict, callable, or `Tools` | `None` | Tools available to the agent |
+| `response_format` | `type[BaseModel] \| None` | `None` | Structured output via a Pydantic model |
+| `max_steps` | `int` | `20` | Max loop cycles before the agent raises `RuntimeError` |
+| `timeout` | `float \| None` | `None` | Wall-clock deadline in seconds; raises `TimeoutError` |
+| `memory_type` | `"basic" \| "compact"` | `"basic"` | Memory strategy, ignored if `memory` is passed |
+| `memory` | `BaseMemory \| None` | `None` | Custom memory instance, overrides `memory_type` |
+| `input_guardrails` | `list[Callable]` | `[]` | Hooks on the user prompt before the agent runs |
+| `output_guardrails` | `list[Callable]` | `[]` | Hooks on the final result |
+| `reasoning` | `ReasoningConfig` | `ReasoningConfig.auto()` | Extended thinking configuration |
+| `cache_policy` | `CachePolicy \| str` | `"auto"` | Prompt caching strategy (Anthropic only) |
+| `step_callback` | `Callable \| None` | `None` | Async callback fired after each LLM step with tool calls |
+
+If `name` is not passed, Motus infers it from the variable you assigned the agent to on first call, falling back to the class name.

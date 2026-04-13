@@ -1,0 +1,438 @@
+---
+title: "Human in the Loop"
+description: "Pause an agent mid turn, ask the user for approval or clarification, then resume from exactly where you left off."
+---
+
+Some agent actions should not happen without a human saying yes. Deleting files, sending money, posting on someone's behalf, or making an irreversible API call are all moments when you want a real person in the loop. Other times the agent simply does not have enough information to proceed and needs to ask a clarifying question before going further.
+
+Motus has first class support for both. An agent running inside `motus serve` can pause itself, send a payload to the parent server, wait for a reply, and then continue from exactly where it stopped. The session API exposes this as a state called `interrupted`, and clients drive the conversation back to `running` by posting to a new endpoint called `/resume`.
+
+## Pick your approach
+
+<CardGroup cols={3}>
+  <Card title="Block dangerous tools" icon="shield-halved" href="#1-tool-approval-gates">
+    Require user approval before specific tools run. One decorator flag does it.
+  </Card>
+  <Card title="Ask the user a question" icon="circle-question" href="#2-structured-questions-with-ask-user-question">
+    Let the model present 1 to 4 questions with predefined options.
+  </Card>
+  <Card title="Build your own flow" icon="screwdriver-wrench" href="#3-custom-interrupts-with-the-interrupt-primitive">
+    Drop down to the `interrupt()` primitive for any custom payload shape.
+  </Card>
+</CardGroup>
+
+## Try it in 30 seconds
+
+The fastest way to see HITL in action is the bundled example agent and the reference CLI client.
+
+```bash
+# Terminal 1: serve the example agent
+motus serve start examples.serving.hitl_agent:agent --port 8000
+
+# Terminal 2: chat with it
+motus serve chat http://localhost:8000
+```
+
+Try saying *delete the old logs file* (triggers an approval gate) or *help me organize my downloads* (triggers a clarifying question). The chat client polls for status, prints any interrupts as they arrive, prompts you in the terminal, posts the resume, and keeps going until the turn finishes. Look at `src/motus/serve/cli.py` for the full implementation if you want to use it as a template for your own UI.
+
+<Note>
+  The example agent has a deterministic fallback mode that runs without an API key, so you can try the flow even before configuring OpenRouter or OpenAI.
+</Note>
+
+## How it works
+
+Every message you send to a session spawns a fresh worker subprocess. The worker runs your agent, and your agent can call `interrupt()` from anywhere inside its execution. When that happens:
+
+<Steps>
+  <Step title="The worker pauses">
+    Your agent calls `await interrupt(payload)`. The worker sends the payload to the parent server over a pipe and the agent's coroutine blocks on a future, waiting for a reply.
+  </Step>
+  <Step title="The session enters the interrupted state">
+    The server stores the payload in the session's pending interrupts dict and flips the session status from `running` to `interrupted`. Any client doing a long poll on `GET /sessions/{id}` wakes up immediately and sees the new state.
+  </Step>
+  <Step title="The client shows the payload to the user and collects a reply">
+    Your frontend (or CLI, or Slack bot) reads the payload, presents whatever UI makes sense, and gathers the user's response.
+  </Step>
+  <Step title="The client posts a resume">
+    A `POST /sessions/{id}/resume` with the `interrupt_id` and a `value` ships the user's reply back through the server, into the worker, and into the agent's awaiting future. The agent picks up exactly where it left off.
+  </Step>
+  <Step title="The session goes back to running">
+    Once all pending interrupts are resolved, the status flips back to `running` and the agent finishes its turn normally. If the agent triggers another interrupt later in the same turn, the cycle repeats.
+  </Step>
+</Steps>
+
+Your local setup and Motus Cloud behave identically. The same `AgentServer` runs in both environments, so the REST API, session lifecycle, and wire protocol are the same.
+
+## Three ways to pause an agent
+
+### 1. Tool approval gates
+
+The simplest case: you have a tool that should never run without explicit user approval. Add `requires_approval=True` to the `@tool` decorator and Motus does the rest.
+
+```python
+from motus.tools import tool
+
+@tool(requires_approval=True)
+async def delete_file(path: str) -> str:
+    """Delete a file at the given path."""
+    import os
+    os.remove(path)
+    return f"Deleted {path}"
+```
+
+When the agent decides to call `delete_file`, Motus pauses the worker and emits an interrupt with this shape:
+
+```json
+{
+  "type": "tool_approval",
+  "tool_name": "delete_file",
+  "tool_args": { "path": "/tmp/old_logs.txt" }
+}
+```
+
+Your client shows the user what is about to happen, collects a yes or no, and posts back:
+
+```json
+{
+  "interrupt_id": "<uuid from the interrupt>",
+  "value": { "approved": true }
+}
+```
+
+If `approved` is `true`, the tool runs as normal. If it is `false` or missing, Motus raises a `ToolRejected` exception that surfaces to the model as a tool error. The agent sees `{"error": "User rejected delete_file"}` and can react: try a different approach, ask the user what to do instead, or give up gracefully.
+
+<Note>
+  The model stays in control of recovery. That is intentional. A ReAct loop knows how to handle tool errors, so a rejection becomes a normal step in the conversation rather than a hard failure.
+
+  Behind the scenes, Motus auto-injects an input guardrail on the tool that runs before any guardrails you defined yourself. You do not write any interrupt logic by hand.
+</Note>
+
+### 2. Structured questions with `ask_user_question`
+
+Sometimes the agent does not need approval. It needs information. Maybe it does not know which file to edit, or which date range to pull data for, or whether the user wants the long answer or the short one. The `ask_user_question` builtin tool lets the model ask structured questions with predefined options.
+
+```python
+from motus.agent import ReActAgent
+from motus.models import OpenRouterChatClient
+from motus.tools import tool
+from motus.tools.builtins.ask_user import ask_user_question
+
+@tool
+async def organize_files(directory: str, strategy: str) -> str:
+    """Organize files in a directory using the chosen strategy."""
+    return f"Organized {directory} by {strategy}"
+
+agent = ReActAgent(
+    client=OpenRouterChatClient(),
+    model_name="anthropic/claude-sonnet-4",
+    tools=[organize_files, ask_user_question],
+)
+```
+
+When the user says something vague like *help me clean up my downloads folder*, the model can call `ask_user_question` to clarify. The interrupt payload looks like this:
+
+```json
+{
+  "type": "user_input",
+  "questions": [
+    {
+      "question": "How would you like to organize the files?",
+      "header": "Strategy",
+      "multiSelect": false,
+      "options": [
+        { "label": "By date", "description": "Group files by year and month" },
+        { "label": "By type", "description": "Group files by extension" },
+        { "label": "By size", "description": "Move large files into a separate folder" }
+      ]
+    }
+  ]
+}
+```
+
+Your frontend renders the question, shows the options as buttons or a dropdown, and (by convention) appends a free text "Other" input so the user can type something the model did not anticipate. The reply has this shape:
+
+```json
+{
+  "interrupt_id": "<uuid>",
+  "value": {
+    "answers": {
+      "How would you like to organize the files?": "By date"
+    }
+  }
+}
+```
+
+The `answers` dict becomes the return value of the `ask_user_question` tool that the model sees, so the agent can continue reasoning with the user's choice in hand.
+
+#### Schema reference
+
+The `ask_user_question` tool validates inputs against this Pydantic schema:
+
+| Field | Type | Constraint | Notes |
+|---|---|---|---|
+| `questions` | list | required, 1 to 4 items | Top level array. |
+| `questions[].question` | string | required | The full question text, ending with `?`. |
+| `questions[].header` | string | required, recommended max 12 chars (length not enforced) | Short chip label for the UI. |
+| `questions[].multiSelect` | bool | optional, default `false` | Set to `true` for non-mutually-exclusive choices. |
+| `questions[].options` | list | required, 2 to 4 items | The list of choices. |
+| `questions[].options[].label` | string | required | Display text, 1 to 5 words. |
+| `questions[].options[].description` | string | required | Explanation of this option. |
+| `questions[].options[].markdown` | string \| null | optional | Preview shown in a monospace box when this option is focused. |
+
+<Tip>
+  The reference CLI client (`motus serve chat`) automatically appends an "Other" free text input. If you build your own frontend, do the same so users are not boxed in by the model's options.
+</Tip>
+
+### 3. Custom interrupts with the `interrupt()` primitive
+
+If neither pattern fits, drop into the primitive directly. `interrupt()` accepts any dict and returns whatever value the client posts back. This is what you reach for when you want to ask for free form text input, present a custom UI, or build your own elicitation pattern.
+
+```python
+from motus.models import ChatMessage
+from motus.serve.interrupt import interrupt
+
+async def my_agent(message: ChatMessage, state: list[ChatMessage]):
+    # An agent that takes (message, state) and returns (response, new_state)
+    # is the plain callable agent shape that motus serve accepts.
+
+    user_choice = await interrupt({
+        "type": "color_picker",
+        "prompt": "Pick a brand color for the export",
+        "presets": ["#FF6B6B", "#4ECDC4", "#FFE66D"]
+    })
+
+    color = user_choice.get("hex", "#000000")
+    response = ChatMessage.assistant_message(content=f"Using {color} for the export.")
+    return response, state + [message, response]
+```
+
+The `type` field is a convention, not enforced. Pick any string your client knows how to handle. The framework's built-in interrupts use `tool_approval` and `user_input`. If you want the reference CLI client (`motus serve chat`) to render your custom interrupts, reuse one of those strings. Otherwise, the CLI prints `[warn] unknown interrupt type` on every poll and never resumes the interrupt, so the session stays wedged until you build your own client.
+
+<Warning>
+  `interrupt()` only works inside a `motus serve` worker subprocess. Calling it from a unit test or standalone script raises `RuntimeError("interrupt() called outside motus serve worker subprocess")`. To test agents that use HITL, spin up a real serve process in your test fixture (see `tests/integration/serve/test_hitl.py` for the pattern).
+</Warning>
+
+## Session state machine
+
+The session status is the source of truth for what your client should do next.
+
+| Status | What it means | What you can do |
+|---|---|---|
+| `idle` | Waiting for input. Initial state after creation. | Send a message with `POST /messages`. |
+| `running` | The worker is executing the agent. | Long poll `GET /sessions/{id}?wait=true`. |
+| `interrupted` | The agent paused and is waiting for one or more resumes. | Read `interrupts`, present to user, post `POST /resume` for each. |
+| `error` | The worker failed (exception, timeout, cancellation, or crash). The `error` field has the message. | Read the error, optionally send a new message to retry. |
+
+Transitions:
+
+```
+idle ──POST /messages──▶ running ──┬──▶ idle           (turn completed)
+                                    ├──▶ interrupted   (agent called interrupt)
+                                    └──▶ error         (worker failed)
+
+interrupted ──POST /resume──▶ running   (only after ALL pending interrupts are resolved)
+```
+
+<Warning>
+  You cannot send a new message while the session is `running` or `interrupted`. The server returns `409 Conflict`. Either wait for the turn to finish, post a resume, or `DELETE` the session to start over.
+</Warning>
+
+## The REST flow end to end
+
+Here is the complete sequence for a turn that triggers an approval gate.
+
+<Steps>
+  <Step title="Create a session">
+    ```bash
+    curl -X POST http://localhost:8000/sessions
+    ```
+
+    Response (`201 Created`, with a `Location: /sessions/{id}` header):
+
+    ```json
+    { "session_id": "550e8400-e29b-41d4-a716-446655440000", "status": "idle" }
+    ```
+  </Step>
+  <Step title="Send a message that triggers a tool needing approval">
+    ```bash
+    curl -X POST http://localhost:8000/sessions/$SID/messages \
+      -H 'Content-Type: application/json' \
+      -d '{"role": "user", "content": "delete /tmp/old_logs.txt"}'
+    ```
+
+    Response (`202 Accepted`, fire and forget):
+
+    ```json
+    { "session_id": "550e8400-...", "status": "running" }
+    ```
+  </Step>
+  <Step title="Long poll until the worker pauses">
+    ```bash
+    curl "http://localhost:8000/sessions/$SID?wait=true&timeout=30"
+    ```
+
+    Response (`200 OK`):
+
+    ```json
+    {
+      "session_id": "550e8400-...",
+      "status": "interrupted",
+      "response": null,
+      "error": null,
+      "interrupts": [
+        {
+          "interrupt_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+          "type": "tool_approval",
+          "payload": {
+            "type": "tool_approval",
+            "tool_name": "delete_file",
+            "tool_args": { "path": "/tmp/old_logs.txt" }
+          }
+        }
+      ]
+    }
+    ```
+  </Step>
+  <Step title="Show the user, collect a decision, post the resume">
+    ```bash
+    curl -X POST http://localhost:8000/sessions/$SID/resume \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "interrupt_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "value": { "approved": true }
+      }'
+    ```
+
+    Response (`200 OK`):
+
+    ```json
+    { "session_id": "550e8400-...", "status": "running" }
+    ```
+
+    If multiple interrupts were pending and you only resumed one, the status stays `interrupted` until you have resumed all of them.
+  </Step>
+  <Step title="Long poll for the final result">
+    ```bash
+    curl "http://localhost:8000/sessions/$SID?wait=true&timeout=30"
+    ```
+
+    Response (`200 OK`):
+
+    ```json
+    {
+      "session_id": "550e8400-...",
+      "status": "idle",
+      "response": {
+        "role": "assistant",
+        "content": "I deleted /tmp/old_logs.txt for you."
+      },
+      "error": null,
+      "interrupts": null
+    }
+    ```
+  </Step>
+</Steps>
+
+A turn can interrupt multiple times in sequence, and a single pause can carry multiple pending interrupts at once. Your client should keep polling until the status is `idle` or `error`.
+
+### A minimal client loop
+
+Here is the polling pattern you want to follow in any custom client:
+
+```python
+import httpx
+
+def run_turn(base_url: str, session_id: str, content: str) -> str:
+    client = httpx.Client(timeout=60)
+
+    # 1. Send the message
+    client.post(f"{base_url}/sessions/{session_id}/messages",
+                json={"role": "user", "content": content}).raise_for_status()
+
+    # 2. Poll until idle or error, handling any interrupts that arrive
+    while True:
+        r = client.get(f"{base_url}/sessions/{session_id}",
+                       params={"wait": "true", "timeout": "30"})
+        data = r.json()
+        status = data["status"]
+
+        if status == "idle":
+            return data["response"]["content"]
+        if status == "error":
+            raise RuntimeError(data["error"])
+        if status == "interrupted":
+            for intr in data["interrupts"]:
+                value = handle_interrupt(intr)  # your UI logic
+                client.post(f"{base_url}/sessions/{session_id}/resume",
+                            json={"interrupt_id": intr["interrupt_id"], "value": value}
+                ).raise_for_status()
+            # loop and poll again, the worker is still running
+```
+
+## Common errors
+
+<AccordionGroup>
+  <Accordion title="RuntimeError: interrupt() called outside motus serve worker subprocess">
+    You called `interrupt()` from a unit test, REPL, or some other context that is not a serve worker. The primitive only works inside a process spawned by `AgentServer`. To test, use a real serve process in your fixture (see `tests/integration/serve/test_hitl.py`).
+  </Accordion>
+  <Accordion title="ValueError: Interrupt message too large">
+    Each interrupt payload is pickled before being sent across the worker pipe, and Motus enforces a hard limit of 16 KiB on outbound interrupts. If you need to ship something bigger (a screenshot, a large file), upload it to object storage first and pass a URL through the interrupt instead. The limit only applies to interrupts going out from the worker. Resume values posted in by the client are not size checked.
+  </Accordion>
+  <Accordion title="409 Conflict on POST /messages">
+    The session is already `running` or `interrupted`. You cannot send a new user message until the current turn finishes. Either wait for the long poll to return `idle`, post a resume, or `DELETE` the session.
+  </Accordion>
+  <Accordion title="404 Not Found on POST /resume">
+    The `interrupt_id` you sent does not exist in the session's pending interrupts. This usually means one of three things: the interrupt was already resumed (resumes are not idempotent, the second call gets a 404), the session was deleted or timed out, or there is a typo in the id. Check your client logic for double-resume and use the exact id from the most recent poll response.
+  </Accordion>
+  <Accordion title="409 Conflict on POST /resume">
+    The session is not in the `interrupted` state. You probably raced a resume against a fast-completing turn. Re-poll with `wait=true` and only post a resume when the status comes back `interrupted`.
+  </Accordion>
+  <Accordion title="Session never returns to idle">
+    Your client is probably ignoring an interrupt. Every interrupt must be resumed before the worker can continue. Make sure your polling loop walks every entry in the `interrupts` array and posts a resume for each one. The CLI client (`motus serve chat`) only handles `tool_approval` and `user_input`. Custom interrupt types make it print `[warn] unknown interrupt type` on every poll without ever resuming, so the session stays wedged. If you use custom types, build your own client.
+  </Accordion>
+</AccordionGroup>
+
+## Things to know
+
+A few details that will save you debugging time later.
+
+<AccordionGroup>
+  <Accordion title="Sessions live in memory">
+    A `motus serve` process holds all sessions in a dict that does not survive restarts. In Motus Cloud, each deployment runs as a single process, so HITL just works. If you ever scale a serve deployment horizontally yourself, you need sticky session routing so resume requests land on the same process that holds the interrupted session.
+  </Accordion>
+  <Accordion title="Interrupted sessions bypass TTL sweeps">
+    The server's `--ttl` flag auto-sweeps idle and errored sessions, but **not** running or interrupted ones. A session that pauses on an interrupt and then gets abandoned will stay in memory until you explicitly delete it or restart the server. Build a client side timeout if you expect users to walk away mid approval.
+  </Accordion>
+  <Accordion title="Cancellation kills pending interrupts">
+    If the turn times out or you `DELETE` the session while it is interrupted, the worker is killed. Any pending `await interrupt(...)` inside the agent raises `EOFError("Worker pipe closed")`, and the session transitions to `error`. The error message visible over HTTP will be a traceback, not a clean string.
+  </Accordion>
+  <Accordion title="Rejected approvals are not silent">
+    When the user rejects a tool call, the agent sees `{"error": "User rejected <tool_name>"}` as the tool result, not a clean skip. This is intentional: it lets the model know what happened and decide what to do next. The agent might apologize, suggest alternatives, or ask a follow up question.
+  </Accordion>
+  <Accordion title="Multiple concurrent interrupts are supported">
+    An agent can fire multiple interrupts at once (for example with `asyncio.gather`). The session's `pending_interrupts` is a dict and each must be resumed individually. The status only flips back to `running` once every pending interrupt has been resolved. The order does not matter.
+  </Accordion>
+  <Accordion title="Webhooks fire on turn completion, not on interrupts">
+    If you configure a webhook in your `POST /messages` request, it fires when the session reaches `idle` or `error`, **not** on each interrupt. If your orchestration depends on knowing the exact moment an interrupt arrives, use long polling instead.
+  </Accordion>
+  <Accordion title="The type field is a convention, not validated">
+    Motus does not enforce or validate the `type` field on an interrupt payload. The framework, the CLI, and the example client use `tool_approval` and `user_input`. If you make up your own type strings, your client needs to know how to handle them, and the reference CLI client will warn and skip them.
+  </Accordion>
+</AccordionGroup>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Serving" icon="server" href="/guides/serving">
+    The full serving guide covers session lifecycle, agent types, and the Python API.
+  </Card>
+  <Card title="Sessions API" icon="code" href="/reference/api/sessions">
+    REST reference for creating, polling, and managing sessions.
+  </Card>
+  <Card title="Tools" icon="screwdriver-wrench" href="/concepts/tools">
+    Learn how the `@tool` decorator and guardrails work under the hood.
+  </Card>
+  <Card title="Guardrails" icon="shield-check" href="/guides/guardrails">
+    Validate and transform agent inputs and outputs without touching your agent logic.
+  </Card>
+</CardGroup>

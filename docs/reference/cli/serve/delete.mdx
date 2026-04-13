@@ -1,0 +1,25 @@
+---
+title: "motus serve delete"
+description: "Delete a session on a running Motus agent server."
+---
+
+Delete a session. This maps directly to `DELETE /sessions/{id}` described in the [Sessions API reference](/reference/api/sessions).
+
+## Usage
+
+```bash
+motus serve delete <url> <id>
+```
+
+<Note>
+  It is safe to delete a session while a turn is running. The running task is cancelled and the worker process is killed immediately.
+</Note>
+
+## Examples
+
+### Delete a session
+
+```bash
+motus serve delete http://localhost:8000 550e8400-e29b-41d4-a716-446655440000
+Deleted session 550e8400-e29b-41d4-a716-446655440000
+```

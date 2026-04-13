@@ -1,0 +1,110 @@
+---
+title: "Pull Requests"
+description: "How to submit and review pull requests."
+---
+
+Submit changes through pull requests on GitHub.
+
+## Branch and commit
+
+```bash
+git checkout -b your-name/short-description
+# Make changes, then:
+git add <files>
+git commit -m "Brief description of the change"
+```
+
+Use the `your-name/short-description` branch naming convention. Keep commit messages concise and focused on *what changed and why*.
+
+## Before submitting
+
+<Steps>
+  <Step title="Run the linter">
+    ```bash
+    uv run ruff check .
+    ```
+  </Step>
+  <Step title="Check formatting">
+    ```bash
+    uv run ruff format --check .
+    ```
+  </Step>
+  <Step title="Run unit tests">
+    ```bash
+    uv run pytest tests/unit/ -x -q
+    ```
+  </Step>
+</Steps>
+
+All three commands must pass. Fix any ruff violations before creating the PR — CI will block merge on lint failures.
+
+## Create the PR
+
+```bash
+gh pr create --title "Brief title" --body "What and why"
+```
+
+Or push your branch and create the PR through the GitHub UI:
+
+```bash
+git push -u origin your-name/short-description
+```
+
+## PR guidelines
+
+- **Keep PRs focused** — one logical change per PR. Split unrelated changes into separate PRs.
+- **Include tests** for new functionality. Reviewers will ask for them if they are missing.
+- **Update documentation** if you change public APIs, add new agent types, or modify configuration.
+- **New examples** auto-appear in the docs on the next build. No extra docs work needed.
+- **New VCR cassettes** — if you record cassettes for integration tests, include them in the PR.
+- **PR title** — use imperative mood: "Add retry logic to task executor", not "Added retry logic".
+- **PR body** — explain *what* changed and *why*. Link related issues with `Fixes #123` or `Closes #123`.
+
+## Review process
+
+1. Address feedback by pushing **new commits** (do not force-push during review — it erases comment context).
+2. Mark conversations as resolved after addressing them.
+3. Re-request review after pushing fixes if the reviewer has not re-reviewed.
+
+Expect at least one approval before merge. For changes touching runtime internals (`agent_future.py`, `task_instance.py`, `agent_runtime.py`), expect closer scrutiny and possibly multiple reviewers.
+
+## Code owners
+
+| Area | Owner |
+|------|-------|
+| Runtime (`src/motus/runtime/`) | @NorthmanPKU |
+| Agents (`src/motus/agent/`) | @NorthmanPKU, @JackFram |
+| Tools (`src/motus/tools/`) | @eliotsolomon18, @coppock |
+| Models (`src/motus/models/`) | @yzhou442 |
+| Memory (`src/motus/memory/`) | @JackFram, @vasiliskyp |
+
+PRs touching a code-owned area will automatically request review from the listed owners.
+
+## CI
+
+Tests run automatically on every push to an open PR. The CI pipeline runs:
+
+1. **Ruff** — lint and format checks
+2. **Unit tests** — `tests/unit/`
+3. **Integration tests** — `tests/integration/` with VCR replay
+
+If CI fails:
+
+```bash
+# Check which step failed in the GitHub Actions log, then reproduce locally:
+uv run ruff check .
+uv run pytest tests/unit/ -x -v
+```
+
+Fix failures before requesting review. Reviewers will not review PRs with failing CI.
+
+## Merging
+
+Maintainers merge PRs using **squash-and-merge** by default. Your commit messages become the squash commit body, so write them clearly.
+
+After merge, delete your remote branch:
+
+```bash
+git branch -d your-name/short-description
+git push origin --delete your-name/short-description
+```

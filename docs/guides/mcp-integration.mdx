@@ -1,0 +1,188 @@
+---
+title: "MCP Integration"
+description: "Connect any MCP-compatible tool server to your agent using get_mcp()."
+---
+
+The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) is an open standard for connecting AI agents to external tools and data sources. Use `get_mcp()` to connect to any MCP-compatible server and expose its tools to your agent.
+
+## Connect via stdio
+
+The server runs as a child process. Communication happens over stdin/stdout. This example uses a filesystem MCP server via `npx` (requires [Node.js](https://nodejs.org/)):
+
+```python
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+from motus.tools import get_mcp
+
+session = get_mcp(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+)
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    tools=[session],
+)
+
+response = await agent("List files in /workspace")
+```
+
+## Connect via HTTP
+
+Point to a running MCP endpoint. Pass authentication headers as needed:
+
+```python
+from motus.tools import get_mcp
+
+session = get_mcp(
+    url="https://mcp.jina.ai/v1",
+    headers={"Authorization": "Bearer <your-token>"},
+)
+```
+
+<CodeGroup>
+
+```python stdio (local process)
+from motus.tools import get_mcp
+
+session = get_mcp(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+)
+```
+
+```python HTTP (remote)
+from motus.tools import get_mcp
+
+session = get_mcp(
+    url="https://mcp.jina.ai/v1",
+    headers={"Authorization": "Bearer <your-token>"},
+)
+```
+
+</CodeGroup>
+
+## Connect via Docker
+
+Run an MCP server inside a container to isolate file system access, network calls, and dependencies from the host:
+
+```python
+from motus.tools import get_mcp
+
+session = get_mcp(
+    image="node:20",
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-everything"],
+    port=3000,
+)
+```
+
+The `image` parameter pulls and starts the container automatically. Use `port` to expose the server's listening port. Pass a pre-configured `sandbox=` object for finer control over volumes, environment variables, and network policies.
+
+## Session lifecycle
+
+`get_mcp()` returns an `MCPSession`. You can let the runtime manage the lifecycle (lazy mode) or control it explicitly:
+
+**Lazy (default)** — connect on first use, no cleanup needed:
+
+```python
+session = get_mcp(command="npx", args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"])
+agent = ReActAgent(client=client, model_name="gpt-4o", tools=[session])
+# Connection opens automatically on the first agent call
+response = await agent("Read /workspace/README.md")
+```
+
+**Explicit** — use an `async with` block when you need to inspect tools before building the agent, validate the connection, or control the exact teardown point:
+
+```python
+async with get_mcp(command="npx", args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]) as session:
+    print(session.tool_names)  # inspect available tools
+    agent = ReActAgent(client=client, model_name="gpt-4o", tools=[session])
+    response = await agent("Read /workspace/README.md")
+# Session closes when the block exits
+```
+
+## Filtering tools
+
+An MCP server can expose dozens of tools. Use `tools()` to filter, rename, and attach guardrails before handing them to the agent:
+
+```python
+from motus.tools import get_mcp, tools
+
+async with get_mcp(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+) as session:
+    wrapped = tools(session, prefix="fs_", blocklist={"write_file", "create_directory"})
+    agent = ReActAgent(client=client, model_name="gpt-4o", tools=wrapped)
+    response = await agent("List files in /workspace")
+```
+
+`tools()` accepts the same options whether you're wrapping an MCP session or a plain class:
+
+| Parameter | Description |
+|-----------|-------------|
+| `prefix` | Prepend to all tool names (e.g. `"fs_"`) |
+| `allowlist` | Only expose these tools |
+| `blocklist` | Exclude these tools |
+| `input_guardrails` | Default input guardrails for all tools |
+| `output_guardrails` | Default output guardrails for all tools |
+
+To configure a single tool from a session, access it as an attribute and wrap it with `tool()`:
+
+```python
+from motus.tools import get_mcp, tool
+
+async with get_mcp(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+) as session:
+    agent = ReActAgent(
+        client=client,
+        model_name="gpt-4o",
+        tools=[tool(session.read_file, input_guardrails=[validate_path])],
+    )
+    response = await agent("Read /workspace/config.yaml")
+```
+
+## Attaching to an agent
+
+Pass one or more MCP sessions directly in the `tools` list. MCP sessions mix freely with every other tool type:
+
+```python
+from motus.tools import get_mcp
+
+async def summarize(text: str) -> str:
+    """Summarize a block of text."""
+    ...
+
+fs_session = get_mcp(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+)
+search_session = get_mcp(
+    url="https://mcp.jina.ai/v1",
+    headers={"Authorization": "Bearer <token>"},
+)
+
+agent = ReActAgent(
+    client=client,
+    model_name="gpt-4o",
+    tools=[
+        fs_session,     # all tools from the filesystem server
+        search_session, # all tools from the remote search server
+        summarize,      # plain Python function
+    ],
+)
+```
+
+## Connection summary
+
+| What you have | How to connect |
+|---------------|---------------|
+| Local MCP server (stdio) | `get_mcp(command=..., args=...)` |
+| Remote MCP server (HTTP) | `get_mcp(url=..., headers=...)` |
+| MCP server in Docker | `get_mcp(image=..., command=..., port=...)` |
+| Filtered subset of tools | `tools(session, allowlist=..., blocklist=...)` |
+| Single tool with guardrails | `tool(session.tool_name, input_guardrails=...)` |

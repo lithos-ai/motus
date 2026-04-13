@@ -1,0 +1,161 @@
+---
+title: "Memory"
+description: "Manage conversation context with automatic compaction for long-running agents."
+---
+
+Memory manages the conversation context that gets sent to the LLM on each call. Without memory management, context grows unbounded until it exceeds the model's context window and causes an API error. Motus handles this automatically with two built-in strategies.
+
+## Memory types
+
+| Strategy | Token management | Persistence | Use case |
+| --- | --- | --- | --- |
+| `basic` | None (grows unbounded) | In-memory only | Short conversations, testing |
+| `compact` | Auto-compacts at threshold | Optional log-based restore | Production agents, long sessions |
+| `background` | Auto-compacts \+ agent-managed memory | Cross-session persistence | Coming soon |
+
+Both extend `BaseMemory` and share an async interface: `add_message()`, `compact()`, `get_context()`, and `get_memory_trace()`.
+
+## Architecture
+
+```text
+BaseMemory (abstract)
+├── BasicMemory              : append-only, no compaction
+└── CompactionBase (abstract): boundary detection, compact(), set_model()
+    └── CompactionMemory     : + conversation log store, session restore
+```
+
+`CompactionBase` provides the core compaction logic shared by all compacting memory types: turn boundary detection, token threshold management, and LLM-based summarization. `CompactionMemory` adds conversation log persistence and session restore on top.
+
+### BasicMemory
+
+`BasicMemory` is the default. Messages accumulate until the conversation ends. If the context window overflows, the model provider returns an API error.
+
+```python
+agent = ReActAgent(client=client, model_name="gpt-4o", memory_type="basic")
+```
+
+You get this when you pass no `memory_type` or `memory` argument.
+
+### CompactionMemory
+
+`CompactionMemory` monitors token count after every message. When the estimated token count exceeds a threshold and the conversation is at a turn boundary, it summarizes older turns into a continuation message. The agent loop continues without interruption.
+
+<Tip>
+  Use `memory_type="compact"` for any agent that will handle long conversations or run in production. It prevents context window overflows without any changes to your agent logic.
+</Tip>
+
+```python
+agent = ReActAgent(client=client, model_name="gpt-4o", memory_type="compact")
+```
+
+## Configuring CompactionMemory
+
+For full control, instantiate `CompactionMemory` directly and pass it via the `memory` parameter:
+
+```python
+from motus.memory import CompactionMemory, CompactionMemoryConfig
+
+memory = CompactionMemory(
+    config=CompactionMemoryConfig(
+        compact_model_name="claude-haiku-4-5-20251001",
+        safety_ratio=0.75,
+    ),
+    on_compact=lambda stats: print(f"Compacted {stats['messages_compacted']} messages"),
+)
+
+agent = ReActAgent(client=client, model_name="gpt-4o", memory=memory)
+```
+
+### CompactionMemoryConfig fields
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `compact_model_name` | Agent's model | Model used for the compaction LLM call |
+| `token_threshold` | `None` | Explicit token threshold. When `None`, derived from the model's context window times `safety_ratio` |
+| `safety_ratio` | `0.75` | Fraction of the context window that triggers compaction |
+| `session_id` | Auto UUID | Identifier for the conversation session |
+| `log_base_path` | `None` | Directory for JSONL conversation logs. `None` disables logging |
+| `max_tool_result_tokens` | `50000` | Maximum tokens per tool result before truncation |
+
+<Note>
+  Compaction only triggers at clean turn boundaries to avoid corrupting in-progress tool call sequences. A ReAct agent loop produces three types of turn units:
+
+  - **Unit A**: `[user message]`
+  - **Unit B**: `[assistant + tool_calls]` followed by `[tool_result x N]`
+  - **Unit C**: `[assistant, no tool calls]` (final response)
+
+  Compaction defers until all tool results from a parallel tool call batch have arrived. This is tracked via `_pending_tool_calls`, a counter incremented when the assistant issues tool calls and decremented as each result arrives. Compaction fires only when the counter reaches zero.
+</Note>
+
+## Session save and restore
+
+When you set `log_base_path`, `CompactionMemory` writes every message and compaction event to a JSONL file. You can restore a previous session from this log:
+
+```python
+from motus.memory import CompactionMemory
+
+restored = CompactionMemory.restore_from_log(
+    session_id="user-123",
+    log_base_path="./conversation_logs",
+)
+agent = ReActAgent(client=client, model_name="gpt-4o", memory=restored)
+# Agent continues with the previous conversation's context
+```
+
+`restore_from_log` replays all log entries (messages and compaction events) to rebuild the in-memory state. The restored instance appends to the same session log. 
+
+For programmatic session persistence without log files, use `CompactionSessionState`:
+
+```python
+from motus.memory import CompactionSessionState
+
+# Snapshot current state
+state = memory.get_session_state()
+data = state.to_dict()  # serialize to a JSON-compatible dict
+
+# Restore later
+restored_state = CompactionSessionState.from_dict(data)
+```
+
+`CompactionSessionState` captures the current context window (messages \+ system prompt) along with session identity and log store location for cross-session continuity.
+
+## Custom compaction function
+
+Replace the default LLM-based compaction with your own summarization logic:
+
+```python
+def my_compaction(messages, system_prompt):
+    """Return a summary string from the conversation."""
+    return f"Summary: {len(messages)} messages processed"
+
+memory = CompactionMemory(compact_fn=my_compaction)
+```
+
+The function receives the message list and system prompt, and returns a summary string.
+
+## Custom memory
+
+Subclass `BaseMemory` and implement `compact()` and `reset()` to build your own strategy:
+
+```python
+from motus.memory import BaseMemory
+
+class MyMemory(BaseMemory):
+    async def compact(self, **kwargs):
+        """Implement your compaction strategy."""
+        ...
+
+    def reset(self):
+        """Clear all state and return counts."""
+        count = len(self._messages)
+        self._messages.clear()
+        return {"messages": count}
+
+agent = ReActAgent(client=client, model_name="gpt-4o", memory=MyMemory())
+```
+
+The base class provides working memory management, token estimation, tool result truncation, and trace logging. For compacting memory types, extend `CompactionBase` instead. It provides boundary-aware auto-compaction, `set_model()`, and the default LLM summarization logic.
+
+## BackgroundMemory (coming soon)
+
+A long-term memory solution that works both locally and on the cloud is under active development. `BackgroundMemory` will extend `CompactionBase` with agent-managed cross-session memory, allowing the main agent to remember facts, preferences, and context across conversations without distraction.

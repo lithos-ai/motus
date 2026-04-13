@@ -1,0 +1,97 @@
+---
+title: "Architecture Overview"
+description: "A map of the Motus library: the two ways you write agents, the runtime they share, and where each concept lives."
+---
+
+Motus is an open source agent serving project. It also ships a Python library for writing the agents you serve. This page is a map of that library: the two programming models it supports, the runtime underneath them, and where to go for each concept.
+
+## Two programming models on one runtime
+
+Motus gives you two ways to write an agent, and both run on the same underlying runtime. You pick the one that matches your problem, and the two can be combined when you need to.
+
+<CardGroup cols={2}>
+  <Card title="ReActAgent" icon="robot" href="/concepts/agents">
+    For exploratory, open-ended problems. The model decides what to do next. You hand `ReActAgent` a client, a set of tools, and a system prompt. It calls the model, runs any tool calls the model asks for, feeds the results back, and loops until the model returns a final answer.
+  </Card>
+  <Card title="Workflow" icon="diagram-project" href="/concepts/workflow">
+    For stable control over a known-good procedure. You decide what to do next. Decorate plain Python functions with `@agent_task`, call them, and Motus turns the data flow between them into a parallel task graph. No DAG wiring, no YAML.
+  </Card>
+</CardGroup>
+
+Roughly, the two shapes look like this:
+
+```python ReActAgent
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    tools=[weather, search],
+)
+answer = await agent("What's the weather in Tokyo?")
+```
+
+```python Workflow
+from motus.runtime import agent_task, resolve
+
+@agent_task
+def fetch(url): ...
+
+@agent_task
+def summarize(pages): ...
+
+pages = [fetch(url) for url in urls]   # parallel fetches
+result = resolve(summarize(pages))     # runs once every fetch is done
+```
+
+### When to reach for which
+
+Reach for `ReActAgent` when the problem is open-ended and you want the agent to discover the right steps on its own. Research, debugging, triage, coding agents, customer support, anything where you cannot write down the plan in advance. You give it tools and let the model explore.
+
+Reach for `Workflow` when the procedure is already a solved problem and you want stable, repeatable control over it. ETL pipelines, evaluation harnesses, content processing, batch LLM jobs, anything where the steps are well understood and you mostly want parallelism, retries, and observability around them.
+
+The two compose. A workflow step can call a `ReActAgent` when part of an otherwise stable pipeline needs exploration. An agent can delegate to another agent via `as_tool()` when one exploratory loop should hand off to a more specialized one.
+
+### The runtime underneath both
+
+Both programming models run on the same task scheduler. When a `ReActAgent` calls the model or runs a tool, that call is submitted as an `@agent_task` under the hood, which is the same path you are using directly when you decorate Workflow steps. Independent tasks run in parallel, each returns an `AgentFuture` that carries its result and its dependencies, and retries, timeouts, and cancellation all live at this level. This is what makes a `ReActAgent`'s parallel tool calls actually parallel, and what lets you mix both styles in one project without adopting a second execution system.
+
+## The pieces
+
+### ReActAgent
+
+- [Model clients](/concepts/models): OpenAI, Anthropic, Gemini, OpenRouter, and local models via `base_url`
+- [Tools](/concepts/tools): `@tool`, `@tools`, function tools, class tools, Docker sandboxes
+- [MCP tools](/guides/mcp-integration): wrap any MCP server with `get_mcp()`
+- [Memory](/concepts/memory): `BasicMemory` and `CompactionMemory`
+- [Guardrails](/guides/guardrails): input, output, and per-tool validation hooks
+- [Reasoning and cache policy](/concepts/models): extended thinking and prompt caching
+- [Multi-agent](/guides/multi-agent): `as_tool()` and `fork()`
+- [Human in the loop](/guides/human-in-the-loop): pause mid-turn for approval or clarification
+- [Skills](/concepts/skills): load extra instructions and examples on demand
+
+### Workflow
+
+- [`@agent_task`](/concepts/workflow): decorate any sync or async Python function
+- [`AgentFuture`](/concepts/workflow): dependency tracking through function arguments, non-blocking operators
+- [`resolve()`](/concepts/workflow): block on or await a future
+- [Retries, timeouts, and policy overrides](/concepts/workflow): per-task and per-call
+- [Multi-return and per-task hooks](/concepts/workflow): `num_returns`, `on_start`, `on_end`
+
+### Runtime, serving, and tracing
+
+- [Runtime](/concepts/workflow#how-the-runtime-runs-it): the task scheduler underneath both programming models (`GraphScheduler`, thread pool, event loop)
+- [Serving](/guides/serving): `motus serve` locally, `motus deploy` to Motus Cloud, session-based REST API
+- [Tracing](/guides/tracing): opt-in via one environment variable, lifecycle hooks, HTML viewer, OpenTelemetry export
+
+## Where to go next
+
+Pick a starting point based on what you want to build.
+
+- **A single LLM-driven assistant.** Start with [Agents](/concepts/agents), then [Tools](/concepts/tools), then [Memory](/concepts/memory).
+- **A parallel pipeline or batch job.** Start with [Workflow](/concepts/workflow). Circle back to [Agents](/concepts/agents) if any step needs an LLM.
+- **A team of agents.** See [Multi-agent](/guides/multi-agent) for how `as_tool()` turns one agent into a tool for another.
+- **An agent that needs external tools.** See [MCP Integration](/guides/mcp-integration) to plug in any MCP server.
+- **An existing agent from another framework.** See the [Integrations](/integrations/openai-agents) tab for OpenAI Agents SDK, Anthropic SDK, and Google ADK adapters.
+- **Shipping any of the above.** See [Serving](/guides/serving) for the REST API and [Deployment](/guides/deployment) for the cloud workflow.

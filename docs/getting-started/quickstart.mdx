@@ -1,0 +1,180 @@
+---
+title: "Quickstart"
+description: "Write an agent, serve it locally, and deploy it to Motus Cloud in under ten minutes."
+---
+
+This guide walks through the full Motus loop: write an agent in a few lines of Python, serve it locally as an HTTP API, chat with it from your terminal, then deploy it to Motus Cloud with one command. The code is the same for local and cloud.
+
+<Note>
+  If you have not installed Motus yet, see [Installation](/getting-started/installation) first.
+</Note>
+
+## 1. Write the agent
+
+Create a file called `myapp.py` in an empty directory:
+
+```python myapp.py
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+from motus.tools import tool
+
+
+@tool
+async def weather(city: str) -> str:
+    """Get the current weather for a city."""
+    # In a real app, call a weather API here.
+    return f"It is 22°C and sunny in {city}."
+
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    system_prompt="You are a helpful weather assistant.",
+    tools=[weather],
+)
+```
+
+That is the whole agent. A few things to notice:
+
+- **The `@tool` decorator** turns any Python function into a tool the LLM can call. Type annotations on parameters are required. Motus uses them to generate the JSON schema the model sees, and the docstring becomes the tool description.
+- **`OpenAIChatClient()`** with no arguments reads `OPENAI_API_KEY` from your environment. You can also pass `api_key="sk-..."` explicitly. Motus ships with clients for OpenAI, Anthropic, Gemini, and OpenRouter. See [Models](/concepts/models) for the full list.
+- **`ReActAgent`** combines a model client, a model name, and a list of tools into a reasoning loop. Pass a `system_prompt` to give it a persona or standing instructions.
+- **The `agent` variable** at module level is what Motus will expose when you serve or deploy. The CLI looks it up by the `module:attribute` syntax, as you will see in a moment.
+
+<Note>
+  Export your provider key before running locally:
+
+  ```bash
+  export OPENAI_API_KEY=sk-...
+  ```
+
+  Cloud deployments use the Motus model proxy, so this is only needed for local runs.
+</Note>
+
+<Tip>
+  Want to use Anthropic or Gemini instead? Swap `OpenAIChatClient` for `AnthropicChatClient` or `GeminiChatClient`, and change `model_name` on the `ReActAgent` accordingly (for example `"claude-sonnet-4-5-20250929"` or `"gemini-2.0-flash"`). The rest of the code stays the same.
+</Tip>
+
+## 2. Serve it locally
+
+Start the agent as an HTTP API with one command:
+
+```bash
+motus serve start myapp:agent --port 8000
+```
+
+This spins up a FastAPI server at `http://localhost:8000` that manages sessions and routes messages to your agent. The `myapp:agent` argument tells Motus to import the `myapp` module and use its `agent` attribute.
+
+<Note>
+  `myapp:agent` is a Python import path, not a file path. `myapp.py` needs to be in your current directory (or installed as a package) so Python can import it. Nested paths like `mypackage.mymodule:agent` also work.
+
+  If you see `ModuleNotFoundError: No module named 'myapp'`, make sure you are running the command from the directory that contains `myapp.py`.
+</Note>
+
+## 3. Chat with your local agent
+
+Open a second terminal and run:
+
+```bash
+motus serve chat http://localhost:8000 "What's the weather in Tokyo?"
+```
+
+You should see something like:
+
+```
+It is 22°C and sunny in Tokyo.
+```
+
+The agent received your question, called the `weather` tool with `city="Tokyo"`, and used the result to answer in natural language.
+
+Drop the quoted message to enter interactive mode:
+
+```bash
+motus serve chat http://localhost:8000
+```
+
+This opens a REPL where you can keep chatting until you hit `Ctrl+C`. Sessions are created automatically and cleaned up on exit. Use `--keep` to preserve the session and resume it later with `--session <id>`.
+
+<Tip>
+  The chat client handles human in the loop pauses for you. If a tool is marked `requires_approval=True`, it prompts you in the terminal before running. See [Human in the Loop](/guides/human-in-the-loop).
+</Tip>
+
+## 4. Deploy to Motus Cloud
+
+Stop the local server with `Ctrl+C`. Now deploy the exact same code to Motus Cloud.
+
+<Steps>
+  <Step title="Log in">
+    ```bash
+    motus login
+    ```
+
+    This opens your browser to complete an OAuth device flow and stores credentials at `~/.motus/credentials.json`. If you do not have a Motus account yet, sign up at [console.lithosai.cloud](https://console.lithosai.cloud) first. Verify you are logged in with:
+
+    ```bash
+    motus whoami
+    ```
+  </Step>
+  <Step title="Deploy">
+    ```bash
+    motus deploy --name weather-bot myapp:agent
+    ```
+
+    Motus packages your project, uploads it, and streams the build status:
+
+    ```
+    queued → building → built → deploying → deployed
+    ```
+
+    Once it finishes, your agent is live. The deploy command prints its URL when the build succeeds.
+
+    <Note>
+      The first deploy requires `--name` (or `--project-id`). Motus writes the assigned project ID and other metadata to a `motus.toml` file in your project root. On subsequent deploys, just run `motus deploy` with no arguments and it picks up the project from `motus.toml`.
+    </Note>
+  </Step>
+  <Step title="Chat with the deployed agent">
+    The same `motus serve chat` command works against cloud URLs:
+
+    ```bash
+    motus serve chat <your-agent-url> "What's the weather in Tokyo?"
+    ```
+
+    Auth headers are injected automatically from your stored credentials. You do not need to set any provider API keys for cloud deployments: Motus proxies model calls on your behalf.
+  </Step>
+</Steps>
+
+<Tip>
+  For CI or other non-interactive environments, set `LITHOSAI_API_KEY` in place of running `motus login`. It overrides the credentials file.
+</Tip>
+
+## The full loop, recap
+
+You just went from an empty directory to a cloud hosted agent:
+
+```bash
+# Write myapp.py (~15 lines)
+motus serve start myapp:agent --port 8000      # run it locally
+motus serve chat http://localhost:8000         # chat locally
+motus login                                    # one time auth
+motus deploy --name weather-bot myapp:agent    # ship to the cloud
+motus serve chat <your-agent-url>              # chat with the live agent
+```
+
+The same code runs in both places. The same command talks to both URLs. No Dockerfiles, no Kubernetes, no infra changes when you move from laptop to production.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Agents" icon="robot" href="/concepts/agents">
+    Dig into ReActAgent's reasoning loop, memory, guardrails, structured output, and usage tracking.
+  </Card>
+  <Card title="Tools" icon="screwdriver-wrench" href="/concepts/tools">
+    Write tools with `@tool`, wrap class methods with `@tools`, connect MCP servers, or run untrusted code in Docker sandboxes.
+  </Card>
+  <Card title="Serving" icon="server" href="/guides/serving">
+    Session management, worker pools, TTL, webhooks, and the full REST API.
+  </Card>
+  <Card title="Deployment" icon="cloud-arrow-up" href="/guides/deployment">
+    Secrets, Git based deploys, ignore rules, and the `motus.toml` project file.
+  </Card>
+</CardGroup>

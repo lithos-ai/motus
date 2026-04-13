@@ -1,0 +1,35 @@
+---
+title: Overview
+description: "The Motus CLI. Build, serve, and deploy AI agents from the command line."
+---
+
+The `motus` command is the entry point for the Motus Agent Framework CLI. Use it to run agents locally as HTTP servers, interact with them from the terminal, and deploy them to Motus Cloud.
+
+## Usage
+
+```bash
+motus <command> [options]
+```
+
+If no command is given, `motus` prints the help message and exits.
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `LITHOSAI_API_KEY` | API key for Motus Cloud. When set, replaces credential-file authentication for `deploy`, `login`, `logout`, and `whoami`. |
+| `LITHOSAI_API_URL` | Override the default Motus Cloud API endpoint (`https://api.lithosai.cloud`). |
+
+## Configuration files
+
+Motus reads project-level settings from `motus.toml` in the working directory. After a successful deploy, the CLI writes `project_id`, `build_id`, and `import_path` to this file so that subsequent commands can run without flags. See [Configuration](/getting-started/configuration) for details.
+
+## Subcommands
+
+| Command | Description |
+|---|---|
+| [`motus serve`](/reference/cli/serve/overview) | Start an agent HTTP server and interact with it |
+| [`motus deploy`](/reference/cli/deploy) | Package and deploy an agent to Motus Cloud |
+| [`motus login`](/reference/cli/login) | Authenticate with Motus Cloud |
+| [`motus logout`](/reference/cli/logout) | Revoke credentials and clear the local credential file |
+| [`motus whoami`](/reference/cli/whoami) | Print the identity associated with your current credentials |

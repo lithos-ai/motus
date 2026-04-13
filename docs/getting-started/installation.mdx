@@ -1,0 +1,142 @@
+---
+title: "Installation"
+description: "Install the Motus library, CLI, and optional coding agent plugin."
+---
+
+Motus ships as a single Python package, `lithosai-motus`, that includes both the Python library and the `motus` CLI. You can install it directly with `uv` or `pip`, or let a one line installer set up the library, the CLI, and plugins for Claude Code, Codex, and Cursor all at once.
+
+## Prerequisites
+
+You need a Python package manager. Either works:
+
+- **uv** (recommended). Installs with `curl -LsSf https://astral.sh/uv/install.sh | sh`. uv manages Python for you, so you do not need to install Python separately.
+- **pip** with **Python 3.12 or later** already installed (check with `python --version`).
+
+That is all you need to install Motus. Provider API keys are not required to install or to deploy. See [Set your API keys](#set-your-api-keys-optional) below if you plan to run agents against your own provider account.
+
+## Install
+
+<Tabs>
+  <Tab title="With a coding agent (fastest)">
+    One command installs the Motus CLI, the Python library, and plugins for Claude Code, Codex, and Cursor.
+
+    ```bash
+    curl -fsSL https://www.lithosai.com/motus/install.sh | sh
+    ```
+
+    After it finishes, your coding agent understands `/motus serve`, `/motus deploy`, and the rest of the plugin commands. See the [Plugin guide](/guides/plugin) for details.
+  </Tab>
+  <Tab title="uv">
+    ```bash
+    uv add lithosai-motus
+    ```
+
+    This installs the Python library and the `motus` CLI into your current uv project.
+  </Tab>
+  <Tab title="pip">
+    ```bash
+    pip install lithosai-motus
+    ```
+
+    This installs the Python library and the `motus` CLI into your current Python environment.
+
+    <Tip>
+      If you are not already inside a virtual environment, create one first to avoid polluting your global Python install: `python -m venv .venv && source .venv/bin/activate`.
+    </Tip>
+  </Tab>
+</Tabs>
+
+### Bring your existing agent framework
+
+Motus works hand in hand with the agent frameworks you already use. If you have agents written with the OpenAI Agents SDK or the Google ADK, keep them. Install the matching extra and Motus serves, deploys, and traces them alongside its own agents with no code changes.
+
+<Tabs>
+  <Tab title="OpenAI Agents SDK">
+    <CodeGroup>
+      ```bash uv
+      uv add "lithosai-motus[openai-agents]"
+      ```
+      ```bash pip
+      pip install "lithosai-motus[openai-agents]"
+      ```
+    </CodeGroup>
+  </Tab>
+  <Tab title="Google ADK">
+    <CodeGroup>
+      ```bash uv
+      uv add "lithosai-motus[google-adk]"
+      ```
+      ```bash pip
+      pip install "lithosai-motus[google-adk]"
+      ```
+    </CodeGroup>
+  </Tab>
+  <Tab title="All extras">
+    <CodeGroup>
+      ```bash uv
+      uv add "lithosai-motus[openai-agents,google-adk]"
+      ```
+      ```bash pip
+      pip install "lithosai-motus[openai-agents,google-adk]"
+      ```
+    </CodeGroup>
+  </Tab>
+</Tabs>
+
+<Note>
+  The Anthropic SDK and Google's `google-genai` client are part of the core install. You do not need an extra to use `motus.anthropic` or the `GeminiChatClient`.
+</Note>
+
+## Verify the installation
+
+Confirm the library imports cleanly:
+
+<CodeGroup>
+  ```bash uv
+  uv run python -c "from motus.agent import ReActAgent; print('Motus is ready')"
+  ```
+  ```bash pip
+  python -c "from motus.agent import ReActAgent; print('Motus is ready')"
+  ```
+</CodeGroup>
+
+You should see `Motus is ready` printed to your terminal.
+
+Confirm the CLI is on your PATH:
+
+```bash
+motus --help
+```
+
+<Tip>
+  If `motus` is not found after a pip install, make sure the Python `Scripts/bin` directory is on your PATH, or use `python -m motus` instead. uv users can run the CLI with `uv run motus`.
+</Tip>
+
+## Set your API keys (optional)
+
+This step is only needed if you want to run agents against your own provider account. Motus Cloud deployments and agents using the Motus model proxy do not need your own keys.
+
+Pick a provider and export its key. You only need one.
+
+```bash
+export OPENAI_API_KEY=sk-...
+# or
+export ANTHROPIC_API_KEY=sk-ant-...
+# or
+export GEMINI_API_KEY=...
+# or
+export OPENROUTER_API_KEY=sk-or-...
+```
+
+See [Configuration](/getting-started/configuration) for the full list of environment variables, `motus.toml` project settings, and `.env` file support.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/getting-started/quickstart">
+    Create a tool, wire up a model client, and run your first ReAct agent in minutes.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/getting-started/configuration">
+    API keys, runtime environment variables, and `motus.toml` project settings.
+  </Card>
+</CardGroup>
