@@ -1,6 +1,6 @@
 ---
 title: "Guardrails"
-description: "Validate, transform, or block agent inputs and outputs with plain Python functions."
+description: "Validate, transform, or block the inputs and outputs of agents and tools with plain Python functions."
 ---
 
 A guardrail is just a Python function you hand to an agent or a tool. There is no base class, no registration DSL. Motus calls it with the relevant value and interprets what the function returns.
@@ -11,7 +11,7 @@ Every guardrail has the same three-outcome rule:
 - **Return a value**: rewrite what the guardrail is guarding. A `str` replaces a string input or output; a `dict` patches specific keys of a tool's arguments or a structured output.
 - **Raise an exception**: block execution.
 
-Sync and async functions both work. Sync ones run on a background thread via `asyncio.to_thread`.
+Sync and async functions both work.
 
 <Note>
   Guardrails declare only the parameters they care about. Motus inspects the function signature and passes the matching values automatically, so you never need to accept the full set of arguments.
@@ -45,7 +45,7 @@ agent = ReActAgent(
 )
 ```
 
-Input guardrails receive the user's prompt as a string. If the function also declares an `agent` parameter, Motus passes in the agent instance so the guardrail can read configuration or call helpers. Return a string to rewrite the prompt; raise `InputGuardrailTripped` to block the run.
+Input guardrails receive the user's prompt as a string. If the function also declares a second parameter named `agent`, Motus passes in the running `ReActAgent` instance so the guardrail can read its configuration, inspect memory, or call helpers on it. Return a string to rewrite the prompt; raise `InputGuardrailTripped` to block the run.
 
 Output guardrails receive the final response string. Return a string to replace it; raise `OutputGuardrailTripped` to block.
 
@@ -55,7 +55,7 @@ Output guardrails receive the final response string. Return a string to replace 
 
 ## Tool guardrails
 
-Tool input guardrails run before a tool function executes. They receive keyword arguments whose names match the tool's own parameters.
+Tool input guardrails run before a tool function executes. They declare only the parameters they want to inspect, in exactly the names and types the tool uses. Motus reads the function's signature and passes just the matching arguments through.
 
 ```python
 from motus.guardrails import ToolInputGuardrailTripped
@@ -63,10 +63,12 @@ from motus.tools import tool
 
 
 @tool
-async def execute_sql(query: str) -> str: ...
+async def execute_sql(query: str, timeout: int = 30, database: str = "main") -> str:
+    """Run a SQL query."""
+    ...
 
 
-def block_drop(query: str):
+def block_drop(query: str):                  # only declares `query`
     if "DROP" in query.upper():
         raise ToolInputGuardrailTripped("DROP statements are forbidden.")
 
@@ -74,14 +76,16 @@ def block_drop(query: str):
 safe_sql = tool(execute_sql, input_guardrails=[block_drop])
 ```
 
-To **modify** an argument instead of blocking, return a `dict`. Motus merges it into the tool's kwargs; keys you omit stay unchanged.
+`block_drop` does not mention `timeout` or `database`, so Motus does not pass them in. The guardrail sees only `query`. This lets you write focused checks instead of accepting a long signature just to look at one field.
+
+To **modify** an argument instead of blocking, return a `dict` with the keys you want to change. Motus merges it into the tool's kwargs; omitted keys stay unchanged.
 
 ```python
 import re
 
 
-def redact_token(token: str) -> dict:
-    return {"token": re.sub(r"sk-\w+", "[REDACTED]", token)}
+def redact_token(query: str) -> dict:
+    return {"query": re.sub(r"sk-\w+", "[REDACTED]", query)}
 ```
 
 Tool output guardrails run after the tool returns, before the result gets serialized back to the model. They receive the raw return value.
