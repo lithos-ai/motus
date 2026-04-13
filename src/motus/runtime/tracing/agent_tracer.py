@@ -3,8 +3,13 @@
 Provides setup_tracing() to configure a TracerProvider with the
 appropriate SpanProcessors, and get_turn_metrics() for serve workers.
 The module-level `tracer` is the standard OTel Tracer used everywhere.
+
+Also exposes module-level helpers (allocate_external_task_id,
+ingest_external_span, update_external_span, config) used by the
+OAI/Anthropic/ADK tracing bridges.
 """
 
+import itertools
 import json
 import logging
 import os
@@ -229,252 +234,84 @@ def shutdown_tracing() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatible TraceManager shim
-# ---------------------------------------------------------------------------
-# The old TraceManager maintained its own task_meta dict and hook handlers.
-# agent_runtime.py still depends on this interface. This shim preserves
-# that interface while the migration to pure OTel spans is completed.
-# Framework integrations (anthropic, google_adk, openai_agents) no longer
-# use TraceManager — they create OTel spans directly via get_tracer().
+# External span helpers (used by OAI / Anthropic / ADK tracing bridges)
 # ---------------------------------------------------------------------------
 
-import itertools
-import time
-import uuid
-from contextvars import ContextVar
+_ext_counter = itertools.count(1_000_001)
+
+# Map external task_id -> OTel span + meta dict for later updates
+_external_spans: dict[int, dict[str, Any]] = {}
 
 
-def _now_us() -> int:
-    return int(time.time() * 1_000_000)
-
-
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).isoformat()
-
-
-class TraceManager:
-    """Backward-compatible task tracker used by agent_runtime's hook system.
-
-    New framework integrations should use get_tracer() and create OTel spans
-    directly instead of calling ingest_external_span().
-    """
-
-    def __init__(self, config: TraceConfig | None = None):
-        config = config or TraceConfig()
-        self.config = config
-        self.log_dir = config.log_dir
-        self.trace_id = str(uuid.uuid4())
-
-        self.current_task_stack: ContextVar[tuple[int, ...]] = ContextVar(
-            "current_task_stack", default=()
-        )
-        self.task_span_tree: dict[int, list[int]] = {}
-        self.task_meta: dict[int, dict] = {}
-        self._analytics_callback: Any = None
-        self._ext_task_counter = itertools.count(1_000_001)
-
-        # Ensure OTel TracerProvider is set up so hook-generated spans
-        # are also captured by OTel processors.
-        if config.is_collecting:
-            setup_tracing(config)
+class _ConfigProxy:
+    """Lightweight proxy that exposes ``is_collecting`` from module state."""
 
     @property
-    def _cloud_exporter(self):
-        """Backward compat for agent_runtime.py shutdown.
+    def is_collecting(self) -> bool:
+        return _config is not None and _config.is_collecting
 
-        Returns an object with .close() that calls shutdown_tracing().
-        """
 
-        class _Closer:
-            @staticmethod
-            def close():
-                shutdown_tracing()
+config = _ConfigProxy()
 
-        return _Closer() if _cloud_processor is not None else None
 
-    def export_trace(self) -> None:
-        export_trace()
+def allocate_external_task_id() -> int:
+    """Return a unique task_id for an external (non-native) span."""
+    return next(_ext_counter)
 
-    def close(self) -> None:
-        shutdown_tracing()
 
-    def set_session_id(self, session_id: str) -> None:
-        set_session_id(session_id)
+def ingest_external_span(meta: dict[str, Any], *, task_id: int | None = None) -> None:
+    """Create an OTel span from a bridge-supplied meta dict.
 
-    def set_analytics_callback(self, callback: Any) -> None:
-        self._analytics_callback = callback
+    The meta dict uses the same keys as the native motus tracing layer
+    (func, task_type, parent, start_us, end_us, model_name, usage, ...).
+    """
+    if _config is None:
+        setup_tracing()
 
-    def allocate_external_task_id(self) -> int:
-        return next(self._ext_task_counter)
+    tracer = trace.get_tracer("motus")
+    func_name = meta.get("func", "external")
+    task_type = meta.get("task_type", "unknown")
 
-    def get_stack(self) -> tuple[int, ...] | None:
-        if not self.config.is_collecting:
-            return None
-        return self.current_task_stack.get()
+    span = tracer.start_span(func_name)
 
-    def get_trace_id(self) -> str:
-        return self.trace_id
+    # Set standard motus attributes
+    span.set_attribute(ATTR_TASK_TYPE, task_type)
+    span.set_attribute(ATTR_FUNC, func_name)
 
-    # -- Hook event handlers (called by agent_runtime) --
+    if meta.get("model_name"):
+        span.set_attribute(ATTR_MODEL_NAME, meta["model_name"])
+    if meta.get("usage"):
+        span.set_attribute(ATTR_USAGE, json_attr(meta["usage"]))
+    if meta.get("model_output_meta"):
+        span.set_attribute(ATTR_MODEL_OUTPUT, json_attr(meta["model_output_meta"]))
+    if meta.get("model_input_meta"):
+        span.set_attribute(ATTR_MODEL_INPUT, json_attr(meta["model_input_meta"]))
+    if meta.get("tool_input_meta"):
+        span.set_attribute(ATTR_TOOL_INPUT, json_attr(meta["tool_input_meta"]))
+    if meta.get("tool_output_meta"):
+        span.set_attribute(ATTR_TOOL_OUTPUT, json_attr(meta["tool_output_meta"]))
+    if meta.get("error"):
+        span.set_attribute(ATTR_ERROR, str(meta["error"]))
 
-    def on_task_start(self, event: Any) -> None:
-        if not self.config.is_collecting:
-            return
-        task_id_int = event.task_id.id
-        parent_stack = (
-            event.metadata.get("parent_stack") if hasattr(event, "metadata") else None
-        )
-        stack = (
-            parent_stack if parent_stack is not None else self.current_task_stack.get()
-        )
-        parent = stack[-1] if stack else None
+    # End the span immediately (external spans are ingested after completion)
+    end_us = meta.get("end_us", 0)
+    if end_us > 0:
+        span.end(end_time=end_us * 1000)  # OTel expects nanoseconds
 
-        if parent is not None:
-            self.task_span_tree.setdefault(parent, []).append(task_id_int)
-        self.current_task_stack.set(stack + (task_id_int,))
+    if task_id is not None:
+        _external_spans[task_id] = {"span": span, "meta": meta}
 
-        self.task_meta[task_id_int] = {
-            "func": event.name,
-            "task_type": getattr(event, "task_type", None),
-            "parent": parent,
-            "started_at": _now_iso(),
-            "start_us": _now_us(),
-        }
 
-        # Also create an OTel span (started, not yet ended)
-        tracer = get_tracer()
-        span = tracer.start_span(
-            event.name,
-            attributes={
-                ATTR_FUNC: event.name,
-                ATTR_TASK_TYPE: getattr(event, "task_type", None) or "",
-            },
-        )
-        self.task_meta[task_id_int]["_otel_span"] = span
+def update_external_span(task_id: int, updates: dict[str, Any]) -> None:
+    """Update a previously ingested external span (e.g. set end_us)."""
+    entry = _external_spans.get(task_id)
+    if entry is None:
+        return
 
-    def on_task_end(self, event: Any) -> None:
-        if not self.config.is_collecting:
-            return
-        task_id_int = event.task_id.id
-        if task_id_int not in self.task_meta:
-            return
+    span = entry["span"]
+    entry["meta"].update(updates)
 
-        self.task_meta[task_id_int]["ended_at"] = _now_iso()
-        self.task_meta[task_id_int]["end_us"] = _now_us()
-
-        span = self.task_meta[task_id_int].pop("_otel_span", None)
-        if span is not None:
-            span.end()
-
-        stack = self.current_task_stack.get()
-        if stack and stack[-1] == task_id_int:
-            self.current_task_stack.set(stack[:-1])
-
-        if self._analytics_callback:
-            try:
-                self._analytics_callback(
-                    task_id_int, self.task_meta[task_id_int], success=True
-                )
-            except Exception:
-                pass
-
-    def on_task_error(self, event: Any) -> None:
-        if not self.config.is_collecting:
-            return
-        task_id_int = event.task_id.id
-        if task_id_int not in self.task_meta:
-            return
-
-        self.task_meta[task_id_int]["ended_at"] = _now_iso()
-        self.task_meta[task_id_int]["end_us"] = _now_us()
-        self.task_meta[task_id_int]["error"] = str(getattr(event, "error", ""))
-
-        span = self.task_meta[task_id_int].pop("_otel_span", None)
-        if span is not None:
-            error_str = str(getattr(event, "error", ""))
-            span.set_attribute(ATTR_ERROR, error_str)
-            span.set_status(trace.StatusCode.ERROR, error_str)
-            span.end()
-
-        stack = self.current_task_stack.get()
-        if stack and stack[-1] == task_id_int:
-            self.current_task_stack.set(stack[:-1])
-
-        if self._analytics_callback:
-            try:
-                self._analytics_callback(
-                    task_id_int, self.task_meta[task_id_int], success=False
-                )
-            except Exception:
-                pass
-
-    def on_task_cancelled(self, event: Any) -> None:
-        if not self.config.is_collecting:
-            return
-        task_id_int = event.task_id.id
-        if task_id_int not in self.task_meta:
-            return
-
-        self.task_meta[task_id_int]["ended_at"] = _now_iso()
-        self.task_meta[task_id_int]["end_us"] = _now_us()
-        self.task_meta[task_id_int]["cancelled"] = True
-        self.task_meta[task_id_int]["error"] = str(getattr(event, "error", ""))
-
-        span = self.task_meta[task_id_int].pop("_otel_span", None)
-        if span is not None:
-            span.set_attribute(ATTR_ERROR, "cancelled")
-            span.set_status(trace.StatusCode.ERROR, "cancelled")
-            span.end()
-
-        stack = self.current_task_stack.get()
-        if stack and stack[-1] == task_id_int:
-            self.current_task_stack.set(stack[:-1])
-
-        if self._analytics_callback:
-            try:
-                self._analytics_callback(
-                    task_id_int, self.task_meta[task_id_int], success=False
-                )
-            except Exception:
-                pass
-
-    # -- External span ingestion (legacy interface) --
-
-    def ingest_external_span(self, meta: dict, *, task_id: int | None = None) -> int:
-        """Ingest an externally-produced span. Legacy interface -- new code
-        should create OTel spans directly via get_tracer().
-        """
-        if not self.config.is_collecting:
-            return -1
-
-        if task_id is None:
-            task_id = self.allocate_external_task_id()
-
-        parent = meta.get("parent")
-        if parent is not None:
-            self.task_span_tree.setdefault(parent, []).append(task_id)
-
-        self.task_meta[task_id] = meta
-
-        if self._analytics_callback:
-            try:
-                self._analytics_callback(task_id, meta, success="error" not in meta)
-            except Exception:
-                pass
-
-        return task_id
-
-    def update_external_span(self, task_id: int, updates: dict) -> None:
-        """Update an existing external span's metadata."""
-        if not self.config.is_collecting:
-            return
-        meta = self.task_meta.get(task_id)
-        if meta is None:
-            return
-        meta.update(updates)
-
-    def get_turn_metrics(self) -> dict:
-        """Return aggregate metrics (delegates to module-level function)."""
-        return get_turn_metrics()
+    if "end_us" in updates and updates["end_us"] > 0:
+        span.end(end_time=updates["end_us"] * 1000)
+        # Clean up — span is finalized
+        _external_spans.pop(task_id, None)

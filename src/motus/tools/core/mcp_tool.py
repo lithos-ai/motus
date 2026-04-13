@@ -377,25 +377,8 @@ class MCPSession:
 
     @classmethod
     async def _connect_on_engine(cls, instance: "MCPSession") -> None:
-        """Route connection to the AgentEngine loop with lock protection.
-
-        Detects whether the caller is already on the AgentEngine loop to
-        avoid deadlock from ``run_coroutine_threadsafe`` + ``wrap_future``.
-        """
-        from motus.runtime.agent_runtime import get_runtime
-
-        rt = get_runtime()
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-        if current_loop is rt._loop:
-            await instance._ensure_connected()
-        else:
-            future = asyncio.run_coroutine_threadsafe(
-                instance._ensure_connected(), rt._loop
-            )
-            await asyncio.wrap_future(future)
+        """Establish the MCP connection with lock protection."""
+        await instance._ensure_connected()
 
     @classmethod
     async def connect(

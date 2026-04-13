@@ -3,8 +3,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping
 from typing import Any, Self
 
-from motus.runtime.agent_task import agent_task
-from motus.runtime.types import TOOL_CALL
+from motus.runtime.tracing.decorators import traced_tool_call
 
 
 class Tool(ABC):
@@ -65,7 +64,7 @@ class Tool(ABC):
             )
         return self._execute(**parsed)
 
-    @agent_task(task_type=TOOL_CALL)
+    @traced_tool_call
     async def _execute(self, **kwargs) -> str:
         """Shared execution boundary — tracing + guardrails + error handling.
 

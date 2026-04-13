@@ -22,8 +22,6 @@ from typing import is_typeddict as _is_typeddict
 import jsonref
 from pydantic import BaseModel
 
-from motus.runtime.agent_future import AgentFuture
-
 from ._attrs import _get_tool_attr, resolve_tool_name
 from .tool import Tool
 
@@ -235,13 +233,6 @@ class FunctionTool(Tool):
         output_guardrails: list[Callable] | None = None,
         requires_approval: bool | None = None,
     ) -> None:
-        # Unwrap @agent_task wrappers to get the raw function/method.
-        # This avoids triple-nesting: FunctionTool.__call__ (@agent_task) →
-        # tool_execute_task (@agent_task) → unwrapped async func (direct call).
-        from motus.runtime.agent_task import AgentTaskDefinition, _BoundAgentTask
-
-        if isinstance(func, (AgentTaskDefinition, _BoundAgentTask)):
-            func = func.unwrap_task()
         # Support callable objects.  Keep functools.partial (and other
         # callables wrapping async functions) as-is so that
         # iscoroutinefunction() still detects them correctly.
@@ -329,14 +320,11 @@ class FunctionTool(Tool):
         return self._execute(**kwargs)
 
     async def _invoke(self, **kwargs) -> Any:
-        """Call the wrapped Python function (sync/async/AgentFuture)."""
+        """Call the wrapped Python function (sync or async)."""
         if iscoroutinefunction(self.func):
-            result = await self.func(**kwargs)
+            return await self.func(**kwargs)
         else:
-            result = await asyncio.to_thread(self.func, **kwargs)
-        if isinstance(result, AgentFuture):
-            result = await result
-        return result
+            return await asyncio.to_thread(self.func, **kwargs)
 
     def _serialize(self, result: Any) -> str:
         """Encode using ReturnType (handles dataclasses, BaseModel, etc.)."""

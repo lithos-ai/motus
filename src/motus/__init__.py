@@ -9,7 +9,7 @@ from fastapi.routing import APIRoute
 from openai import AsyncOpenAI
 from uvicorn import Config, Server
 
-from .runtime import init, is_initialized, shutdown
+from .runtime import setup_tracing, shutdown_tracing  # noqa: F401
 from .tools import (
     DEFAULT_TOOL_PROVIDER,
     FunctionTool,

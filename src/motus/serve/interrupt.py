@@ -80,15 +80,6 @@ def _init_interrupt_channel(conn: Connection) -> None:
     _conn = conn
     _loop = asyncio.get_running_loop()
 
-    # Forkserver workers inherit a runtime whose _loop is stale (no event loop
-    # was running during preload). Re-bind to the current loop instead of
-    # asserting — this preserves the runtime's tracer and cloud exporter.
-    from motus.runtime.agent_runtime import get_runtime
-
-    _runtime = get_runtime()
-    if _runtime._loop is not _loop:
-        _runtime._loop = _loop
-
     _reader_thread = threading.Thread(
         target=_pipe_reader_thread,
         name="motus-interrupt-reader",

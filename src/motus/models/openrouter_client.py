@@ -11,7 +11,7 @@ from urllib.request import urlopen
 import httpx
 from pydantic import BaseModel
 
-from motus.runtime.agent_task import agent_task
+from motus.runtime.tracing.decorators import traced
 
 from .base import ChatCompletion, ChatMessage, ReasoningConfig, ToolDefinition
 from .openai_client import OpenAIChatClient
@@ -147,7 +147,7 @@ class OpenRouterChatClient(OpenAIChatClient):
             **kwargs,
         )
 
-    @agent_task
+    @traced()
     async def generate_image_base64(self, model: str, prompt: str) -> str:
         """
         Generate an image via chat completions and return base64 data.

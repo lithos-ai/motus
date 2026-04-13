@@ -126,11 +126,9 @@ def _validate_result(result) -> tuple[ChatMessage, list[ChatMessage]]:
 def _get_trace_metrics() -> dict | None:
     """Collect trace metrics from the motus runtime if available."""
     try:
-        from motus.runtime.agent_runtime import get_runtime
+        from motus.runtime.tracing.agent_tracer import get_turn_metrics
 
-        rt = get_runtime()
-        if hasattr(rt, "scheduler") and hasattr(rt.scheduler, "tracer"):
-            return rt.scheduler.tracer.get_turn_metrics()
+        return get_turn_metrics()
     except Exception:
         pass
     return None
@@ -144,13 +142,9 @@ def _finalize_trace() -> None:
     the main process kills this subprocess.
     """
     try:
-        from motus.runtime.agent_runtime import get_runtime
+        from motus.runtime.tracing.agent_tracer import shutdown_tracing
 
-        rt = get_runtime()
-        if hasattr(rt, "scheduler") and hasattr(rt.scheduler, "tracer"):
-            exporter = rt.scheduler.tracer._cloud_exporter
-            if exporter is not None:
-                exporter.close()  # flush remaining spans + POST /complete
+        shutdown_tracing()
     except Exception:
         pass
 
@@ -188,11 +182,9 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
 
         if session_id:
             try:
-                from motus.runtime.agent_runtime import get_runtime
+                from motus.runtime.tracing.agent_tracer import set_session_id
 
-                rt = get_runtime()
-                if hasattr(rt, "scheduler") and hasattr(rt.scheduler, "tracer"):
-                    rt.scheduler.tracer.set_session_id(session_id)
+                set_session_id(session_id)
             except Exception:
                 pass  # tracer unavailable is not fatal
 
@@ -245,12 +237,6 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
         )
     finally:
         conn.close()
-        try:
-            from motus.runtime.agent_runtime import shutdown as _rt_shutdown
-
-            _rt_shutdown()
-        except Exception:
-            pass
 
 
 def _run_worker(

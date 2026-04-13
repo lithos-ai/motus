@@ -13,8 +13,7 @@ from motus.memory.base_memory import BaseMemory
 from motus.memory.basic_memory import BasicMemory
 from motus.memory.compaction_memory import CompactionMemory
 from motus.models import BaseChatClient, ChatMessage, ReasoningConfig, ToolDefinition
-from motus.runtime.agent_task import agent_task
-from motus.runtime.types import AGENT_CALL
+from motus.runtime.tracing.decorators import traced_agent_call
 from motus.tools.core.tool import Tool
 
 # Type variable for the return type of __call__
@@ -394,7 +393,7 @@ class AgentBase(ABC, Generic[T]):
             self._name = self._infer_name()
         return self._execute(user_prompt, **kwargs)
 
-    @agent_task(task_type=AGENT_CALL)
+    @traced_agent_call
     async def _execute(
         self,
         user_prompt: Optional[str] = None,

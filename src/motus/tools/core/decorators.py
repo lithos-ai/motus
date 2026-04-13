@@ -3,8 +3,6 @@ from typing import Any, Awaitable, Callable, Container, List
 
 from pydantic import BaseModel
 
-from motus.runtime.hooks import HookCallback, hooks
-
 
 def _set_tool_attr(obj: Callable[..., Awaitable], attr: str, value: Any) -> None:
     target = obj.__func__ if ismethod(obj) else obj
@@ -28,9 +26,9 @@ def tool(
     requires_approval: bool = False,
     input_guardrails: list[Callable] | None = None,
     output_guardrails: list[Callable] | None = None,
-    on_start: HookCallback | List[HookCallback] | None = None,
-    on_end: HookCallback | List[HookCallback] | None = None,
-    on_error: HookCallback | List[HookCallback] | None = None,
+    on_start: Callable | List[Callable] | None = None,
+    on_end: Callable | List[Callable] | None = None,
+    on_error: Callable | List[Callable] | None = None,
 ) -> Callable[..., Awaitable]:
     """Decorator that attaches tool metadata to a callable.
 
@@ -79,16 +77,6 @@ def tool(
             if output_guardrails is not None:
                 _set_tool_attr(target, "__tool_output_guardrails__", output_guardrails)
             tool_name = getattr(target, "__tool_name__", None)
-
-        # Register per-task hooks supplied via decorator arguments.
-        if tool_name is not None:
-            for event_type, cb in (
-                ("task_start", on_start),
-                ("task_end", on_end),
-                ("task_error", on_error),
-            ):
-                if cb is not None:
-                    hooks.register_name_hook(tool_name, event_type, cb)
 
         return target
 
