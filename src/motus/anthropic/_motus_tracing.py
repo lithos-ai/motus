@@ -1,32 +1,38 @@
 """Span building helpers for Anthropic SDK tool runner tracing.
 
-Pure functions that convert Anthropic SDK objects (BetaMessage, tool_use blocks)
-into motus task_meta dicts for TraceManager.ingest_external_span().
+Creates OTel spans directly using get_tracer() instead of building dicts
+for TraceManager.ingest_external_span().
 """
 
 from __future__ import annotations
 
-import datetime
 import time
 from typing import Any
 
-from motus.runtime.types import AGENT_CALL, MODEL_CALL, TOOL_CALL
+from opentelemetry import context as otel_context
+from opentelemetry import trace
+
+from motus.runtime.tracing.agent_tracer import (
+    ATTR_ERROR,
+    ATTR_FUNC,
+    ATTR_MODEL_INPUT,
+    ATTR_MODEL_NAME,
+    ATTR_MODEL_OUTPUT,
+    ATTR_TASK_TYPE,
+    ATTR_TOOL_INPUT,
+    ATTR_TOOL_OUTPUT,
+    ATTR_USAGE,
+    get_tracer,
+    json_attr,
+)
 
 # Limit large values to prevent huge SSE payloads
 _MAX_VALUE_LEN = 4000
 
 
-def _now_us() -> int:
-    """Current time in microseconds since epoch."""
-    return int(time.time() * 1_000_000)
-
-
-def _us_to_iso(us: int) -> str:
-    """Convert microseconds since epoch to ISO 8601 string."""
-    if not us:
-        return ""
-    dt = datetime.datetime.fromtimestamp(us / 1_000_000, tz=datetime.timezone.utc)
-    return dt.isoformat()
+def _now_ns() -> int:
+    """Current time in nanoseconds since epoch (OTel native unit)."""
+    return int(time.time() * 1_000_000_000)
 
 
 def _truncate(value: Any, limit: int = _MAX_VALUE_LEN) -> Any:
@@ -36,51 +42,59 @@ def _truncate(value: Any, limit: int = _MAX_VALUE_LEN) -> Any:
     return value
 
 
-def build_agent_call_meta(
+def start_agent_span(
     *,
     model: str,
-    start_us: int,
-) -> dict[str, Any]:
-    """Build a root agent_call span that parents all model/tool spans in a turn."""
-    return {
-        "func": f"anthropic_tool_runner({model})",
-        "task_type": AGENT_CALL,
-        "parent": None,
-        "started_at": _us_to_iso(start_us),
-        "start_us": start_us,
-        "ended_at": "",  # Updated when turn completes
-        "end_us": 0,
-        "model_name": model,
-    }
+) -> trace.Span:
+    """Start a root agent_call span that parents all model/tool spans in a turn.
+
+    Returns the started (but not ended) span. Caller must call span.end()
+    when the turn completes.
+    """
+    tracer = get_tracer()
+    span = tracer.start_span(
+        f"anthropic_tool_runner({model})",
+        attributes={
+            ATTR_FUNC: f"anthropic_tool_runner({model})",
+            ATTR_TASK_TYPE: "agent_call",
+            ATTR_MODEL_NAME: model,
+        },
+        start_time=_now_ns(),
+    )
+    return span
 
 
-def build_model_call_meta(
+def emit_model_span(
     *,
     message: Any,
     model: str,
     input_messages: list | None,
-    start_us: int,
-    end_us: int,
-    parent: int | None,
-) -> dict[str, Any]:
-    """Build a model_call span from a BetaMessage / ParsedBetaMessage."""
-    meta: dict[str, Any] = {
-        "func": model,
-        "task_type": MODEL_CALL,
-        "parent": parent,
-        "started_at": _us_to_iso(start_us),
-        "start_us": start_us,
-        "ended_at": _us_to_iso(end_us),
-        "end_us": end_us,
-        "model_name": model,
-    }
+    start_ns: int,
+    end_ns: int,
+    parent_context: otel_context.Context | None = None,
+) -> None:
+    """Create and immediately end a model_call span from a BetaMessage."""
+    tracer = get_tracer()
+    ctx = parent_context or otel_context.get_current()
+
+    span = tracer.start_span(
+        model,
+        context=ctx,
+        attributes={
+            ATTR_FUNC: model,
+            ATTR_TASK_TYPE: "model_call",
+            ATTR_MODEL_NAME: model,
+        },
+        start_time=start_ns,
+    )
 
     # Usage
+    usage_dict: dict[str, Any] = {}
     if message is not None and hasattr(message, "usage") and message.usage:
         usage = message.usage
         input_tokens = getattr(usage, "input_tokens", 0) or 0
         output_tokens = getattr(usage, "output_tokens", 0) or 0
-        meta["usage"] = {
+        usage_dict = {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": input_tokens + output_tokens,
@@ -88,9 +102,10 @@ def build_model_call_meta(
         cache_creation = getattr(usage, "cache_creation_input_tokens", None)
         cache_read = getattr(usage, "cache_read_input_tokens", None)
         if cache_creation is not None:
-            meta["usage"]["cache_creation_input_tokens"] = cache_creation
+            usage_dict["cache_creation_input_tokens"] = cache_creation
         if cache_read is not None:
-            meta["usage"]["cache_read_input_tokens"] = cache_read
+            usage_dict["cache_read_input_tokens"] = cache_read
+        span.set_attribute(ATTR_USAGE, json_attr(usage_dict))
 
     # Output metadata
     if message is not None and hasattr(message, "content") and message.content:
@@ -118,43 +133,45 @@ def build_model_call_meta(
             output_meta["role"] = "assistant"
         if tool_calls:
             output_meta["tool_calls"] = tool_calls
-        if meta.get("usage"):
-            output_meta["usage"] = meta["usage"]
-        meta["model_output_meta"] = output_meta
+        if usage_dict:
+            output_meta["usage"] = usage_dict
+        span.set_attribute(ATTR_MODEL_OUTPUT, json_attr(output_meta))
 
     # Input metadata
     if input_messages:
-        meta["model_input_meta"] = input_messages
+        span.set_attribute(ATTR_MODEL_INPUT, json_attr(input_messages))
 
-    return meta
+    span.end(end_time=end_ns)
 
 
-def build_tool_call_meta(
+def emit_tool_span(
     *,
     tool_name: str,
     tool_input: Any,
     tool_output: Any | None = None,
-    start_us: int,
-    end_us: int,
-    parent: int | None,
+    start_ns: int,
+    end_ns: int,
+    parent_context: otel_context.Context | None = None,
     error: str | None = None,
-) -> dict[str, Any]:
-    """Build a tool_call span for a single tool invocation."""
-    meta: dict[str, Any] = {
-        "func": tool_name,
-        "task_type": TOOL_CALL,
-        "parent": parent,
-        "started_at": _us_to_iso(start_us),
-        "start_us": start_us,
-        "ended_at": _us_to_iso(end_us),
-        "end_us": end_us,
-        "tool_input_meta": {
-            "name": tool_name,
-            "arguments": tool_input,
+) -> None:
+    """Create and immediately end a tool_call span."""
+    tracer = get_tracer()
+    ctx = parent_context or otel_context.get_current()
+
+    span = tracer.start_span(
+        tool_name,
+        context=ctx,
+        attributes={
+            ATTR_FUNC: tool_name,
+            ATTR_TASK_TYPE: "tool_call",
+            ATTR_TOOL_INPUT: json_attr({"name": tool_name, "arguments": tool_input}),
         },
-    }
+        start_time=start_ns,
+    )
     if tool_output is not None:
-        meta["tool_output_meta"] = _truncate(tool_output)
+        span.set_attribute(ATTR_TOOL_OUTPUT, json_attr(_truncate(tool_output)))
     if error:
-        meta["error"] = error
-    return meta
+        span.set_attribute(ATTR_ERROR, error)
+        span.set_status(trace.StatusCode.ERROR, error)
+
+    span.end(end_time=end_ns)

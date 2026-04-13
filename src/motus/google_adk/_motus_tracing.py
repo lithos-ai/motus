@@ -1,23 +1,39 @@
-"""MotusSpanProcessor — bridges Google ADK OTEL spans into motus TraceManager.
+"""MotusSpanProcessor -- bridges Google ADK OTel spans into motus tracing.
 
-Google ADK emits OpenTelemetry spans for agent invocations, LLM calls, and
-tool executions. This SpanProcessor converts each completed span into motus
-task_meta format and calls TraceManager.ingest_external_span() so it appears
-in the motus trace viewer, Jaeger export, and analytics pipeline.
+Google ADK emits OpenTelemetry spans with gen_ai.* semconv attributes.
+This SpanProcessor re-emits each completed ADK span on the motus tracer
+with motus.* attributes so it flows through our SpanProcessors
+(OfflineSpanCollector, LiveSpanProcessor, CloudSpanProcessor) and
+appears in the trace viewer, Jaeger export, and analytics pipeline.
 """
 
 from __future__ import annotations
 
-import datetime
 import json
 import logging
 from typing import Any
 
-from motus.runtime.types import MODEL_CALL, TOOL_CALL
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
+
+from motus.runtime.tracing.agent_tracer import (
+    ATTR_ERROR,
+    ATTR_FUNC,
+    ATTR_MODEL_INPUT,
+    ATTR_MODEL_NAME,
+    ATTR_MODEL_OUTPUT,
+    ATTR_TASK_TYPE,
+    ATTR_TOOL_INPUT,
+    ATTR_TOOL_OUTPUT,
+    ATTR_USAGE,
+    get_tracer,
+    json_attr,
+)
 
 logger = logging.getLogger("AgentTracer")
 
-# OTEL semconv attribute keys used by Google ADK
+# OTel semconv attribute keys used by Google ADK
 _OP_NAME = "gen_ai.operation.name"
 _AGENT_NAME = "gen_ai.agent.name"
 _MODEL = "gen_ai.request.model"
@@ -35,29 +51,13 @@ _TOOL_ARGS = "gcp.vertex.agent.tool_call_args"
 _TOOL_RESPONSE = "gcp.vertex.agent.tool_response"
 
 
-def _span_time_us(span, attr: str) -> int:
-    """Extract start/end time from an OTEL ReadableSpan as microseconds since epoch."""
-    ns = getattr(span, attr, None)
-    if ns is None:
-        return 0
-    return ns // 1000
-
-
-def _ns_to_iso(ns: int) -> str:
-    """Convert nanoseconds since epoch to ISO 8601 string."""
-    if not ns:
-        return ""
-    dt = datetime.datetime.fromtimestamp(ns / 1e9, tz=datetime.timezone.utc)
-    return dt.isoformat()
-
-
-def _get_attr(span, key: str, default=None):
+def _get_attr(span: ReadableSpan, key: str, default: Any = None) -> Any:
     """Safely get a span attribute."""
-    attrs = getattr(span, "attributes", None) or {}
+    attrs = span.attributes or {}
     return attrs.get(key, default)
 
 
-def _parse_json_attr(span, key: str) -> dict | list | None:
+def _parse_json_attr(span: ReadableSpan, key: str) -> dict | list | None:
     """Parse a JSON-encoded span attribute, returning None on failure."""
     val = _get_attr(span, key)
     if not val or val == "{}":
@@ -68,143 +68,98 @@ def _parse_json_attr(span, key: str) -> dict | list | None:
         return None
 
 
-class MotusSpanProcessor:
-    """Receives OTEL spans from Google ADK and forwards them to motus TraceManager.
+class MotusSpanProcessor(SpanProcessor):
+    """Receives OTel spans from Google ADK and re-emits them on the motus tracer.
 
-    Google ADK's OTEL hierarchy includes internal spans (without
-    ``gen_ai.operation.name``) between ``invoke_agent`` and
-    ``generate_content``::
-
-        [internal runner span]          ← no gen_ai.operation.name
-        └── invoke_agent
-            └── [internal span]         ← no gen_ai.operation.name
-                └── generate_content
-                    ├── execute_tool
-                    └── execute_tool
-
-    This processor collapses the non-ADK intermediate spans so that the
-    ADK hierarchy is preserved cleanly::
-
-        agent_call
-        └── model_call
-            ├── tool_call
-            └── tool_call
-
-    Non-ADK spans are tracked for parent-chain resolution but never
-    ingested.  When a non-ADK span ends (after all its children), any
-    children that pointed to it are re-parented to its own parent via
-    ``update_external_span``.
+    Instead of building dicts and calling ingest_external_span(), this
+    creates new OTel spans on the motus tracer with motus.* attributes.
+    Those spans then flow through our configured SpanProcessors
+    (OfflineSpanCollector, LiveSpanProcessor, CloudSpanProcessor).
 
     Usage::
 
-        from google.adk.telemetry.setup import OTelHooks, maybe_set_otel_providers
-
-        processor = MotusSpanProcessor(trace_manager)
-        maybe_set_otel_providers([OTelHooks(span_processors=[processor])])
+        processor = MotusSpanProcessor()
+        # Add to ADK's TracerProvider or motus's TracerProvider
+        provider.add_span_processor(processor)
     """
 
-    def __init__(self, trace_manager) -> None:
-        self._tm = trace_manager
-        # OTEL span_id → pre-allocated motus task_id.
-        self._span_id_map: dict[int, int] = {}
-        # motus task_id → list of child motus task_ids.  Used to re-parent
-        # children when a non-ADK intermediate span ends.
-        self._children: dict[int, list[int]] = {}
+    def on_start(
+        self, span: ReadableSpan, parent_context: Context | None = None
+    ) -> None:
+        pass  # We process on end when all attributes are populated
 
-    def on_start(self, span, parent_context=None) -> None:
-        """Pre-allocate a motus task_id and record the OTEL→motus mapping."""
-        ctx = getattr(span, "context", None)
-        if ctx is not None:
-            self._span_id_map[ctx.span_id] = self._tm.allocate_external_task_id()
-
-    def on_end(self, span) -> None:
-        """Convert a completed OTEL span to motus task_meta and ingest."""
-        if not self._tm.config.is_collecting:
-            return
-
-        ctx = getattr(span, "context", None)
-        otel_span_id = ctx.span_id if ctx else None
-        task_id = self._span_id_map.pop(otel_span_id, None) if otel_span_id else None
-
-        # Resolve OTEL parent → motus task_id
-        parent_ctx = getattr(span, "parent", None)
-        parent_task_id = (
-            self._span_id_map.get(parent_ctx.span_id) if parent_ctx else None
-        )
-
+    def on_end(self, span: ReadableSpan) -> None:
+        """Re-emit a completed ADK span on the motus tracer with motus attributes."""
         op = _get_attr(span, _OP_NAME)
-        if op is None or _get_attr(span, _TOOL_NAME) == "(merged tools)":
-            # Non-ADK intermediate span (e.g. gRPC/GenAI SDK internals)
-            # or synthetic "(merged tools)" batch span — skip ingestion.
-            # Collapse: re-parent any children that resolved to this span's
-            # task_id so they point to this span's own parent instead.
-            # Safe because OTEL guarantees children end before parents.
-            if task_id is not None:
-                for child_id in self._children.pop(task_id, []):
-                    self._tm.update_external_span(child_id, {"parent": parent_task_id})
-                    if parent_task_id is not None:
-                        self._children.setdefault(parent_task_id, []).append(child_id)
-            return
+        if op is None:
+            return  # Not an ADK span
 
         task_type, func_name = self._classify(span, op)
+        tracer = get_tracer()
 
-        start_ns = getattr(span, "start_time", None) or 0
-        end_ns = getattr(span, "end_time", None) or 0
-
-        meta: dict[str, Any] = {
-            "func": func_name,
-            "task_type": task_type,
-            "parent": parent_task_id,
-            "started_at": _ns_to_iso(start_ns),
-            "start_us": start_ns // 1000 if start_ns else 0,
-            "ended_at": _ns_to_iso(end_ns),
-            "end_us": end_ns // 1000 if end_ns else 0,
-            "adk_operation": op,
+        # Build motus attributes
+        attrs: dict[str, Any] = {
+            ATTR_FUNC: func_name,
+            ATTR_TASK_TYPE: task_type,
         }
 
         # Error
         error_type = _get_attr(span, _ERROR_TYPE)
         if error_type:
-            meta["error"] = error_type
+            attrs[ATTR_ERROR] = str(error_type)
 
-        self._enrich_meta(meta, span, op)
-        self._tm.ingest_external_span(meta, task_id=task_id)
+        # Type-specific enrichment
+        self._enrich_attrs(attrs, span, op)
 
-        # Track as child of parent so non-ADK ancestors can re-parent us
-        if parent_task_id is not None and task_id is not None:
-            self._children.setdefault(parent_task_id, []).append(task_id)
+        # Create a new span on the motus tracer, preserving original timing.
+        # Use start_time/end from the ADK span (nanoseconds).
+        start_ns = span.start_time or 0
+        end_ns = span.end_time or start_ns
+
+        motus_span = tracer.start_span(
+            func_name,
+            attributes=attrs,
+            start_time=start_ns,
+        )
+
+        if error_type:
+            motus_span.set_status(trace.StatusCode.ERROR, str(error_type))
+
+        motus_span.end(end_time=end_ns)
 
     def shutdown(self) -> None:
-        self._span_id_map.clear()
-        self._children.clear()
+        pass
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
 
+    # -- internal helpers --
+
     @staticmethod
-    def _classify(span, op: str) -> tuple[str, str]:
+    def _classify(span: ReadableSpan, op: str) -> tuple[str, str]:
         """Return (task_type, func_name) for a given ADK span."""
         if op == "invoke_agent":
             name = _get_attr(span, _AGENT_NAME) or "agent"
             return "agent_call", name
         if op == "generate_content":
             model = _get_attr(span, _MODEL) or "llm"
-            return MODEL_CALL, model
+            return "model_call", model
         if op == "execute_tool":
             name = _get_attr(span, _TOOL_NAME) or "tool"
-            return TOOL_CALL, name
+            return "tool_call", name
         # Fallback
         name = _get_attr(span, _AGENT_NAME) or op
         return op, name
 
     @staticmethod
-    def _enrich_meta(meta: dict, span, op: str) -> None:
-        """Add type-specific fields that motus trace viewer / analytics expect."""
+    def _enrich_attrs(attrs: dict, span: ReadableSpan, op: str) -> None:
+        """Add type-specific motus attributes."""
         if op == "generate_content":
             model = _get_attr(span, _MODEL)
             if model:
-                meta["model_name"] = model
+                attrs[ATTR_MODEL_NAME] = model
 
+            # Usage
             usage: dict[str, Any] = {}
             input_tokens = _get_attr(span, _INPUT_TOKENS)
             output_tokens = _get_attr(span, _OUTPUT_TOKENS)
@@ -215,12 +170,9 @@ class MotusSpanProcessor:
             if input_tokens is not None and output_tokens is not None:
                 usage["total_tokens"] = input_tokens + output_tokens
             if usage:
-                meta["usage"] = usage
+                attrs[ATTR_USAGE] = json_attr(usage)
 
-            finish_reasons = _get_attr(span, _FINISH_REASONS)
-            if finish_reasons:
-                meta["finish_reasons"] = finish_reasons
-
+            # Model output
             output_meta: dict[str, Any] = {}
             if model:
                 output_meta["model"] = model
@@ -230,11 +182,12 @@ class MotusSpanProcessor:
             if llm_response:
                 output_meta["llm_response"] = llm_response
             if output_meta:
-                meta["model_output_meta"] = output_meta
+                attrs[ATTR_MODEL_OUTPUT] = json_attr(output_meta)
 
+            # Model input
             llm_request = _parse_json_attr(span, _LLM_REQUEST)
             if llm_request:
-                meta["model_input_meta"] = llm_request
+                attrs[ATTR_MODEL_INPUT] = json_attr(llm_request)
 
         elif op == "execute_tool":
             tool_name = _get_attr(span, _TOOL_NAME)
@@ -245,13 +198,13 @@ class MotusSpanProcessor:
             if tool_args:
                 tool_meta["arguments"] = tool_args
             if tool_meta:
-                meta["tool_input_meta"] = tool_meta
+                attrs[ATTR_TOOL_INPUT] = json_attr(tool_meta)
 
             tool_response = _parse_json_attr(span, _TOOL_RESPONSE)
             if tool_response:
-                meta["tool_output_meta"] = tool_response
+                attrs[ATTR_TOOL_OUTPUT] = json_attr(tool_response)
 
         elif op == "invoke_agent":
             agent_name = _get_attr(span, _AGENT_NAME)
             if agent_name:
-                meta["agent_name"] = agent_name
+                attrs[ATTR_FUNC] = agent_name

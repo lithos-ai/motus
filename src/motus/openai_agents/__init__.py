@@ -1,7 +1,7 @@
 """OpenAI Agents SDK compatibility layer for motus.
 
 Re-exports the real openai-agents package. motus intercepts at two levels:
-  - Tracing: MotusTracingProcessor bridges OAI SDK spans → motus TraceManager
+  - Tracing: MotusTracingProcessor bridges OAI SDK spans -> motus OTel tracer
   - Execution: MotusModel + tool wrapping sit in the call path (transparent
     pass-through now, future hooks for caching/routing/optimization)
 
@@ -54,18 +54,12 @@ _processor_registered = False
 
 
 def _get_tracer():
-    """Get the TraceManager from the motus runtime.
+    """Get the OTel tracer from motus tracing setup."""
+    from opentelemetry import trace
 
-    The runtime lazily initializes on first access, creating a fresh
-    TraceManager (with a live CloudLiveExporter thread) in each process.
-    This is inherently fork-safe — no stale threads from the parent.
-    """
-    try:
-        from motus.runtime.agent_runtime import get_runtime
+    from motus.runtime.tracing.agent_tracer import get_tracer
 
-        return get_runtime().scheduler.tracer
-    except Exception:
-        return None
+    return get_tracer()
 
 
 def _ensure_tracing():
@@ -73,28 +67,27 @@ def _ensure_tracing():
 
     Replaces OAI SDK's default BackendSpanExporter (which tries to POST
     to api.openai.com and fails with non-OpenAI keys) with our processor
-    that routes spans through the motus TraceManager.
+    that creates OTel spans on the motus tracer.
     """
     global _processor_registered
-    tracer = _get_tracer()
-    if _processor_registered or tracer is None:
-        return tracer
+    if _processor_registered:
+        return _get_tracer()
 
     try:
         from agents import set_trace_processors
 
-        processor = MotusTracingProcessor(tracer)
+        processor = MotusTracingProcessor()
         set_trace_processors([processor])
         _processor_registered = True
         logger.debug("Registered MotusTracingProcessor with OAI SDK")
     except Exception as e:
         logger.debug(f"Could not register MotusTracingProcessor: {e}")
 
-    return tracer
+    return _get_tracer()
 
 
 def get_tracer():
-    """Public accessor for the TraceManager instance."""
+    """Public accessor for the OTel tracer."""
     return _get_tracer()
 
 

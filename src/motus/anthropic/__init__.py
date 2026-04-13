@@ -42,13 +42,15 @@ except ImportError as exc:
         "Install or upgrade with: uv pip install 'anthropic>=0.49.0'"
     ) from exc
 
+from opentelemetry import trace
+
 from ._motus_runner import (  # noqa: F401
     MotusBetaAsyncStreamingToolRunner,
     MotusBetaAsyncToolRunner,
     MotusBetaStreamingToolRunner,
     MotusBetaToolRunner,
 )
-from ._motus_tracing import _now_us, build_agent_call_meta
+from ._motus_tracing import _now_ns, start_agent_span
 
 _TOOL_TYPES = (
     BetaAsyncFunctionTool,
@@ -63,23 +65,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger("AgentTracer")
 
 
-def _get_tracer():
-    """Get the TraceManager from the motus runtime.
+def _get_tracer() -> trace.Tracer:
+    """Get the OTel tracer from motus tracing setup."""
+    from motus.runtime.tracing.agent_tracer import get_tracer
 
-    The runtime lazily initializes on first access, creating a fresh
-    TraceManager (with a live CloudLiveExporter thread) in each process.
-    This is inherently fork-safe — no stale threads from the parent.
-    """
-    try:
-        from motus.runtime.agent_runtime import get_runtime
-
-        return get_runtime().scheduler.tracer
-    except Exception:
-        return None
+    return get_tracer()
 
 
-def get_tracer():
-    """Public accessor for the TraceManager instance."""
+def get_tracer() -> trace.Tracer:
+    """Public accessor for the OTel tracer."""
     return _get_tracer()
 
 
@@ -131,18 +125,12 @@ class ToolRunner:
         """
         from motus.models import ChatMessage as _CM
 
-        tracer = _get_tracer()
-
         # Build Anthropic messages from state + current message
         messages = _state_to_anthropic_messages(state)
         messages.append({"role": "user", "content": message.content or ""})
 
-        # Allocate root agent span
-        parent_task_id = None
-        if tracer and tracer.config.is_collecting:
-            parent_task_id = tracer.allocate_external_task_id()
-            root_meta = build_agent_call_meta(model=self.model, start_us=_now_us())
-            tracer.ingest_external_span(root_meta, task_id=parent_task_id)
+        # Start root agent span (ended after run completes)
+        parent_span = start_agent_span(model=self.model)
 
         # Separate runnable tools from raw tool dicts, auto-wrapping
         # plain functions and motus @tool objects so users don't need
@@ -155,7 +143,7 @@ class ToolRunner:
             if isinstance(tool, _TOOL_TYPES):
                 runnable_tools.append(tool)
             elif isinstance(tool, _FunctionTool):
-                # Unwrap motus @tool → extract the raw function
+                # Unwrap motus @tool -> extract the raw function
                 fn = tool.func
                 if inspect.iscoroutinefunction(fn):
                     runnable_tools.append(beta_async_tool(fn))
@@ -187,8 +175,7 @@ class ToolRunner:
             tools=runnable_tools,
             client=client,
             max_iterations=self.max_iterations,
-            trace_manager=tracer,
-            parent_task_id=parent_task_id,
+            parent_span=parent_span,
         )
         result = await runner.until_done()
 
@@ -199,8 +186,7 @@ class ToolRunner:
         response_text = "\n".join(text_parts) or "(no response)"
         response = _CM.assistant_message(content=response_text)
 
-        # Finalize root agent span (worker's _finalize_trace() handles close/flush)
-        if tracer and parent_task_id is not None:
-            tracer.update_external_span(parent_task_id, {"end_us": _now_us()})
+        # End root agent span
+        parent_span.end(end_time=_now_ns())
 
         return response, state + [message, response]

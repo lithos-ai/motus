@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from opentelemetry import trace
+
 try:
     from google.adk.agents.llm_agent import Agent as _ADKAgent
     from google.adk.runners import InMemoryRunner
@@ -37,27 +39,23 @@ _SESSION_ID = "motus_session"
 _otel_registered = False
 
 
-def _get_tracer():
-    """Get the TraceManager from the motus runtime.
+def _get_tracer() -> trace.Tracer:
+    """Get the OTel tracer from motus tracing setup."""
+    from motus.runtime.tracing.agent_tracer import get_tracer
 
-    The runtime lazily initializes on first access, creating a fresh
-    TraceManager (with a live CloudLiveExporter thread) in each process.
-    This is inherently fork-safe — no stale threads from the parent.
+    return get_tracer()
+
+
+def _ensure_tracing() -> None:
+    """Register MotusSpanProcessor with the OTel TracerProvider (once per process).
+
+    ADK emits OTel spans on the global TracerProvider. Our MotusSpanProcessor
+    re-emits them on the motus tracer with motus.* attributes so they flow
+    through our configured SpanProcessors.
     """
-    try:
-        from motus.runtime.agent_runtime import get_runtime
-
-        return get_runtime().scheduler.tracer
-    except Exception:
-        return None
-
-
-def _ensure_tracing():
-    """Register MotusSpanProcessor with Google ADK's OTEL providers (once per process)."""
     global _otel_registered
-    tracer = _get_tracer()
-    if _otel_registered or tracer is None:
-        return tracer
+    if _otel_registered:
+        return
 
     try:
         from opentelemetry import trace as otel_trace
@@ -65,7 +63,7 @@ def _ensure_tracing():
 
         from motus.google_adk._motus_tracing import MotusSpanProcessor
 
-        processor = MotusSpanProcessor(tracer)
+        processor = MotusSpanProcessor()
 
         # Add our processor to the existing TracerProvider if one is already set
         # (ADK or another library may have configured it). Otherwise, create one.
@@ -73,21 +71,19 @@ def _ensure_tracing():
         if isinstance(provider, TracerProvider):
             provider.add_span_processor(processor)
         else:
-            # Proxy wrapper — set up a new TracerProvider with our processor
+            # Proxy wrapper -- set up a new TracerProvider with our processor
             from google.adk.telemetry.setup import OTelHooks, maybe_set_otel_providers
 
             maybe_set_otel_providers([OTelHooks(span_processors=[processor])])
 
         _otel_registered = True
-        logger.debug("Registered MotusSpanProcessor with Google ADK OTEL")
+        logger.debug("Registered MotusSpanProcessor with Google ADK OTel")
     except Exception as e:
         logger.debug(f"Could not register MotusSpanProcessor: {e}")
 
-    return tracer
 
-
-def get_tracer():
-    """Public accessor for the TraceManager instance."""
+def get_tracer() -> trace.Tracer:
+    """Public accessor for the OTel tracer."""
     return _get_tracer()
 
 

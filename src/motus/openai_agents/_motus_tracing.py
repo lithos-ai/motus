@@ -1,9 +1,10 @@
-"""MotusTracingProcessor — bridges OAI SDK tracing into motus TraceManager.
+"""MotusTracingProcessor -- bridges OAI SDK tracing into motus OTel spans.
 
-OAI SDK emits trace/span events via TracingProcessor. This processor converts
-each completed span into motus task_meta format and calls
-TraceManager.ingest_external_span() so it appears in the motus trace viewer,
-Jaeger export, and analytics pipeline.
+OAI SDK emits trace/span events via its own TracingProcessor interface
+(not OTel). This processor converts each completed OAI span into an OTel
+span on the motus tracer with motus.* attributes, so it flows through
+our SpanProcessors and appears in the trace viewer, Jaeger export, and
+analytics pipeline.
 """
 
 from __future__ import annotations
@@ -15,94 +16,98 @@ from typing import Any
 from agents.tracing.processor_interface import TracingProcessor
 from agents.tracing.spans import Span
 from agents.tracing.traces import Trace
+from opentelemetry import trace
 
-from motus.runtime.types import MODEL_CALL, TOOL_CALL
+from motus.runtime.tracing.agent_tracer import (
+    ATTR_AGENT_ID,
+    ATTR_ERROR,
+    ATTR_FUNC,
+    ATTR_MODEL_INPUT,
+    ATTR_MODEL_NAME,
+    ATTR_MODEL_OUTPUT,
+    ATTR_TASK_TYPE,
+    ATTR_TOOL_INPUT,
+    ATTR_USAGE,
+    get_tracer,
+    json_attr,
+)
 
 logger = logging.getLogger("AgentTracer")
 
 
-def _iso_to_us(iso_str: str | None) -> int:
-    """Convert ISO 8601 timestamp to microseconds since epoch."""
+def _iso_to_ns(iso_str: str | None) -> int:
+    """Convert ISO 8601 timestamp to nanoseconds since epoch (OTel native unit)."""
     if not iso_str:
         return 0
     try:
         dt = datetime.datetime.fromisoformat(iso_str)
-        return int(dt.timestamp() * 1_000_000)
+        return int(dt.timestamp() * 1_000_000_000)
     except (ValueError, TypeError):
         return 0
 
 
 class MotusTracingProcessor(TracingProcessor):
-    """Receives OAI SDK trace/span events and forwards them to motus TraceManager.
+    """Receives OAI SDK trace/span events and creates OTel spans on the motus tracer.
 
     Usage::
 
         from agents import add_trace_processor
-        processor = MotusTracingProcessor(trace_manager)
+        processor = MotusTracingProcessor()
         add_trace_processor(processor)
     """
 
-    def __init__(self, trace_manager) -> None:
-        self._tm = trace_manager
-        # Map OAI span_id → motus task_id_int for parent resolution
-        self._span_id_map: dict[str, int] = {}
+    def on_trace_start(self, trace_obj: Trace) -> None:
+        pass
 
-    def on_trace_start(self, trace: Trace) -> None:
-        pass  # TraceManager already has its own trace_id
-
-    def on_trace_end(self, trace: Trace) -> None:
+    def on_trace_end(self, trace_obj: Trace) -> None:
         pass
 
     def on_span_start(self, span: Span[Any]) -> None:
-        if not self._tm.config.is_collecting:
-            return
-        # Pre-allocate a task_id so child spans can resolve their parent.
-        # Child spans end before their parent, so we must register the mapping
-        # here (not on_span_end) for parent lookups to succeed.
-        self._span_id_map[span.span_id] = self._tm.allocate_external_task_id()
+        pass  # We process on end when all data is available
 
     def on_span_end(self, span: Span[Any]) -> None:
-        """Convert completed OAI span to motus task_meta and ingest."""
-        if not self._tm.config.is_collecting:
-            return
-
+        """Convert completed OAI span to an OTel span on the motus tracer."""
         data = span.span_data
         exported = data.export() if data else {}
         span_type = data.type if data else "unknown"
 
-        # Map OAI span type → motus task_type + display name
+        # Map OAI span type -> motus task_type + display name
         task_type, func_name = self._classify(span_type, data)
 
-        # Resolve parent via span_id mapping (registered in on_span_start)
-        parent = self._span_id_map.get(span.parent_id) if span.parent_id else None
+        tracer = get_tracer()
 
-        # Use the task_id pre-allocated in on_span_start
-        task_id_int = self._span_id_map.get(span.span_id)
-        if task_id_int is None:
-            return  # Should not happen, but guard
-
-        meta: dict[str, Any] = {
-            "func": func_name,
-            "task_type": task_type,
-            "parent": parent,
-            "started_at": span.started_at or "",
-            "start_us": _iso_to_us(span.started_at),
-            "ended_at": span.ended_at or "",
-            "end_us": _iso_to_us(span.ended_at),
-            "oai_span_type": span_type,
-            "oai_span_data": exported,
+        # Build motus attributes
+        attrs: dict[str, Any] = {
+            ATTR_FUNC: func_name,
+            ATTR_TASK_TYPE: task_type,
         }
 
         if span.error:
-            meta["error"] = span.error.get("message", str(span.error))
+            error_msg = span.error.get("message", str(span.error))
+            attrs[ATTR_ERROR] = error_msg
 
-        # Add type-specific fields that motus trace viewer / analytics expect
-        self._enrich_meta(meta, span_type, data)
+        # Add type-specific enrichment
+        self._enrich_attrs(attrs, span_type, data)
 
-        self._tm.ingest_external_span(meta, task_id=task_id_int)
+        # Timestamps
+        start_ns = _iso_to_ns(span.started_at)
+        end_ns = _iso_to_ns(span.ended_at)
 
-        # Clean up span_id mapping to avoid unbounded growth
-        del self._span_id_map[span.span_id]
+        # Create the OTel span. Parent context is handled natively by OTel
+        # (no manual _span_id_map needed).
+        motus_span = tracer.start_span(
+            func_name,
+            attributes=attrs,
+            start_time=start_ns if start_ns > 0 else None,
+        )
+
+        if span.error:
+            motus_span.set_status(
+                trace.StatusCode.ERROR,
+                attrs.get(ATTR_ERROR, ""),
+            )
+
+        motus_span.end(end_time=end_ns if end_ns > 0 else None)
 
     def shutdown(self) -> None:
         pass
@@ -110,28 +115,28 @@ class MotusTracingProcessor(TracingProcessor):
     def force_flush(self) -> None:
         pass
 
-    # ── internal helpers ──
+    # -- internal helpers --
 
     @staticmethod
     def _classify(span_type: str, data: Any) -> tuple[str, str]:
         """Return (task_type, func_name) for a given OAI span type."""
         if span_type == "generation":
             model = getattr(data, "model", None) or "llm"
-            return MODEL_CALL, model
+            return "model_call", model
         if span_type == "response":
-            # Responses API — data.response is a Response object
+            # Responses API -- data.response is a Response object
             resp = getattr(data, "response", None)
             model = getattr(resp, "model", None) or "llm"
-            return MODEL_CALL, model
+            return "model_call", model
         if span_type == "function":
             name = getattr(data, "name", None) or "tool"
-            return TOOL_CALL, name
+            return "tool_call", name
         if span_type == "agent":
             name = getattr(data, "name", None) or "agent"
             return "agent_call", name
         if span_type == "handoff":
             to_agent = getattr(data, "to_agent", None) or "?"
-            return "handoff", f"handoff→{to_agent}"
+            return "handoff", f"handoff->{to_agent}"
         if span_type == "guardrail":
             name = getattr(data, "name", None) or "guardrail"
             return "guardrail", name
@@ -140,28 +145,26 @@ class MotusTracingProcessor(TracingProcessor):
         return span_type, name
 
     @staticmethod
-    def _enrich_meta(meta: dict, span_type: str, data: Any) -> None:
-        """Add type-specific fields that motus trace viewer / analytics expect."""
+    def _enrich_attrs(attrs: dict, span_type: str, data: Any) -> None:
+        """Add type-specific motus attributes."""
         if span_type == "generation":
             if hasattr(data, "model") and data.model:
-                meta["model_name"] = data.model
-            # model_output_meta: trace viewer expects .content / .tool_calls / .usage
+                attrs[ATTR_MODEL_NAME] = data.model
+            # Model output
             output_meta: dict[str, Any] = {}
             if hasattr(data, "model") and data.model:
                 output_meta["model"] = data.model
             if hasattr(data, "usage") and data.usage:
                 output_meta["usage"] = data.usage
             if hasattr(data, "output") and data.output:
-                # data.output is list[dict] (e.g. [message.model_dump()])
-                # trace viewer looks for .choices[0].message or top-level .content
                 first = data.output[0] if data.output else {}
                 output_meta["content"] = first.get("content")
                 output_meta["tool_calls"] = first.get("tool_calls")
                 output_meta["role"] = first.get("role")
             if output_meta:
-                meta["model_output_meta"] = output_meta
+                attrs[ATTR_MODEL_OUTPUT] = json_attr(output_meta)
             if hasattr(data, "input") and data.input:
-                # OAI SDK tool messages lack 'name' field — resolve from
+                # OAI SDK tool messages lack 'name' field -- resolve from
                 # assistant tool_calls in the same conversation turn
                 messages = list(data.input)
                 tc_id_to_name: dict[str, str] = {}
@@ -176,36 +179,37 @@ class MotusTracingProcessor(TracingProcessor):
                         name = tc_id_to_name.get(msg.get("tool_call_id", ""))
                         if name:
                             msg["name"] = name
-                meta["model_input_meta"] = messages
+                attrs[ATTR_MODEL_INPUT] = json_attr(messages)
+
         elif span_type == "response":
-            # Responses API — data is ResponseSpanData with .response (Response) and .input
+            # Responses API -- data is ResponseSpanData
             resp = getattr(data, "response", None)
             if resp is not None:
-                meta["model_name"] = getattr(resp, "model", None)
-                # Extract output from Response.output (list of output items)
+                model = getattr(resp, "model", None)
+                if model:
+                    attrs[ATTR_MODEL_NAME] = model
+
                 output_meta: dict[str, Any] = {}
-                if resp.model:
-                    output_meta["model"] = resp.model
+                if model:
+                    output_meta["model"] = model
                 if resp.usage:
-                    output_meta["usage"] = {
+                    usage_dict = {
                         "input_tokens": resp.usage.input_tokens,
                         "output_tokens": resp.usage.output_tokens,
                         "total_tokens": resp.usage.total_tokens,
                     }
-                    meta["usage"] = output_meta["usage"]
-                # Extract text content and tool calls from Response.output items
+                    output_meta["usage"] = usage_dict
+                    attrs[ATTR_USAGE] = json_attr(usage_dict)
                 if resp.output:
                     content_parts = []
                     tool_calls = []
                     for item in resp.output:
                         item_type = getattr(item, "type", None)
                         if item_type == "message":
-                            # ResponseOutputMessage — has .content list
                             for part in getattr(item, "content", []):
                                 if getattr(part, "type", None) == "output_text":
                                     content_parts.append(getattr(part, "text", ""))
                         elif item_type == "function_call":
-                            # ResponseFunctionToolCall
                             tool_calls.append(
                                 {
                                     "name": getattr(item, "name", None),
@@ -219,14 +223,16 @@ class MotusTracingProcessor(TracingProcessor):
                     if tool_calls:
                         output_meta["tool_calls"] = tool_calls
                 if output_meta:
-                    meta["model_output_meta"] = output_meta
-            # Extract input (ResponseSpanData.input)
+                    attrs[ATTR_MODEL_OUTPUT] = json_attr(output_meta)
+
+            # Input
             raw_input = getattr(data, "input", None)
             if raw_input:
                 if isinstance(raw_input, str):
-                    meta["model_input_meta"] = [{"role": "user", "content": raw_input}]
+                    attrs[ATTR_MODEL_INPUT] = json_attr(
+                        [{"role": "user", "content": raw_input}]
+                    )
                 elif isinstance(raw_input, list):
-                    # list of ResponseInputItemParam dicts or objects
                     messages = []
                     for item in raw_input:
                         if isinstance(item, dict):
@@ -235,10 +241,18 @@ class MotusTracingProcessor(TracingProcessor):
                             messages.append(item.model_dump())
                         else:
                             messages.append({"content": str(item)})
-                    meta["model_input_meta"] = messages
+                    attrs[ATTR_MODEL_INPUT] = json_attr(messages)
+
         elif span_type == "function":
             if hasattr(data, "name") and data.name:
-                meta["tool_input_meta"] = {
-                    "name": data.name,
-                    "arguments": data.input if hasattr(data, "input") else None,
-                }
+                attrs[ATTR_TOOL_INPUT] = json_attr(
+                    {
+                        "name": data.name,
+                        "arguments": data.input if hasattr(data, "input") else None,
+                    }
+                )
+
+        elif span_type == "agent":
+            name = getattr(data, "name", None)
+            if name:
+                attrs[ATTR_AGENT_ID] = name

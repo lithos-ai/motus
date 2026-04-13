@@ -1,7 +1,10 @@
 """Convert OTel ReadableSpan to the viewer/export dict format.
 
-This replaces trace_to_otel.py — since spans are now native OTel, the
-conversion goes OTel → viewer dict (the reverse of the old direction).
+This replaces trace_to_otel.py -- since spans are now native OTel, the
+conversion goes OTel -> viewer dict (the reverse of the old direction).
+
+Supports both motus.* attributes (from motus native spans) and gen_ai.*
+semconv attributes (from Google ADK spans that haven't been re-emitted).
 """
 
 import json
@@ -18,6 +21,19 @@ def _get_attr(span: ReadableSpan, key: str, default=None):
     return attrs.get(key, default)
 
 
+def _get_attr_multi(span: ReadableSpan, *keys: str, default=None):
+    """Read the first available attribute from multiple keys.
+
+    Tries motus.* keys first, then gen_ai.* semconv fallbacks.
+    """
+    attrs = span.attributes or {}
+    for key in keys:
+        val = attrs.get(key)
+        if val is not None:
+            return val
+    return default
+
+
 def _parse_json_attr(span: ReadableSpan, key: str) -> Any:
     """Parse a JSON-encoded span attribute."""
     val = _get_attr(span, key)
@@ -27,6 +43,15 @@ def _parse_json_attr(span: ReadableSpan, key: str) -> Any:
         return json.loads(val)
     except (json.JSONDecodeError, TypeError):
         return None
+
+
+def _parse_json_attr_multi(span: ReadableSpan, *keys: str) -> Any:
+    """Parse the first available JSON-encoded attribute from multiple keys."""
+    for key in keys:
+        result = _parse_json_attr(span, key)
+        if result is not None:
+            return result
+    return None
 
 
 def _normalize_model_name(model_name: str) -> str:
@@ -42,6 +67,9 @@ def readable_span_to_viewer_dict(span: ReadableSpan) -> dict:
     This produces the same structure that the JS trace viewer and Jaeger
     exporter expect: {traceId, spanId, parentSpanId, operationName,
     startTime, duration, tags, kind, meta}.
+
+    Supports both motus.* attributes and gen_ai.* semconv attributes
+    (from Google ADK spans).
     """
     ctx = span.context
     trace_id = format(ctx.trace_id, "032x") if ctx else "unknown"
@@ -70,8 +98,22 @@ def readable_span_to_viewer_dict(span: ReadableSpan) -> dict:
     start_us = start_ns // 1000
     duration_us = (end_ns - start_ns) // 1000
 
-    func_name = _get_attr(span, "motus.func", span.name)
+    func_name = _get_attr_multi(
+        span, "motus.func", "gen_ai.agent.name", "gen_ai.tool.name", default=span.name
+    )
     task_type = _get_attr(span, "motus.task_type", "")
+
+    # Infer task_type from gen_ai.operation.name if not set via motus
+    if not task_type:
+        gen_ai_op = _get_attr(span, "gen_ai.operation.name")
+        if gen_ai_op == "generate_content":
+            task_type = "model_call"
+        elif gen_ai_op == "execute_tool":
+            task_type = "tool_call"
+        elif gen_ai_op == "invoke_agent":
+            task_type = "agent_call"
+        elif gen_ai_op:
+            task_type = gen_ai_op
 
     # Build tags dict
     tags: dict[str, Any] = {
@@ -80,11 +122,30 @@ def readable_span_to_viewer_dict(span: ReadableSpan) -> dict:
         "task.type": task_type,
     }
 
-    # Model metadata
-    model_name = _get_attr(span, "motus.model_name", "")
-    model_output = _parse_json_attr(span, "motus.model_output_meta")
-    model_input = _parse_json_attr(span, "motus.model_input_meta")
+    # Model metadata (motus.* with gen_ai.* fallback)
+    model_name = _get_attr_multi(
+        span, "motus.model_name", "gen_ai.request.model", default=""
+    )
+    model_output = _parse_json_attr_multi(
+        span, "motus.model_output_meta", "gcp.vertex.agent.llm_response"
+    )
+    model_input = _parse_json_attr_multi(
+        span, "motus.model_input_meta", "gcp.vertex.agent.llm_request"
+    )
     usage = _parse_json_attr(span, "motus.usage")
+
+    # Build usage from gen_ai.usage.* attributes if motus.usage not set
+    if usage is None:
+        gen_input_tokens = _get_attr(span, "gen_ai.usage.input_tokens")
+        gen_output_tokens = _get_attr(span, "gen_ai.usage.output_tokens")
+        if gen_input_tokens is not None or gen_output_tokens is not None:
+            usage = {}
+            if gen_input_tokens is not None:
+                usage["input_tokens"] = gen_input_tokens
+            if gen_output_tokens is not None:
+                usage["output_tokens"] = gen_output_tokens
+            if gen_input_tokens is not None and gen_output_tokens is not None:
+                usage["total_tokens"] = gen_input_tokens + gen_output_tokens
 
     if model_name:
         tags["model.name"] = model_name
@@ -131,9 +192,16 @@ def readable_span_to_viewer_dict(span: ReadableSpan) -> dict:
         if tool_names:
             tags["tools.names"] = ", ".join(tool_names)
 
-    tool_input = _parse_json_attr(span, "motus.tool_input_meta")
+    tool_input = _parse_json_attr_multi(
+        span, "motus.tool_input_meta", "gcp.vertex.agent.tool_call_args"
+    )
     if tool_input and isinstance(tool_input, dict) and tool_input.get("name"):
         tags["tool.name"] = tool_input["name"]
+    elif not tool_input:
+        # Try gen_ai.tool.name directly
+        gen_tool_name = _get_attr(span, "gen_ai.tool.name")
+        if gen_tool_name:
+            tags["tool.name"] = gen_tool_name
 
     # Span kind and display name
     kind = "INTERNAL"
@@ -155,7 +223,9 @@ def readable_span_to_viewer_dict(span: ReadableSpan) -> dict:
         meta["model_input_meta"] = model_input
     if tool_input:
         meta["tool_input_meta"] = tool_input
-    tool_output = _parse_json_attr(span, "motus.tool_output_meta")
+    tool_output = _parse_json_attr_multi(
+        span, "motus.tool_output_meta", "gcp.vertex.agent.tool_response"
+    )
     if tool_output:
         meta["tool_output_meta"] = tool_output
     if usage:
