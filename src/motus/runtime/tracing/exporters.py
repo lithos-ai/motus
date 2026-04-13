@@ -7,13 +7,8 @@ files (JSON state, HTML viewer, Jaeger JSON).
 
 from __future__ import annotations
 
-import atexit
 import json
 import logging
-import queue
-import threading
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from opentelemetry.context import Context
@@ -46,161 +41,17 @@ class OfflineSpanCollector(SpanProcessor):
         return True
 
 
-class CloudSpanProcessor(SpanProcessor):
-    """Pushes span updates to the cloud trace API in real-time.
+def create_cloud_processor(endpoint: str, headers: dict[str, str] | None = None):
+    """Create a BatchSpanProcessor that exports spans via OTLP/HTTP.
 
-    Spans are buffered in a queue and flushed every ~1 second by a
-    background thread, so on_end() never blocks the agent.
+    Uses lazy imports so the OTLP exporter dependency is only required
+    when cloud tracing is actually enabled.
     """
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    _FLUSH_INTERVAL = 1.0
-
-    def __init__(
-        self,
-        api_url: str,
-        api_key: str,
-        trace_name: str = "",
-        project: str | None = None,
-        build: str | None = None,
-        session_id: str | None = None,
-    ):
-        self._api_url = api_url.rstrip("/")
-        self._headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-        self._trace_name = trace_name
-        self._project = project
-        self._build = build
-        self._session_id = session_id
-        self._cloud_trace_id: str | None = None
-        self._closed = False
-        # Fork-safe opener (skips macOS SCDynamicStoreCopyProxies)
-        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        self._queue: queue.Queue[dict] = queue.Queue()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._flush_loop, daemon=True)
-        self._thread.start()
-        atexit.register(self.close)
-
-    def on_start(self, span, parent_context: Context | None = None) -> None:
-        pass
-
-    def on_end(self, span: ReadableSpan) -> None:
-        """Convert span to dict and queue for upload."""
-        try:
-            span_dict = readable_span_to_viewer_dict(span)
-            self._queue.put(span_dict)
-        except Exception as e:
-            logger.debug(f"CloudSpanProcessor.on_end failed: {e}")
-
-    def set_session_id(self, session_id: str) -> None:
-        self._session_id = session_id
-
-    def get_trace_id(self) -> str | None:
-        return self._cloud_trace_id
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._stop.set()
-        self._thread.join(timeout=10)
-        self._mark_complete()
-
-    def shutdown(self) -> None:
-        self.close()
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:
-        self._flush()
-        return True
-
-    def _flush_loop(self) -> None:
-        while not self._stop.is_set():
-            self._flush()
-            self._stop.wait(self._FLUSH_INTERVAL)
-        self._flush()  # final drain
-
-    def _flush(self) -> None:
-        items: list[dict] = []
-        while True:
-            try:
-                items.append(self._queue.get_nowait())
-            except queue.Empty:
-                break
-        if not items:
-            return
-
-        self._create_trace_record_if_needed()
-        if not self._cloud_trace_id:
-            return
-
-        # Convert viewer dicts to the cloud API span format
-        spans = []
-        for item in items:
-            spans.append(
-                {
-                    "span_id": item.get("spanId", ""),
-                    "func": item.get("operationName", ""),
-                    "task_type": item.get("tags", {}).get("task.type", ""),
-                    "parent": None,  # parent info in tags
-                    "start_us": item.get("startTime", 0),
-                    "end_us": item.get("startTime", 0) + item.get("duration", 0),
-                    **{k: v for k, v in item.get("meta", {}).items()},
-                }
-            )
-
-        try:
-            payload = json.dumps({"spans": spans}, default=str).encode()
-            req = urllib.request.Request(
-                f"{self._api_url}/traces/{self._cloud_trace_id}/spans",
-                data=payload,
-                headers=self._headers,
-                method="POST",
-            )
-            self._opener.open(req, timeout=30)
-            logger.debug(f"Flushed {len(spans)} spans to cloud")
-        except (urllib.error.URLError, OSError) as e:
-            logger.debug(f"Cloud span flush failed (non-fatal): {e}")
-
-    def _mark_complete(self) -> None:
-        if not self._cloud_trace_id:
-            return
-        try:
-            req = urllib.request.Request(
-                f"{self._api_url}/traces/{self._cloud_trace_id}/complete",
-                data=b"{}",
-                headers=self._headers,
-                method="POST",
-            )
-            self._opener.open(req, timeout=30)
-        except (urllib.error.URLError, OSError) as e:
-            logger.debug(f"Cloud trace complete failed (non-fatal): {e}")
-
-    def _create_trace_record_if_needed(self) -> None:
-        if self._cloud_trace_id:
-            return
-        try:
-            body: dict[str, str] = {"name": self._trace_name}
-            if self._build:
-                body["build_id"] = self._build
-            if self._project:
-                body["project_id"] = self._project
-            if self._session_id:
-                body["session_id"] = self._session_id
-            payload = json.dumps(body).encode()
-            req = urllib.request.Request(
-                f"{self._api_url}/traces",
-                data=payload,
-                headers=self._headers,
-                method="POST",
-            )
-            with self._opener.open(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode())
-            self._cloud_trace_id = data.get("trace_id")
-            logger.debug(f"Created cloud trace: {self._cloud_trace_id}")
-        except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
-            logger.warning(f"Cloud trace creation failed (non-fatal): {e}")
+    exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
+    return BatchSpanProcessor(exporter)
 
 
 # ── Offline export functions ────────────────────────────────────────

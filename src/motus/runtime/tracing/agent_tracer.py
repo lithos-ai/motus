@@ -14,7 +14,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
 from .config import TraceConfig
-from .exporters import CloudSpanProcessor, OfflineSpanCollector, export_offline
+from .exporters import OfflineSpanCollector, create_cloud_processor, export_offline
 from .live_server import LiveSpanProcessor
 
 logging.basicConfig(
@@ -57,7 +57,7 @@ def json_attr(value) -> str:
 _config: TraceConfig | None = None
 _collector: OfflineSpanCollector | None = None
 _live_processor: LiveSpanProcessor | None = None
-_cloud_processor: CloudSpanProcessor | None = None
+_cloud_processor: Any = None
 
 
 def setup_tracing(config: TraceConfig | None = None) -> trace.Tracer:
@@ -88,12 +88,15 @@ def setup_tracing(config: TraceConfig | None = None) -> trace.Tracer:
 
     if config.cloud_enabled and config.is_collecting:
         logger.info("Cloud live tracing enabled - spans will stream to cloud")
-        _cloud_processor = CloudSpanProcessor(
-            api_url=config.cloud_api_url,
-            api_key=config.cloud_api_key,
-            project=config.project,
-            build=config.build,
-            session_id=config.session_id,
+        otlp_endpoint = config.cloud_api_url.rstrip("/") + "/v1/traces"
+        headers = {
+            "Authorization": f"Bearer {config.cloud_api_key}",
+            "x-motus-project": config.project or "",
+            "x-motus-build": config.build or "",
+            "x-motus-session": config.session_id or "",
+        }
+        _cloud_processor = create_cloud_processor(
+            endpoint=otlp_endpoint, headers=headers
         )
         provider.add_span_processor(_cloud_processor)
 
@@ -114,9 +117,7 @@ def get_tracer() -> trace.Tracer:
 
 
 def set_session_id(session_id: str) -> None:
-    """Set session_id for cloud trace correlation."""
-    if _cloud_processor is not None:
-        _cloud_processor.set_session_id(session_id)
+    """No-op. Session ID is now set at setup time via OTLP headers."""
 
 
 def get_turn_metrics() -> dict:
@@ -127,7 +128,7 @@ def get_turn_metrics() -> dict:
     """
     if _collector is None or not _collector.spans:
         return {
-            "trace_id": _cloud_processor.get_trace_id() if _cloud_processor else None,
+            "trace_id": None,
             "total_duration": 0.0,
             "total_tokens": 0,
             "has_error": False,
@@ -171,7 +172,7 @@ def get_turn_metrics() -> dict:
         total_duration = (max_end - min_start) / 1_000_000
 
     return {
-        "trace_id": _cloud_processor.get_trace_id() if _cloud_processor else None,
+        "trace_id": None,
         "total_duration": total_duration,
         "total_tokens": total_tokens,
         "has_error": has_error,
@@ -210,8 +211,6 @@ def shutdown_tracing() -> None:
     """Flush and shut down all trace processors."""
     global _config, _collector, _live_processor, _cloud_processor
 
-    if _cloud_processor:
-        _cloud_processor.close()
     provider = trace.get_tracer_provider()
     if hasattr(provider, "shutdown"):
         provider.shutdown()
