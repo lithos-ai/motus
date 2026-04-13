@@ -23,7 +23,7 @@ class CloudSandboxToolProvider(SandboxProvider):
     def get_sandbox(
         self,
         *,
-        image: str = "python:3.12",
+        image: str | None = None,
         dockerfile: str | None = None,
         name: str | None = None,
         env: dict[str, str] | None = None,

@@ -52,7 +52,7 @@ class CloudSandbox(Sandbox):
         return {"Authorization": f"Bearer {token}"}
 
     @classmethod
-    def create(cls, image: str = "python:3.12", **kwargs) -> Self:
+    def create(cls, image: str | None = None, **kwargs) -> Self:
         raise NotImplementedError(
             "CloudSandbox does not support create(). "
             "Use CloudSandboxToolProvider or pass url and token directly."
