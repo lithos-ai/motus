@@ -1,111 +1,124 @@
 ---
 title: "Guardrails"
-description: "Validate or transform agent inputs and outputs before and after execution using plain Python functions."
+description: "Validate, transform, or block agent inputs and outputs with plain Python functions."
 ---
 
-Guardrails are plain Python functions  no base class, no registration DSL. Attach them to agents or individual tools to validate, transform, or block inputs and outputs. Three conventions govern every guardrail:
+A guardrail is just a Python function you hand to an agent or a tool. There is no base class, no registration DSL. Motus calls it with the relevant value and interprets what the function returns.
 
-- **Return `None`** (or nothing) — pass through unchanged.
-- **Return a value** (`str`, `dict`, or the appropriate type) replace or update the input/output.
-- **Raise an exception** block execution entirely.
+Every guardrail has the same three-outcome rule:
 
-Both sync and async guardrail functions are supported. Sync functions run on a background thread via `asyncio.to_thread`.
+- **Return `None`** (or nothing): let the value through unchanged.
+- **Return a value**: rewrite what the guardrail is guarding. A `str` replaces a string input or output; a `dict` patches specific keys of a tool's arguments or a structured output.
+- **Raise an exception**: block execution.
+
+Sync and async functions both work. Sync ones run on a background thread via `asyncio.to_thread`.
 
 <Note>
-  Guardrails declare only the parameters they care about. The system inspects the function signature and extracts matching values automatically — you never need to accept the full set of arguments.
+  Guardrails declare only the parameters they care about. Motus inspects the function signature and passes the matching values automatically, so you never need to accept the full set of arguments.
 </Note>
-
-## Input guardrails
-
-Tool input guardrails run before the tool function executes. They receive keyword arguments that match their declared parameter names.
-
-```python
-from motus.guardrails import ToolInputGuardrailTripped
-from motus.tools import FunctionTool
-
-def block_drop(query: str):
-    if "DROP" in query.upper():
-        raise ToolInputGuardrailTripped("DROP statements are forbidden")
-
-sql_tool = FunctionTool(execute_sql, input_guardrails=[block_drop])
-```
-
-The guardrail declares `query` — other tool parameters are ignored.
-
-To **modify** an argument instead of blocking, return a `dict`. The returned dict merges into the tool's kwargs — keys you omit stay unchanged:
-
-```python
-import re
-
-def redact_api_key(token: str) -> dict:
-    return {"token": re.sub(r"sk-\w+", "[REDACTED]", token)}
-```
-
-## Output guardrails
-
-Tool output guardrails run after the tool returns, before the result is encoded back to the model. They receive the typed return value directly:
-
-```python
-import re
-from motus.tools import FunctionTool
-
-def redact_passwords(result: str) -> str:
-    return re.sub(r"password=\S+", "password=***", result)
-
-tool = FunctionTool(get_user, output_guardrails=[redact_passwords])
-```
-
-When a tool guardrail raises, the exception message is returned to the model as a tool error. The agent sees the feedback and can adjust without crashing the run.
 
 ## Agent guardrails
 
-Attach guardrails to a `ReActAgent` using `input_guardrails` and `output_guardrails`:
+Attach guardrails to a `ReActAgent` with `input_guardrails` (run on the user's prompt before the agent starts) and `output_guardrails` (run on the final response before it returns to the caller).
 
 ```python
+import re
 from motus.agent import ReActAgent
 from motus.guardrails import InputGuardrailTripped
 from motus.models import OpenAIChatClient
 
+
 def no_homework(value: str, agent):
     if "homework" in value.lower():
-        raise InputGuardrailTripped("No homework help!")
+        raise InputGuardrailTripped("No homework help.")
+
 
 def redact_ssn(value: str) -> str:
-    import re
     return re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[SSN]", value)
 
-client = OpenAIChatClient()
+
 agent = ReActAgent(
-    client=client,
+    client=OpenAIChatClient(),
     model_name="gpt-4o",
     input_guardrails=[no_homework],
     output_guardrails=[redact_ssn],
 )
 ```
 
-- Input guardrails receive the user's prompt as a string. If the guardrail also declares an `agent` parameter, the agent instance is passed in. Return a string to rewrite the prompt; raise `InputGuardrailTripped` to block the run.
-- Output guardrails receive the final response string (when no `response_format` is set). Return a string to replace the output; raise `OutputGuardrailTripped` to block.
+Input guardrails receive the user's prompt as a string. If the function also declares an `agent` parameter, Motus passes in the agent instance so the guardrail can read configuration or call helpers. Return a string to rewrite the prompt; raise `InputGuardrailTripped` to block the run.
 
-Agent guardrail exceptions propagate to the caller, unlike tool guardrails which are caught internally.
+Output guardrails receive the final response string. Return a string to replace it; raise `OutputGuardrailTripped` to block.
 
-## Tool guardrails (decorator)
+<Warning>
+  Agent guardrail exceptions propagate out of `agent(...)` to the caller. Your application code catches them, not the agent loop.
+</Warning>
 
-Attach guardrails directly on the `@tool` decorator:
+## Tool guardrails
+
+Tool input guardrails run before a tool function executes. They receive keyword arguments whose names match the tool's own parameters.
 
 ```python
 from motus.guardrails import ToolInputGuardrailTripped
 from motus.tools import tool
 
+
+@tool
+async def execute_sql(query: str) -> str: ...
+
+
+def block_drop(query: str):
+    if "DROP" in query.upper():
+        raise ToolInputGuardrailTripped("DROP statements are forbidden.")
+
+
+safe_sql = tool(execute_sql, input_guardrails=[block_drop])
+```
+
+To **modify** an argument instead of blocking, return a `dict`. Motus merges it into the tool's kwargs; keys you omit stay unchanged.
+
+```python
+import re
+
+
+def redact_token(token: str) -> dict:
+    return {"token": re.sub(r"sk-\w+", "[REDACTED]", token)}
+```
+
+Tool output guardrails run after the tool returns, before the result gets serialized back to the model. They receive the raw return value.
+
+```python
+def redact_passwords(result: str) -> str:
+    return re.sub(r"password=\S+", "password=***", result)
+
+
+safe_query = tool(execute_sql, output_guardrails=[redact_passwords])
+```
+
+<Note>
+  When a tool guardrail raises, Motus catches the exception and returns the message to the model as a `{"error": ...}` tool result. The agent keeps running and the model can adjust, so you do not need to wrap tool calls in `try`/`except`.
+</Note>
+
+### Multiple guardrails chain sequentially
+
+Passing several guardrails builds a pipeline where each one sees the previous one's output. Order matters.
+
+```python
+from motus.guardrails import ToolInputGuardrailTripped
+from motus.tools import tool
+
+
 def normalize_whitespace(text: str) -> dict:
     return {"text": " ".join(text.split())}
+
 
 def lowercase(text: str) -> dict:
     return {"text": text.lower()}
 
+
 def reject_profanity(text: str):
-    bad_words = {"damn", "crap"}
-    if set(text.split()) & bad_words:
-        raise ToolInputGuardrailTripped("Profanity detected")
+    if {"damn", "crap"} & set(text.split()):
+        raise ToolInputGuardrailTripped("Profanity detected.")
+
 
 @tool(input_guardrails=[normalize_whitespace, lowercase, reject_profanity])
 async def post_comment(text: str) -> str:
@@ -113,15 +126,11 @@ async def post_comment(text: str) -> str:
     return f"posted: {text}"
 ```
 
-When you pass multiple guardrails they form a sequential pipeline — each guardrail sees the output of the previous one. Input `"  Hello   WORLD  "` flows through: normalize → lowercase → profanity check. The tool receives `"hello world"`.
-
-<Note>
-  Agent-level guardrails also support `parallel=True` mode, where all guardrails run concurrently on the original value. Modifications are discarded — only tripwire exceptions take effect.
-</Note>
+Calling `post_comment("  Hello   WORLD  ")` flows through normalize → lowercase → profanity check. The tool function itself receives `text="hello world"`.
 
 ## Structured output guardrails
 
-When the agent uses `response_format` with a Pydantic `BaseModel`, output guardrails use field matching — declare only the fields you need to inspect:
+When an agent uses `response_format` with a Pydantic model, the final result is a model instance rather than a string. Output guardrails in this mode declare the fields they want to inspect; Motus looks up each parameter name on the model and passes the value through. Declare `score` on your guardrail, and Motus passes the parsed result's `score` field.
 
 ```python
 from pydantic import BaseModel
@@ -129,45 +138,40 @@ from motus.agent import ReActAgent
 from motus.guardrails import OutputGuardrailTripped
 from motus.models import OpenAIChatClient
 
+
 class AnalysisResult(BaseModel):
     score: float
     summary: str
 
+
 def validate_score(score: float):
     if score < 0 or score > 1:
-        raise OutputGuardrailTripped("Score must be between 0 and 1")
+        raise OutputGuardrailTripped("Score must be between 0 and 1.")
 
-client = OpenAIChatClient()
+
 agent = ReActAgent(
-    client=client,
+    client=OpenAIChatClient(),
     model_name="gpt-4o",
     response_format=AnalysisResult,
     output_guardrails=[validate_score],
 )
 ```
 
-`validate_score` declares `score` — other fields are passed through untouched. Return a `dict` for partial updates, for example `{"raw_data": "[REDACTED]"}`.
+`validate_score` only declares `score`; other fields of `AnalysisResult` pass through untouched. Return a `dict` for a partial update, for example `{"summary": "[redacted]"}`.
 
 ## Where to attach guardrails
 
-| Level | How | Parameters |
-| --- | --- | --- |
-| Single tool | `@tool(...)` or `FunctionTool(...)` | `input_guardrails`, `output_guardrails` |
-| Tool collection | `@tools(...)` on the class | `input_guardrails`, `output_guardrails` |
+| Level | How to attach | Parameters |
+|---|---|---|
+| Single tool | `@tool(...)` or `tool(fn, ...)` | `input_guardrails`, `output_guardrails` |
+| Tool collection | `@tools(...)` on a class (see [Tools](/concepts/tools#tool-collections-from-a-class)) | `input_guardrails`, `output_guardrails` |
 | Agent | `ReActAgent(...)` | `input_guardrails`, `output_guardrails` |
 
-For tool collections, method-level `@tool` guardrails override class-level defaults — they do not merge.
+For tool collections, a method-level `@tool` with its own guardrails overrides the class-level `@tools` defaults for that one method. The lists do not merge.
 
-## Exception reference
+## Exceptions
 
-All guardrail exceptions inherit from `GuardrailTripped`:
-
-| Exception | Where it applies |
-| --- | --- |
-| `InputGuardrailTripped` | Agent input guardrails |
-| `OutputGuardrailTripped` | Agent output guardrails |
-| `ToolInputGuardrailTripped` | Tool input guardrails |
-| `ToolOutputGuardrailTripped` | Tool output guardrails |
+All guardrail exceptions inherit from `GuardrailTripped`. Import the one that matches what you are guarding:
 
 ```python
 from motus.guardrails import (
@@ -177,3 +181,10 @@ from motus.guardrails import (
     ToolOutputGuardrailTripped,
 )
 ```
+
+| Exception | Where it applies |
+|---|---|
+| `InputGuardrailTripped` | Agent input guardrails |
+| `OutputGuardrailTripped` | Agent output guardrails |
+| `ToolInputGuardrailTripped` | Tool input guardrails |
+| `ToolOutputGuardrailTripped` | Tool output guardrails |
