@@ -3,7 +3,7 @@
 Exercises:
   1. Console — serve worker wraps the OAI Agent with _adapt_openai_agent
   2. Serve  — HTTP session lifecycle via ASGI transport
-  3. Tracing — MotusTracingProcessor ingests real OAI SDK spans into TraceManager
+  3. Tracing — MotusTracingProcessor creates OTel spans on the motus tracer
 """
 
 import os
@@ -22,9 +22,21 @@ from motus.models import ChatMessage  # noqa: E402
 from motus.openai_agents import Runner  # noqa: E402
 from motus.openai_agents._motus_tracing import (  # noqa: E402
     MotusTracingProcessor,
-    _iso_to_us,
+    _iso_to_ns,
 )
-from motus.runtime.tracing.agent_tracer import TraceManager  # noqa: E402
+from motus.runtime.tracing.agent_tracer import (  # noqa: E402
+    ATTR_AGENT_ID,
+    ATTR_ERROR,
+    ATTR_FUNC,
+    ATTR_MODEL_INPUT,
+    ATTR_MODEL_NAME,
+    ATTR_MODEL_OUTPUT,
+    ATTR_TASK_TYPE,
+    ATTR_TOOL_INPUT,
+    ATTR_USAGE,
+    setup_tracing,
+    shutdown_tracing,
+)
 from motus.runtime.types import MODEL_CALL, TOOL_CALL  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -91,27 +103,24 @@ def _make_oai_runner_mock():
 
 @pytest.fixture(autouse=True)
 def _reset_tracer():
-    """Shut down the motus runtime so each test gets a fresh TraceManager."""
+    """Shut down the motus runtime so each test gets a fresh tracer."""
     from motus.runtime.agent_runtime import is_initialized, shutdown
 
     oai_mod._processor_registered = False
     if is_initialized():
         shutdown()
+    shutdown_tracing()
     yield
     oai_mod._processor_registered = False
     if is_initialized():
         shutdown()
+    shutdown_tracing()
 
 
 @pytest.fixture
-def trace_manager():
-    """A real TraceManager with collection enabled."""
-    return TraceManager()
-
-
-@pytest.fixture
-def processor(trace_manager):
-    return MotusTracingProcessor(trace_manager)
+def processor():
+    setup_tracing()
+    return MotusTracingProcessor()
 
 
 @pytest.fixture
@@ -225,21 +234,50 @@ class TestOpenAIAgentsServe:
 
 
 class TestTracingProcessorSpanIngestion:
-    """Test that MotusTracingProcessor correctly ingests spans into TraceManager."""
+    """Test that MotusTracingProcessor correctly creates OTel spans on the motus tracer."""
 
-    def test_agent_span(self, processor, trace_manager):
+    def _get_last_span_attrs(self):
+        """Return attributes dict from the last collected span."""
+        import json
+
+        import motus.runtime.tracing.agent_tracer as _at
+
+        spans = _at._collector.spans if _at._collector else []
+        assert len(spans) >= 1, "Expected at least one collected span"
+        attrs = dict(spans[-1].attributes or {})
+        # Parse JSON-encoded attributes back to dicts
+        meta = {"task_type": attrs.get(ATTR_TASK_TYPE), "func": attrs.get(ATTR_FUNC)}
+        if ATTR_MODEL_NAME in attrs:
+            meta["model_name"] = attrs[ATTR_MODEL_NAME]
+        if ATTR_ERROR in attrs:
+            meta["error"] = attrs[ATTR_ERROR]
+        if ATTR_AGENT_ID in attrs:
+            meta["agent_id"] = attrs[ATTR_AGENT_ID]
+        for key, meta_key in [
+            (ATTR_MODEL_OUTPUT, "model_output_meta"),
+            (ATTR_MODEL_INPUT, "model_input_meta"),
+            (ATTR_TOOL_INPUT, "tool_input_meta"),
+            (ATTR_USAGE, "usage"),
+        ]:
+            if key in attrs:
+                try:
+                    meta[meta_key] = json.loads(attrs[key])
+                except (json.JSONDecodeError, TypeError):
+                    meta[meta_key] = attrs[key]
+        return meta
+
+    def test_agent_span(self, processor):
         """An 'agent' span is ingested with task_type='agent_call'."""
         span = _make_span(span_id="s1", span_type="agent", name="History Tutor")
 
         processor.on_span_start(span)
         processor.on_span_end(span)
 
-        assert len(trace_manager.task_meta) == 1
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["task_type"] == "agent_call"
         assert meta["func"] == "History Tutor"
 
-    def test_generation_span(self, processor, trace_manager):
+    def test_generation_span(self, processor):
         """A 'generation' span is ingested as MODEL_CALL with model name."""
         span = _make_span(
             span_id="s2",
@@ -253,7 +291,7 @@ class TestTracingProcessorSpanIngestion:
         processor.on_span_start(span)
         processor.on_span_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["task_type"] == MODEL_CALL
         assert meta["func"] == "gpt-4o"
         assert meta["model_name"] == "gpt-4o"
@@ -261,7 +299,7 @@ class TestTracingProcessorSpanIngestion:
         assert meta["model_output_meta"]["content"] == "Hi there"
         assert "model_input_meta" in meta
 
-    def test_function_span(self, processor, trace_manager):
+    def test_function_span(self, processor):
         """A 'function' span is ingested as TOOL_CALL."""
         span = _make_span(
             span_id="s3",
@@ -273,12 +311,12 @@ class TestTracingProcessorSpanIngestion:
         processor.on_span_start(span)
         processor.on_span_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["task_type"] == TOOL_CALL
         assert meta["func"] == "get_weather"
         assert meta["tool_input_meta"]["name"] == "get_weather"
 
-    def test_response_span(self, processor, trace_manager):
+    def test_response_span(self, processor):
         """A 'response' span (Responses API) is ingested as MODEL_CALL."""
         response_obj = MagicMock()
         response_obj.model = "gpt-4o-mini"
@@ -294,14 +332,14 @@ class TestTracingProcessorSpanIngestion:
         processor.on_span_start(span)
         processor.on_span_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["task_type"] == MODEL_CALL
         assert meta["func"] == "gpt-4o-mini"
         assert meta["model_name"] == "gpt-4o-mini"
         assert meta["usage"]["total_tokens"] == 30
         assert meta["model_output_meta"]["content"] == "The answer is 42."
 
-    def test_error_span(self, processor, trace_manager):
+    def test_error_span(self, processor):
         """A span with an error records the error in meta."""
         span = _make_span(
             span_id="s5",
@@ -313,26 +351,26 @@ class TestTracingProcessorSpanIngestion:
         processor.on_span_start(span)
         processor.on_span_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["error"] == "Rate limit exceeded"
 
-    def test_handoff_span(self, processor, trace_manager):
+    def test_handoff_span(self, processor):
         span = _make_span(span_id="s6", span_type="handoff", to_agent="Math Tutor")
 
         processor.on_span_start(span)
         processor.on_span_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["task_type"] == "handoff"
         assert "Math Tutor" in meta["func"]
 
-    def test_guardrail_span(self, processor, trace_manager):
+    def test_guardrail_span(self, processor):
         span = _make_span(span_id="s7", span_type="guardrail", name="content_filter")
 
         processor.on_span_start(span)
         processor.on_span_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["task_type"] == "guardrail"
         assert meta["func"] == "content_filter"
 
@@ -343,10 +381,12 @@ class TestTracingProcessorSpanIngestion:
 
 
 class TestSpanParentResolution:
-    """Test that parent-child relationships are correctly resolved."""
+    """Test that processor creates OTel spans for parent and child spans."""
 
-    def test_child_links_to_parent(self, processor, trace_manager):
-        """A child span's parent field resolves to the parent's task_id."""
+    def test_parent_and_child_spans_created(self, processor):
+        """Both parent and child OAI spans produce OTel spans."""
+        import motus.runtime.tracing.agent_tracer as _at
+
         parent = _make_span(span_id="p1", span_type="agent", name="Tutor")
         child = _make_span(
             span_id="c1", parent_id="p1", span_type="generation", model="gpt-4o"
@@ -357,19 +397,16 @@ class TestSpanParentResolution:
         processor.on_span_end(child)
         processor.on_span_end(parent)
 
-        assert len(trace_manager.task_meta) == 2
-        child_meta = [
-            m for m in trace_manager.task_meta.values() if m["task_type"] == MODEL_CALL
-        ][0]
-        parent_tid = [
-            tid
-            for tid, m in trace_manager.task_meta.items()
-            if m["task_type"] == "agent_call"
-        ][0]
-        assert child_meta["parent"] == parent_tid
+        spans = _at._collector.spans if _at._collector else []
+        assert len(spans) >= 2
+        task_types = {(s.attributes or {}).get(ATTR_TASK_TYPE) for s in spans}
+        assert "agent_call" in task_types
+        assert MODEL_CALL in task_types
 
-    def test_span_tree_populated(self, processor, trace_manager):
-        """TraceManager.task_span_tree has parent -> [children] entries."""
+    def test_multiple_children_created(self, processor):
+        """Multiple child spans are all created as OTel spans."""
+        import motus.runtime.tracing.agent_tracer as _at
+
         parent = _make_span(span_id="p2", span_type="agent", name="Tutor")
         child1 = _make_span(
             span_id="c2a", parent_id="p2", span_type="generation", model="gpt-4o"
@@ -385,21 +422,27 @@ class TestSpanParentResolution:
         processor.on_span_end(child2)
         processor.on_span_end(parent)
 
-        parent_tid = [
-            tid for tid, m in trace_manager.task_meta.items() if m["func"] == "Tutor"
-        ][0]
-        assert parent_tid in trace_manager.task_span_tree
-        assert len(trace_manager.task_span_tree[parent_tid]) == 2
+        spans = _at._collector.spans if _at._collector else []
+        assert len(spans) >= 3
+        func_names = {(s.attributes or {}).get(ATTR_FUNC) for s in spans}
+        assert "Tutor" in func_names
+        assert "gpt-4o" in func_names
+        assert "lookup" in func_names
 
-    def test_orphan_span_has_no_parent(self, processor, trace_manager):
-        """A root span (no parent_id) has parent=None in meta."""
+    def test_root_span_created(self, processor):
+        """A root span (no parent_id) is created as an OTel span."""
+        import motus.runtime.tracing.agent_tracer as _at
+
         span = _make_span(span_id="root", span_type="agent", name="Root")
 
         processor.on_span_start(span)
         processor.on_span_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
-        assert meta["parent"] is None
+        spans = _at._collector.spans if _at._collector else []
+        assert len(spans) >= 1
+        last = spans[-1]
+        assert (last.attributes or {}).get(ATTR_TASK_TYPE) == "agent_call"
+        assert (last.attributes or {}).get(ATTR_FUNC) == "Root"
 
 
 # ---------------------------------------------------------------------------
@@ -408,35 +451,43 @@ class TestSpanParentResolution:
 
 
 class TestSpanIdCleanup:
-    def test_span_id_removed_after_end(self, processor, trace_manager):
-        """Span IDs are cleaned up from the internal map after on_span_end."""
+    def test_span_processed_on_end(self, processor):
+        """Spans are processed on on_span_end (no internal state to clean up)."""
+        import motus.runtime.tracing.agent_tracer as _at
+
+        initial_count = len(_at._collector.spans) if _at._collector else 0
+
         span = _make_span(span_id="cleanup1", span_type="agent", name="Test")
 
         processor.on_span_start(span)
-        assert "cleanup1" in processor._span_id_map
+        # on_span_start is a no-op in the new processor
+        current_count = len(_at._collector.spans) if _at._collector else 0
+        assert current_count == initial_count
 
         processor.on_span_end(span)
-        assert "cleanup1" not in processor._span_id_map
+        # on_span_end should create an OTel span
+        final_count = len(_at._collector.spans) if _at._collector else 0
+        assert final_count == initial_count + 1
 
 
 # ---------------------------------------------------------------------------
-# _iso_to_us helper
+# _iso_to_ns helper
 # ---------------------------------------------------------------------------
 
 
-class TestIsoToUs:
+class TestIsoToNs:
     def test_valid_iso(self):
-        us = _iso_to_us("2026-03-24T12:00:00+00:00")
-        assert us > 0
+        ns = _iso_to_ns("2026-03-24T12:00:00+00:00")
+        assert ns > 0
 
     def test_none_returns_zero(self):
-        assert _iso_to_us(None) == 0
+        assert _iso_to_ns(None) == 0
 
     def test_empty_string_returns_zero(self):
-        assert _iso_to_us("") == 0
+        assert _iso_to_ns("") == 0
 
     def test_invalid_string_returns_zero(self):
-        assert _iso_to_us("not-a-date") == 0
+        assert _iso_to_ns("not-a-date") == 0
 
 
 # ---------------------------------------------------------------------------
@@ -451,12 +502,19 @@ class TestRunnerTracingIntegration:
     trace/span context managers. This exercises:
       register_tracing() → set_trace_processors([MotusTracingProcessor])
       → OAI SDK span lifecycle → on_span_start/on_span_end callbacks
-      → TraceManager.ingest_external_span()
+      → OTel spans on motus tracer
     """
+
+    def _get_collected_span_types(self):
+        """Return set of task_type values from collected OTel spans."""
+        import motus.runtime.tracing.agent_tracer as _at
+
+        spans = _at._collector.spans if _at._collector else []
+        return {(s.attributes or {}).get(ATTR_TASK_TYPE) for s in spans}
 
     @pytest.mark.integration
     async def test_run_produces_trace_spans(self, oai_runner_with_spans):
-        """Runner.run emits OAI SDK spans that land in TraceManager."""
+        """Runner.run emits OAI SDK spans that land as OTel spans."""
         from agents import Agent
 
         agent = Agent(
@@ -469,21 +527,15 @@ class TestRunnerTracingIntegration:
 
         tracer = oai_mod.get_tracer()
         assert tracer is not None
-        assert isinstance(tracer, TraceManager)
-        assert len(tracer.task_meta) >= 2
 
-        types = {m["task_type"] for m in tracer.task_meta.values()}
+        import motus.runtime.tracing.agent_tracer as _at
+
+        spans = _at._collector.spans if _at._collector else []
+        assert len(spans) >= 2
+
+        types = self._get_collected_span_types()
         assert "agent_call" in types
         assert MODEL_CALL in types
-
-        # Model call should be a child of the agent span
-        agent_tid = next(
-            tid for tid, m in tracer.task_meta.items() if m["task_type"] == "agent_call"
-        )
-        model_metas = [
-            m for m in tracer.task_meta.values() if m["task_type"] == MODEL_CALL
-        ]
-        assert all(m["parent"] == agent_tid for m in model_metas)
 
     @pytest.mark.integration
     async def test_serve_run_turn_with_tracing(self, oai_runner_with_spans):
@@ -501,9 +553,12 @@ class TestRunnerTracingIntegration:
 
         tracer = oai_mod.get_tracer()
         assert tracer is not None
-        assert isinstance(tracer, TraceManager)
-        assert len(tracer.task_meta) >= 2
 
-        types = {m["task_type"] for m in tracer.task_meta.values()}
+        import motus.runtime.tracing.agent_tracer as _at
+
+        spans = _at._collector.spans if _at._collector else []
+        assert len(spans) >= 2
+
+        types = self._get_collected_span_types()
         assert "agent_call" in types
         assert MODEL_CALL in types

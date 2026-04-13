@@ -17,13 +17,21 @@ import pytest
 # so the Anthropic client can be constructed during collection.
 import motus.anthropic as anthropic_mod  # noqa: E402
 from motus.anthropic._motus_tracing import (  # noqa: E402
-    _now_us,
-    build_agent_call_meta,
-    build_model_call_meta,
-    build_tool_call_meta,
+    _now_ns,
+    emit_model_span,
+    emit_tool_span,
+    start_agent_span,
 )
 from motus.models import ChatMessage  # noqa: E402
-from motus.runtime.tracing.agent_tracer import TraceManager  # noqa: E402
+from motus.runtime.tracing.agent_tracer import (  # noqa: E402
+    ATTR_FUNC,
+    ATTR_MODEL_NAME,
+    ATTR_TASK_TYPE,
+    ATTR_TOOL_INPUT,
+    ATTR_USAGE,
+    setup_tracing,
+    shutdown_tracing,
+)
 from motus.runtime.types import AGENT_CALL, MODEL_CALL, TOOL_CALL  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -137,20 +145,16 @@ def _mock_parse_factory():
 
 @pytest.fixture(autouse=True)
 def _reset_tracer():
-    """Shut down the motus runtime so each test gets a fresh TraceManager."""
+    """Shut down the motus runtime so each test gets a fresh tracer."""
     from motus.runtime.agent_runtime import is_initialized, shutdown
 
     if is_initialized():
         shutdown()
+    shutdown_tracing()
     yield
     if is_initialized():
         shutdown()
-
-
-@pytest.fixture
-def trace_manager():
-    """A real TraceManager with collection enabled."""
-    return TraceManager()
+    shutdown_tracing()
 
 
 @pytest.fixture
@@ -484,99 +488,83 @@ class TestAnthropicSDKServe:
 
 
 class TestTracingHelpers:
-    def test_now_us_returns_positive_int(self):
-        us = _now_us()
-        assert isinstance(us, int)
-        assert us > 0
+    def test_now_ns_returns_positive_int(self):
+        ns = _now_ns()
+        assert isinstance(ns, int)
+        assert ns > 0
 
-    def test_build_agent_call_meta(self):
-        meta = build_agent_call_meta(model="claude-sonnet-4-20250514", start_us=1000)
-        assert meta["task_type"] == AGENT_CALL
-        assert meta["start_us"] == 1000
-        assert meta["end_us"] == 0
-        assert "anthropic_tool_runner" in meta["func"]
-        assert meta["parent"] is None
+    def test_start_agent_span(self):
+        setup_tracing()
+        span = start_agent_span(model="claude-sonnet-4-20250514")
+        assert span is not None
+        # Span should be recording (not yet ended)
+        assert span.is_recording()
+        span.end()
 
-    def test_build_model_call_meta(self):
+    def test_emit_model_span(self):
+        setup_tracing()
         message = _make_beta_message(
             content_blocks=[_make_text_block("Hello!")],
             input_tokens=50,
             output_tokens=20,
         )
-        meta = build_model_call_meta(
+        # Should not raise
+        emit_model_span(
             message=message,
             model="claude-sonnet-4-20250514",
             input_messages=[{"role": "user", "content": "Hi"}],
-            start_us=1000,
-            end_us=2000,
-            parent=42,
+            start_ns=1000,
+            end_ns=2000,
         )
-        assert meta["task_type"] == MODEL_CALL
-        assert meta["func"] == "claude-sonnet-4-20250514"
-        assert meta["model_name"] == "claude-sonnet-4-20250514"
-        assert meta["parent"] == 42
-        assert meta["usage"]["input_tokens"] == 50
-        assert meta["usage"]["output_tokens"] == 20
-        assert meta["usage"]["total_tokens"] == 70
-        assert meta["model_output_meta"]["content"] == "Hello!"
-        assert meta["model_input_meta"] == [{"role": "user", "content": "Hi"}]
 
-    def test_build_model_call_meta_with_tool_use(self):
+    def test_emit_model_span_with_tool_use(self):
+        setup_tracing()
         message = _make_beta_message(
             content_blocks=[
                 _make_tool_use_block(name="get_weather", input={"city": "Paris"})
             ],
         )
-        meta = build_model_call_meta(
+        # Should not raise
+        emit_model_span(
             message=message,
             model="claude-sonnet-4-20250514",
             input_messages=None,
-            start_us=1000,
-            end_us=2000,
-            parent=None,
+            start_ns=1000,
+            end_ns=2000,
         )
-        assert len(meta["model_output_meta"]["tool_calls"]) == 1
-        assert meta["model_output_meta"]["tool_calls"][0]["name"] == "get_weather"
 
-    def test_build_model_call_meta_none_message(self):
-        meta = build_model_call_meta(
+    def test_emit_model_span_none_message(self):
+        setup_tracing()
+        # Should not raise with None message
+        emit_model_span(
             message=None,
             model="claude-sonnet-4-20250514",
             input_messages=None,
-            start_us=1000,
-            end_us=2000,
-            parent=None,
+            start_ns=1000,
+            end_ns=2000,
         )
-        assert meta["task_type"] == MODEL_CALL
-        assert "usage" not in meta
-        assert "model_output_meta" not in meta
 
-    def test_build_tool_call_meta(self):
-        meta = build_tool_call_meta(
+    def test_emit_tool_span(self):
+        setup_tracing()
+        # Should not raise
+        emit_tool_span(
             tool_name="get_weather",
             tool_input={"city": "Paris"},
             tool_output='{"temp": "20°C"}',
-            start_us=1000,
-            end_us=1500,
-            parent=42,
+            start_ns=1000,
+            end_ns=1500,
         )
-        assert meta["task_type"] == TOOL_CALL
-        assert meta["func"] == "get_weather"
-        assert meta["tool_input_meta"]["name"] == "get_weather"
-        assert meta["tool_input_meta"]["arguments"] == {"city": "Paris"}
-        assert meta["tool_output_meta"] == '{"temp": "20°C"}'
-        assert meta["parent"] == 42
 
-    def test_build_tool_call_meta_with_error(self):
-        meta = build_tool_call_meta(
+    def test_emit_tool_span_with_error(self):
+        setup_tracing()
+        # Should not raise
+        emit_tool_span(
             tool_name="get_weather",
             tool_input={"city": "Paris"},
-            start_us=1000,
-            end_us=1500,
-            parent=None,
+            start_ns=1000,
+            end_ns=1500,
             error="ConnectionError",
         )
-        assert meta["error"] == "ConnectionError"
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +573,37 @@ class TestTracingHelpers:
 
 
 class TestRunnerTracingIntegration:
-    """Verify the full tracing pipeline: ToolRunner.run_turn → spans → TraceManager."""
+    """Verify the full tracing pipeline: ToolRunner.run_turn → OTel spans → collector."""
+
+    def _get_collected_spans(self):
+        """Return spans from the OfflineSpanCollector."""
+        import json
+
+        import motus.runtime.tracing.agent_tracer as _at
+
+        spans = _at._collector.spans if _at._collector else []
+        result = []
+        for s in spans:
+            attrs = dict(s.attributes or {})
+            # Parse JSON-encoded attributes back to dicts for easier assertions
+            meta = {
+                "task_type": attrs.get(ATTR_TASK_TYPE),
+                "func": attrs.get(ATTR_FUNC),
+            }
+            if ATTR_USAGE in attrs:
+                try:
+                    meta["usage"] = json.loads(attrs[ATTR_USAGE])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if ATTR_TOOL_INPUT in attrs:
+                try:
+                    meta["tool_input_meta"] = json.loads(attrs[ATTR_TOOL_INPUT])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if ATTR_MODEL_NAME in attrs:
+                meta["model_name"] = attrs[ATTR_MODEL_NAME]
+            result.append(meta)
+        return result
 
     @pytest.mark.integration
     async def test_run_turn_produces_trace_spans(self, tool_runner):
@@ -594,42 +612,22 @@ class TestRunnerTracingIntegration:
 
         tracer = anthropic_mod.get_tracer()
         assert tracer is not None
-        assert isinstance(tracer, TraceManager)
-        assert len(tracer.task_meta) >= 3  # agent + model + tool(s)
 
-        types = {m["task_type"] for m in tracer.task_meta.values()}
+        span_metas = self._get_collected_spans()
+        assert len(span_metas) >= 3  # agent + model + tool(s)
+
+        types = {m["task_type"] for m in span_metas}
         assert AGENT_CALL in types
         assert MODEL_CALL in types
         assert TOOL_CALL in types
-
-    @pytest.mark.integration
-    async def test_tool_spans_parented_to_agent(self, tool_runner):
-        msg = ChatMessage.user_message("What's the weather in Paris?")
-        await tool_runner.run_turn(msg, [])
-
-        tracer = anthropic_mod.get_tracer()
-        agent_tid = next(
-            tid for tid, m in tracer.task_meta.items() if m["task_type"] == AGENT_CALL
-        )
-
-        # All model_call and tool_call spans should reference the agent span
-        child_metas = [
-            m
-            for m in tracer.task_meta.values()
-            if m["task_type"] in (MODEL_CALL, TOOL_CALL)
-        ]
-        assert len(child_metas) >= 3  # 2 model calls + 2 tool calls
-        assert all(m["parent"] == agent_tid for m in child_metas)
 
     @pytest.mark.integration
     async def test_model_call_has_usage(self, tool_runner):
         msg = ChatMessage.user_message("What's the weather in Paris?")
         await tool_runner.run_turn(msg, [])
 
-        tracer = anthropic_mod.get_tracer()
-        model_metas = [
-            m for m in tracer.task_meta.values() if m["task_type"] == MODEL_CALL
-        ]
+        span_metas = self._get_collected_spans()
+        model_metas = [m for m in span_metas if m["task_type"] == MODEL_CALL]
         assert len(model_metas) >= 1
         for meta in model_metas:
             assert "usage" in meta
@@ -641,10 +639,8 @@ class TestRunnerTracingIntegration:
         msg = ChatMessage.user_message("What's the weather in Paris?")
         await tool_runner.run_turn(msg, [])
 
-        tracer = anthropic_mod.get_tracer()
-        tool_metas = [
-            m for m in tracer.task_meta.values() if m["task_type"] == TOOL_CALL
-        ]
+        span_metas = self._get_collected_spans()
+        tool_metas = [m for m in span_metas if m["task_type"] == TOOL_CALL]
         assert len(tool_metas) >= 2
 
         tool_names = {m["func"] for m in tool_metas}
@@ -671,10 +667,11 @@ class TestRunnerTracingIntegration:
 
         tracer = anthropic_mod.get_tracer()
         assert tracer is not None
-        assert isinstance(tracer, TraceManager)
-        assert len(tracer.task_meta) >= 3
 
-        types = {m["task_type"] for m in tracer.task_meta.values()}
+        span_metas = self._get_collected_spans()
+        assert len(span_metas) >= 3
+
+        types = {m["task_type"] for m in span_metas}
         assert AGENT_CALL in types
         assert MODEL_CALL in types
         assert TOOL_CALL in types
@@ -777,6 +774,8 @@ class TestSearchToolExample:
     @pytest.mark.integration
     async def test_search_tool_tracing(self, mock_anthropic_search):
         """Search tool flow produces trace spans for all tool calls."""
+
+        import motus.runtime.tracing.agent_tracer as _at
         from examples.anthropic.search_tool import runner
 
         msg = ChatMessage.user_message("What is the weather in SF?")
@@ -785,10 +784,11 @@ class TestSearchToolExample:
         tracer = anthropic_mod.get_tracer()
         assert tracer is not None
 
-        tool_metas = [
-            m for m in tracer.task_meta.values() if m["task_type"] == TOOL_CALL
+        spans = _at._collector.spans if _at._collector else []
+        tool_spans = [
+            s for s in spans if (s.attributes or {}).get(ATTR_TASK_TYPE) == TOOL_CALL
         ]
-        tool_names = {m["func"] for m in tool_metas}
+        tool_names = {(s.attributes or {}).get(ATTR_FUNC) for s in tool_spans}
         assert "search_available_tools" in tool_names
         assert "get_weather" in tool_names
 

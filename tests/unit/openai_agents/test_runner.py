@@ -89,12 +89,12 @@ class TestTracing:
             await Runner.run(agent, "hello")
             spy.assert_called_once()
 
-    async def test_get_tracer_returns_trace_manager(self):
-        from motus.runtime.tracing import TraceManager
+    async def test_get_tracer_returns_otel_tracer(self):
+        from opentelemetry.trace import Tracer
 
         tracer = oai_mod.get_tracer()
         assert tracer is not None
-        assert isinstance(tracer, TraceManager)
+        assert isinstance(tracer, Tracer)
 
 
 # ---------------------------------------------------------------------------

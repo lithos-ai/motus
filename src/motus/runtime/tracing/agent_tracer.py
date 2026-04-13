@@ -76,7 +76,14 @@ def setup_tracing(config: TraceConfig | None = None) -> trace.Tracer:
     config = config or TraceConfig()
     _config = config
 
-    provider = TracerProvider()
+    # Reuse existing provider if already set (OTel doesn't allow re-setting),
+    # otherwise create a new one.
+    existing = trace.get_tracer_provider()
+    if isinstance(existing, TracerProvider):
+        provider = existing
+    else:
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
 
     if config.is_collecting:
         _collector = OfflineSpanCollector()
@@ -101,7 +108,6 @@ def setup_tracing(config: TraceConfig | None = None) -> trace.Tracer:
         )
         provider.add_span_processor(_cloud_processor)
 
-    trace.set_tracer_provider(provider)
     return trace.get_tracer("motus")
 
 
@@ -274,11 +280,28 @@ class TraceManager:
         if config.is_collecting:
             setup_tracing(config)
 
+    @property
+    def _cloud_exporter(self):
+        """Backward compat for agent_runtime.py shutdown.
+
+        Returns an object with .close() that calls shutdown_tracing().
+        """
+
+        class _Closer:
+            @staticmethod
+            def close():
+                shutdown_tracing()
+
+        return _Closer() if _cloud_processor is not None else None
+
+    def export_trace(self) -> None:
+        export_trace()
+
     def close(self) -> None:
         shutdown_tracing()
 
     def set_session_id(self, session_id: str) -> None:
-        pass  # Session ID set via OTLP headers at setup time
+        set_session_id(session_id)
 
     def set_analytics_callback(self, callback: Any) -> None:
         self._analytics_callback = callback

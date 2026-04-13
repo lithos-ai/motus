@@ -1,4 +1,5 @@
 from .agent_tracer import (
+    TraceManager,
     export_trace,
     get_tracer,
     get_turn_metrics,
@@ -13,6 +14,7 @@ from .span_convert import readable_span_to_viewer_dict
 __all__ = [
     "CollectionLevel",
     "TraceConfig",
+    "TraceManager",
     "export_trace",
     "get_tracer",
     "get_turn_metrics",

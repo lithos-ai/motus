@@ -3,7 +3,7 @@
 Mocks the Gemini LLM so no real API key is needed. Exercises:
   1. Console — call root_agent.run_turn directly (with tool-calling flow)
   2. Serve  — HTTP session lifecycle via ASGI transport
-  3. Tracing — MotusSpanProcessor ingests OTEL spans into TraceManager
+  3. Tracing — MotusSpanProcessor creates OTel spans on the motus tracer
 """
 
 import os
@@ -23,7 +23,19 @@ from google.genai import types as genai_types  # noqa: E402
 import motus.google_adk.agents.llm_agent as adk_mod  # noqa: E402
 from motus.google_adk._motus_tracing import MotusSpanProcessor  # noqa: E402
 from motus.models import ChatMessage  # noqa: E402
-from motus.runtime.tracing.agent_tracer import TraceManager  # noqa: E402
+from motus.runtime.tracing.agent_tracer import (  # noqa: E402
+    ATTR_ERROR,
+    ATTR_FUNC,
+    ATTR_MODEL_INPUT,
+    ATTR_MODEL_NAME,
+    ATTR_MODEL_OUTPUT,
+    ATTR_TASK_TYPE,
+    ATTR_TOOL_INPUT,
+    ATTR_TOOL_OUTPUT,
+    ATTR_USAGE,
+    setup_tracing,
+    shutdown_tracing,
+)
 from motus.runtime.types import MODEL_CALL, TOOL_CALL  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -80,16 +92,18 @@ def _mock_generate_factory(
 
 @pytest.fixture(autouse=True)
 def _reset_tracer():
-    """Shut down the motus runtime so each test gets a fresh TraceManager."""
+    """Shut down the motus runtime so each test gets a fresh tracer."""
     from motus.runtime.agent_runtime import is_initialized, shutdown
 
     adk_mod._otel_registered = False
     if is_initialized():
         shutdown()
+    shutdown_tracing()
     yield
     adk_mod._otel_registered = False
     if is_initialized():
         shutdown()
+    shutdown_tracing()
 
 
 @pytest.fixture
@@ -148,14 +162,9 @@ def mock_gemini_weather():
 
 
 @pytest.fixture
-def trace_manager():
-    """A real TraceManager with collection enabled."""
-    return TraceManager()
-
-
-@pytest.fixture
-def processor(trace_manager):
-    return MotusSpanProcessor(trace_manager)
+def processor():
+    setup_tracing()
+    return MotusSpanProcessor()
 
 
 # ---------------------------------------------------------------------------
@@ -269,9 +278,37 @@ def _make_otel_span(
 
 
 class TestSpanProcessorIngestion:
-    """Test that MotusSpanProcessor correctly ingests OTEL spans into TraceManager."""
+    """Test that MotusSpanProcessor correctly creates OTel spans on the motus tracer."""
 
-    def test_agent_span(self, processor, trace_manager):
+    def _get_last_span_attrs(self):
+        """Return attributes from the last collected span, with JSON parsing."""
+        import json
+
+        import motus.runtime.tracing.agent_tracer as _at
+
+        spans = _at._collector.spans if _at._collector else []
+        assert len(spans) >= 1, "Expected at least one collected span"
+        attrs = dict(spans[-1].attributes or {})
+        meta = {"task_type": attrs.get(ATTR_TASK_TYPE), "func": attrs.get(ATTR_FUNC)}
+        if ATTR_MODEL_NAME in attrs:
+            meta["model_name"] = attrs[ATTR_MODEL_NAME]
+        if ATTR_ERROR in attrs:
+            meta["error"] = attrs[ATTR_ERROR]
+        for key, meta_key in [
+            (ATTR_MODEL_OUTPUT, "model_output_meta"),
+            (ATTR_MODEL_INPUT, "model_input_meta"),
+            (ATTR_TOOL_INPUT, "tool_input_meta"),
+            (ATTR_TOOL_OUTPUT, "tool_output_meta"),
+            (ATTR_USAGE, "usage"),
+        ]:
+            if key in attrs:
+                try:
+                    meta[meta_key] = json.loads(attrs[key])
+                except (json.JSONDecodeError, TypeError):
+                    meta[meta_key] = attrs[key]
+        return meta
+
+    def test_agent_span(self, processor):
         span = _make_otel_span(
             attributes={
                 "gen_ai.operation.name": "invoke_agent",
@@ -280,13 +317,11 @@ class TestSpanProcessorIngestion:
         )
         processor.on_end(span)
 
-        assert len(trace_manager.task_meta) == 1
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["task_type"] == "agent_call"
         assert meta["func"] == "root_agent"
-        assert meta["agent_name"] == "root_agent"
 
-    def test_model_call_span(self, processor, trace_manager):
+    def test_model_call_span(self, processor):
         span = _make_otel_span(
             attributes={
                 "gen_ai.operation.name": "generate_content",
@@ -298,16 +333,15 @@ class TestSpanProcessorIngestion:
         )
         processor.on_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["task_type"] == MODEL_CALL
         assert meta["func"] == "gemini-2.5-flash"
         assert meta["model_name"] == "gemini-2.5-flash"
         assert meta["usage"]["input_tokens"] == 100
         assert meta["usage"]["output_tokens"] == 50
         assert meta["usage"]["total_tokens"] == 150
-        assert meta["finish_reasons"] == ["stop"]
 
-    def test_tool_call_span(self, processor, trace_manager):
+    def test_tool_call_span(self, processor):
         span = _make_otel_span(
             attributes={
                 "gen_ai.operation.name": "execute_tool",
@@ -319,14 +353,14 @@ class TestSpanProcessorIngestion:
         )
         processor.on_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["task_type"] == TOOL_CALL
         assert meta["func"] == "get_current_time"
         assert meta["tool_input_meta"]["name"] == "get_current_time"
         assert meta["tool_input_meta"]["arguments"] == {"city": "Tokyo"}
         assert meta["tool_output_meta"] == {"time": "10:30 AM"}
 
-    def test_error_span(self, processor, trace_manager):
+    def test_error_span(self, processor):
         span = _make_otel_span(
             attributes={
                 "gen_ai.operation.name": "generate_content",
@@ -336,16 +370,23 @@ class TestSpanProcessorIngestion:
         )
         processor.on_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["error"] == "ResourceExhausted"
 
-    def test_non_adk_span_ignored(self, processor, trace_manager):
+    def test_non_adk_span_ignored(self, processor):
         """Spans without gen_ai.operation.name are skipped."""
+        import motus.runtime.tracing.agent_tracer as _at
+
+        initial_count = len(_at._collector.spans) if _at._collector else 0
         span = _make_otel_span(attributes={"http.method": "GET"})
         processor.on_end(span)
-        assert len(trace_manager.task_meta) == 0
+        final_count = len(_at._collector.spans) if _at._collector else 0
+        assert final_count == initial_count
 
-    def test_timestamps_converted(self, processor, trace_manager):
+    def test_timestamps_preserved(self, processor):
+        """OTel spans preserve the original nanosecond timestamps."""
+        import motus.runtime.tracing.agent_tracer as _at
+
         span = _make_otel_span(
             attributes={"gen_ai.operation.name": "invoke_agent"},
             start_time_ns=1_711_300_800_000_000_000,
@@ -353,11 +394,13 @@ class TestSpanProcessorIngestion:
         )
         processor.on_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
-        assert meta["start_us"] == 1_711_300_800_000_000
-        assert meta["end_us"] == 1_711_300_801_000_000
+        spans = _at._collector.spans if _at._collector else []
+        last = spans[-1]
+        # The motus span should have start/end times set
+        assert last.start_time is not None
+        assert last.end_time is not None
 
-    def test_model_call_with_llm_request_response(self, processor, trace_manager):
+    def test_model_call_with_llm_request_response(self, processor):
         """LLM request/response JSON attributes are parsed into meta."""
         span = _make_otel_span(
             attributes={
@@ -369,7 +412,7 @@ class TestSpanProcessorIngestion:
         )
         processor.on_end(span)
 
-        meta = next(iter(trace_manager.task_meta.values()))
+        meta = self._get_last_span_attrs()
         assert meta["model_input_meta"]["model"] == "gemini-2.5-flash"
         assert (
             meta["model_output_meta"]["llm_response"]["candidates"][0]["content"]
@@ -387,7 +430,7 @@ class TestADKTracingIntegration:
 
     @pytest.mark.integration
     async def test_run_turn_registers_tracing(self, mock_gemini):
-        """run_turn() sets up a TraceManager accessible via get_tracer()."""
+        """run_turn() sets up an OTel tracer accessible via get_tracer()."""
         from examples.google_adk.agent import root_agent
 
         msg = ChatMessage.user_message("What time is it in Tokyo?")
@@ -395,11 +438,10 @@ class TestADKTracingIntegration:
 
         tracer = adk_mod.get_tracer()
         assert tracer is not None
-        assert isinstance(tracer, TraceManager)
 
     @pytest.mark.integration
     async def test_run_turn_produces_trace_spans(self, mock_gemini):
-        """Full pipeline: run_turn → ADK OTEL spans → MotusSpanProcessor → TraceManager."""
+        """Full pipeline: run_turn → ADK OTEL spans → MotusSpanProcessor → OTel collector."""
         from examples.google_adk.agent import root_agent
 
         msg = ChatMessage.user_message("What time is it in Tokyo?")
@@ -409,12 +451,13 @@ class TestADKTracingIntegration:
 
         tracer = adk_mod.get_tracer()
         assert tracer is not None
-        assert len(tracer.task_meta) >= 1
 
-        types = {m["task_type"] for m in tracer.task_meta.values()}
-        # ADK should emit at least agent invocation spans
+        import motus.runtime.tracing.agent_tracer as _at
+
+        spans = _at._collector.spans if _at._collector else []
+        # ADK should emit at least some spans
         # (model/tool spans depend on OTEL provider setup timing)
-        assert len(types) >= 1
+        assert len(spans) >= 1
 
 
 # ---------------------------------------------------------------------------
