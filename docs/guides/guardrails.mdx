@@ -5,6 +5,14 @@ description: "Validate, transform, or block the inputs and outputs of agents and
 
 A guardrail is just a Python function you hand to an agent or a tool. Motus calls it with the relevant value and interprets what the function returns.
 
+Reach for guardrails when you need to:
+
+- **Block risky actions** before they run (a SQL tool rejecting `DROP`, a shell tool refusing `rm -rf`).
+- **Redact or mask sensitive data** in arguments, tool outputs, or the agent's final response (API keys, SSNs, PII).
+- **Normalize inputs** the model is sloppy about (trim whitespace, coerce enums, canonicalize paths).
+- **Enforce policy** on prompts or answers (refuse off-topic requests, require a score to fall in range, strip forbidden words).
+- **Gate with human approval** for high-stakes tool calls before they execute.
+
 Every guardrail has the same three-outcome rule:
 
 - **Return `None`** (or nothing): let the value through unchanged.
@@ -16,42 +24,6 @@ Sync and async functions both work.
 <Note>
   Guardrails declare only the parameters they care about. Motus inspects the function signature and passes the matching values automatically, so you never need to accept the full set of arguments.
 </Note>
-
-## Agent guardrails
-
-Attach guardrails to a `ReActAgent` with `input_guardrails` (run on the user's prompt before the agent starts) and `output_guardrails` (run on the final response before it returns to the caller).
-
-```python
-import re
-from motus.agent import ReActAgent
-from motus.guardrails import InputGuardrailTripped
-from motus.models import OpenAIChatClient
-
-
-def no_homework(value: str, agent):
-    if "homework" in value.lower():
-        raise InputGuardrailTripped("No homework help.")
-
-
-def redact_ssn(value: str) -> str:
-    return re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[SSN]", value)
-
-
-agent = ReActAgent(
-    client=OpenAIChatClient(),
-    model_name="gpt-4o",
-    input_guardrails=[no_homework],
-    output_guardrails=[redact_ssn],
-)
-```
-
-Input guardrails receive the user's prompt as a string. If the function also declares a second parameter named `agent`, Motus passes in the running `ReActAgent` instance so the guardrail can read its configuration, inspect memory, or call helpers on it. Return a string to rewrite the prompt; raise `InputGuardrailTripped` to block the run.
-
-Output guardrails receive the final response string. Return a string to replace it; raise `OutputGuardrailTripped` to block.
-
-<Warning>
-  Agent guardrail exceptions propagate out of `agent(...)` to the caller. Your application code catches them, not the agent loop.
-</Warning>
 
 ## Tool guardrails
 
@@ -131,6 +103,42 @@ async def post_comment(text: str) -> str:
 ```
 
 Calling `post_comment("  Hello   WORLD  ")` flows through normalize → lowercase → profanity check. The tool function itself receives `text="hello world"`.
+
+## Agent guardrails
+
+Attach guardrails to a `ReActAgent` with `input_guardrails` (run on the user's prompt before the agent starts) and `output_guardrails` (run on the final response before it returns to the caller).
+
+```python
+import re
+from motus.agent import ReActAgent
+from motus.guardrails import InputGuardrailTripped
+from motus.models import OpenAIChatClient
+
+
+def no_homework(value: str, agent):
+    if "homework" in value.lower():
+        raise InputGuardrailTripped("No homework help.")
+
+
+def redact_ssn(value: str) -> str:
+    return re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[SSN]", value)
+
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    input_guardrails=[no_homework],
+    output_guardrails=[redact_ssn],
+)
+```
+
+Input guardrails receive the user's prompt as a string. If the function also declares a second parameter named `agent`, Motus passes in the running `ReActAgent` instance so the guardrail can read its configuration, inspect memory, or call helpers on it. Return a string to rewrite the prompt; raise `InputGuardrailTripped` to block the run.
+
+Output guardrails receive the final response string. Return a string to replace it; raise `OutputGuardrailTripped` to block.
+
+<Warning>
+  Agent guardrail exceptions propagate out of `agent(...)` to the caller. Your application code catches them, not the agent loop.
+</Warning>
 
 ## Structured output guardrails
 
