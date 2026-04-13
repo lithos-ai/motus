@@ -31,17 +31,17 @@ class CloudSandboxToolProvider(SandboxProvider):
         connect: str | None = None,
         ports: dict[int, int | None] | None = None,
     ) -> Sandbox | None:
-        sandbox_url = os.environ.get("SANDBOX_URL")
-        sandbox_token = os.environ.get("SANDBOX_TOKEN")
+        url = os.environ.get("SANDBOX_URL")
+        token = os.environ.get("SANDBOX_TOKEN")
         on_cloud = os.environ.get("MOTUS_ON_CLOUD") == "1"
 
-        if not on_cloud and (not sandbox_url or not sandbox_token):
+        if not on_cloud and (not url or not token):
             return None
 
         if self._sandbox is None:
             self._sandbox = CloudSandbox(
-                sandbox_url=sandbox_url or None,
-                token=sandbox_token or None,
+                url=url or None,
+                token=token or None,
             )
         return self._sandbox
 

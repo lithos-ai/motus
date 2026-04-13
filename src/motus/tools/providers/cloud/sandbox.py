@@ -12,33 +12,33 @@ class CloudSandbox(Sandbox):
     Connects to a pre-provisioned sandbox identified by URL and bearer token.
     Does NOT manage the sandbox lifecycle (create/delete/pause).
 
-    When *sandbox_url* or *token* are omitted the sandbox reads
+    When *url* or *token* are omitted the sandbox reads
     ``SANDBOX_URL`` / ``SANDBOX_TOKEN`` from the environment on every
     request.  This allows construction before the env vars are set (e.g.
     at module-import time under ``motus serve``).
 
     Usage::
 
-        async with CloudSandbox(sandbox_url="https://...", token="...") as sb:
+        async with CloudSandbox(url="https://...", token="...") as sb:
             output = await sb.sh("echo hello")
     """
 
     def __init__(
         self,
         *,
-        sandbox_url: str | None = None,
+        url: str | None = None,
         token: str | None = None,
     ) -> None:
-        self._sandbox_url = sandbox_url.rstrip("/") if sandbox_url else None
+        self._url = url.rstrip("/") if url else None
         self._token = token
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(300.0))
 
     def _get_url(self) -> str:
-        url = self._sandbox_url or os.environ.get("SANDBOX_URL")
+        url = self._url or os.environ.get("SANDBOX_URL")
         if not url:
             raise RuntimeError(
                 "Sandbox URL not available. Set the SANDBOX_URL environment "
-                "variable or pass sandbox_url= to CloudSandbox()."
+                "variable or pass url= to CloudSandbox()."
             )
         return url.rstrip("/")
 
@@ -55,7 +55,7 @@ class CloudSandbox(Sandbox):
     def create(cls, image: str = "python:3.12", **kwargs) -> Self:
         raise NotImplementedError(
             "CloudSandbox does not support create(). "
-            "Use CloudSandboxToolProvider or pass sandbox_url and token directly."
+            "Use CloudSandboxToolProvider or pass url and token directly."
         )
 
     async def exec(
