@@ -141,9 +141,7 @@ async def main():
     return pro, con, recap
 ```
 
-<Note>
-  `fork()` is synchronous and does not call the model. It forks the memory and carries over every `__init__` argument (client, model, system prompt, tools, guardrails, `response_format`, `reasoning`, `timeout`, `cache_policy`, `step_callback`, and so on). The new agent can be called immediately, like any other.
-</Note>
+The fork carries over every `__init__` argument (client, model, system prompt, tools, guardrails, `response_format`, `reasoning`, `timeout`, `cache_policy`, `step_callback`, and so on) and gets its own independent copy of the conversation memory.
 
 Forking is useful for A/B comparisons, self-consistency sampling, and any case where you want to branch from a known conversation state without mutating the original. If you just want a fresh empty agent, instantiate a new `ReActAgent` rather than forking; fork's job is preserving the accumulated conversation.
 
