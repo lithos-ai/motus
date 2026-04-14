@@ -1,74 +1,89 @@
 ---
 title: "Motus Cloud"
-description: "The managed platform that runs, scales, and observes your agents. Understand the key abstractions before you deploy."
+description: "The managed platform that runs your agents. Same code as motus serve, reachable over HTTPS, with observability built in."
 ---
 
-Motus Cloud is a managed platform for running agents. You push code, Motus builds and runs it, and your agent is reachable over HTTP with no infra on your side.
+Motus Cloud runs your agents for you. You push code, the platform builds it, deploys it, and exposes it as an HTTPS endpoint. Servers, container builds, autoscaling, and rolling upgrades are all on the platform side.
 
-Everything on Motus Cloud maps one to one to what you get from `motus serve` locally. Sessions, messages, tracing, and human in the loop all work the same way. The difference is that Motus Cloud adds a few cloud native abstractions on top: projects, builds, a model proxy, and authenticated access.
+The code you write locally (`motus serve start myapp:agent`) is the same code that runs on the cloud (`motus deploy myapp:agent`). The REST API is the same. `motus serve chat <url>` works against either. What changes when you deploy is where the agent lives, not how you wrote it.
 
-## Core abstractions
+## The hierarchy
 
-<CardGroup cols={2}>
-  <Card title="Project" icon="folder">
-    A logical container for your agent. Identified by `project_id`. Owns builds, traces, secrets, and the running agent endpoint.
-  </Card>
-  <Card title="Build" icon="box">
-    A packaged snapshot of your code. Every `motus deploy` produces a new build with a fresh `build_id` that moves through `queued`, `building`, `built`, `deploying`, and `deployed` states.
-  </Card>
-  <Card title="Running agent" icon="bolt">
-    The live HTTP endpoint for your current build. Exposes the same REST API as `motus serve` and is reachable with `motus serve chat <url>`.
-  </Card>
-  <Card title="Session" icon="comments">
-    A single conversation with your agent. Holds message history, tool call state, and runtime memory. Behaves identically to local serving.
-  </Card>
-  <Card title="Trace" icon="chart-line">
-    A tree of spans captured from every agent turn. Each span is an LLM call, a tool call, or a task run in the workflow runtime. Viewable in the dashboard or exportable to OpenTelemetry.
-  </Card>
-  <Card title="Secret" icon="key">
-    Encrypted configuration values you inject into deploys with `motus deploy --secret KEY=VALUE`. Available to the agent at runtime as environment variables.
-  </Card>
-</CardGroup>
+```
+Project
+├── Build (one per deploy)
+└── Session (one per conversation)
+    └── Trace (one per agent run)
+        └── Span (each step inside a trace)
+```
 
-## Model proxy
+### Project
 
-Motus Cloud proxies LLM calls on your behalf. You do not need to set your own `OPENAI_API_KEY` or any other provider credentials in a deployed agent. When your code instantiates a model client with no arguments, the call is routed through the platform and billed to your Motus account.
+A project is one agent application. It has a stable `project_id`, owns every build you have ever pushed, holds the secrets you injected, and keeps the URL your agent is reachable at. You typically create one project per agent app and keep deploying to it.
 
-Two consequences follow. First, deployed code stays portable across providers without key management. Second, the Motus team can swap in better models or cheaper routes without you having to rebuild. You still pick the model name, the platform handles the rest.
+### Build
+
+A packaged snapshot of your source code. Every `motus deploy` produces a new build with a fresh `build_id` that moves through:
+
+```
+CREATED → QUEUED → BUILDING → BUILT → DEPLOYING → DEPLOYED → HEALTHY
+```
+
+`HEALTHY` is the steady state (the build is serving traffic). `FAILED` is the terminal error state and can happen at any of the earlier stops. The newest healthy build is always what serves traffic. Earlier builds remain in the dashboard as a record, with their logs available.
+
+### Session
+
+A session is a sequence of requests that share state across turns. What that state contains depends on the agent: for a `ReActAgent` it is the conversation context that memory carries forward (prior messages, tool calls, and their results). Behaves identically to `motus serve`: create a session, post messages to it, receive responses.
+
+### Trace
+
+A record of one agent run, from the initial invocation through every LLM call, tool call, and sub-task it triggered. Every trace belongs to the session it ran inside.
+
+### Span
+
+Each LLM call, tool invocation, and `@agent_task` run shows up as a span inside the trace. Spans nest, so the trace tree shows exactly what the agent did and how long each step took.
+
+## Deploy in one command
+
+```bash
+motus deploy myapp:agent --name my-agent
+```
+
+This packages your source, builds it on the platform, and makes your agent reachable at a stable HTTPS URL tied to the project. See [Deployment](/guides/deployment) for the full workflow including secrets and Git-based deploys.
 
 ## Authentication
 
-The CLI authenticates through `motus login`, which opens a browser for an OAuth device flow and stores credentials at `~/.motus/credentials.json`. The stored API key is scoped to your account and is used by every `motus deploy`, `motus serve chat`, and REST API call against the cloud.
+Run `motus login` once. It opens a browser for device-code OAuth and writes credentials to `~/.motus/credentials.json`. The same credentials are picked up by `motus deploy`, `motus serve chat <cloud-url>`, and any call to the platform REST API.
 
-For CI and other non-interactive environments, set `LITHOSAI_API_KEY` in place of running `motus login`. It overrides the credentials file.
+For CI or other non-interactive environments, set `LITHOSAI_API_KEY` instead. It overrides the credentials file.
 
-## How it relates to local serving
+## What the cloud handles for you
 
-The same code runs in both places. A local run is `motus serve start myapp:agent`. A cloud run is `motus deploy myapp:agent`. You use the exact same `motus serve chat` command to talk to either URL.
+<Note>
+  **You do not configure model-provider credentials in deployed code.** At deploy time the platform injects the right API keys and base URLs into your container, so clients like `OpenAIChatClient()` or `AnthropicChatClient()` just work and the calls bill to your Motus account.
+</Note>
 
-Motus Cloud simply adds:
+A few other things you no longer have to worry about once you deploy:
 
-- Managed packaging and build orchestration
-- Persistent agent endpoints
-- Platform side model routing
-- Trace storage and a dashboard to view them
-- Authenticated multi user access
+- **Build environment.** The platform installs your dependencies from `pyproject.toml` or `requirements.txt` (same as `uv sync` locally) and runs your agent.
+- **Runtime secrets.** Pass `--secret KEY=VALUE` on the `motus deploy` command and the value lands in the agent's environment, ready for `os.environ[KEY]`.
+- **HTTPS, DNS, scaling, health checks, and rolling deploys.** All handled by the platform.
 
-None of the code in your repo changes between local and cloud.
+Nothing about the code in your repo changes between local and cloud runs.
 
-## Next steps
+## Where to go next
 
 <CardGroup cols={2}>
   <Card title="Deployment" icon="cloud-arrow-up" href="/guides/deployment">
-    The full `motus deploy` workflow, `motus.toml`, ignore rules, and Git based deploys.
+    `motus deploy` end to end: project setup, secrets, Git-based deploys.
   </Card>
   <Card title="Serving" icon="server" href="/guides/serving">
-    Session lifecycle, worker pools, webhooks, and the REST API that Motus Cloud exposes.
+    Sessions, webhooks, and the REST API that both local and cloud expose.
   </Card>
   <Card title="Tracing" icon="chart-line" href="/guides/tracing">
-    How spans are collected, exported, and viewed in the dashboard.
+    How spans are captured, what the dashboard shows, export options.
   </Card>
   <Card title="Configuration" icon="gear" href="/getting-started/configuration">
-    Environment variables, `motus.toml` project settings, and `.env` file support.
+    Project settings, environment variables, `.env` support.
   </Card>
 </CardGroup>
