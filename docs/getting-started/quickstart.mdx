@@ -9,6 +9,22 @@ This guide walks through the full Motus loop: write an agent in a few lines of P
   If you have not installed Motus yet, see [Installation](/getting-started/installation) first.
 </Note>
 
+## Fastest path: let a coding agent drive
+
+If you already work in Claude Code, Codex, Cursor, or Gemini CLI, skip the manual loop. One command installs the Motus CLI alongside a `/motus` skill that your coding agent picks up automatically:
+
+```bash
+curl -fsSL https://www.lithosai.com/motus/install.sh | sh
+```
+
+After it finishes, describe what you want to your coding agent:
+
+> /motus build me a weather agent and deploy it to Motus Cloud.
+
+It writes the code, runs `motus serve` to sanity check it, then `motus deploy` to ship, prompting you only when it actually needs a decision. See the [Plugin guide](/guides/plugin) for the full list of skill commands.
+
+Prefer to drive the CLI yourself? The rest of this page walks through the same loop by hand.
+
 ## 1. Write the agent
 
 Create a file called `myapp.py` in an empty directory:
@@ -104,23 +120,14 @@ This opens a REPL where you can keep chatting until you hit `Ctrl+C`. Sessions a
 Stop the local server with `Ctrl+C`. Now deploy the exact same code to Motus Cloud.
 
 <Steps>
-  <Step title="Log in">
-    ```bash
-    motus login
-    ```
-
-    This opens your browser to complete an OAuth device flow and stores credentials at `~/.motus/credentials.json`. If you do not have a Motus account yet, sign up at [console.lithosai.cloud](https://console.lithosai.cloud) first. Verify you are logged in with:
-
-    ```bash
-    motus whoami
-    ```
-  </Step>
   <Step title="Deploy">
     ```bash
     motus deploy --name weather-bot myapp:agent
     ```
 
-    Motus packages your project, uploads it, and streams the build status:
+    On the first run, `motus deploy` checks whether you are logged in. If not, it opens a browser so you can sign up or sign in and waits for the OAuth flow to finish, then resumes the deploy automatically.
+
+    Motus then packages your project, uploads it, and streams the build status:
 
     ```
     queued → building → built → deploying → deployed
@@ -129,7 +136,7 @@ Stop the local server with `Ctrl+C`. Now deploy the exact same code to Motus Clo
     Once it finishes, your agent is live. The deploy command prints its URL when the build succeeds.
 
     <Note>
-      The first deploy requires `--name` (or `--project-id`). Motus writes the assigned project ID and other metadata to a `motus.toml` file in your project root. On subsequent deploys, just run `motus deploy` with no arguments and it picks up the project from `motus.toml`.
+      The first deploy requires `--name` (or `--project-id`). Motus writes the assigned project ID to `motus.toml` in your project root. On subsequent deploys, just run `motus deploy` with no arguments and it picks up the project from `motus.toml`.
     </Note>
   </Step>
   <Step title="Chat with the deployed agent">
@@ -140,11 +147,13 @@ Stop the local server with `Ctrl+C`. Now deploy the exact same code to Motus Clo
     ```
 
     Auth headers are injected automatically from your stored credentials. You do not need to set any provider API keys for cloud deployments: Motus proxies model calls on your behalf.
+
+    You can also manage the deployment from the [Motus console](https://console.lithosai.cloud): browse builds and sessions, inspect traces, and open the built-in chat UI to smoke test the agent from the browser.
   </Step>
 </Steps>
 
 <Tip>
-  For CI or other non-interactive environments, set `LITHOSAI_API_KEY` in place of running `motus login`. It overrides the credentials file.
+  For CI or other non-interactive environments, set `LITHOSAI_API_KEY` instead of going through `motus login`. It overrides the credentials file.
 </Tip>
 
 ## The full loop, recap
@@ -155,8 +164,7 @@ You just went from an empty directory to a cloud hosted agent:
 # Write myapp.py (~15 lines)
 motus serve start myapp:agent --port 8000      # run it locally
 motus serve chat http://localhost:8000         # chat locally
-motus login                                    # one time auth
-motus deploy --name weather-bot myapp:agent    # ship to the cloud
+motus deploy --name weather-bot myapp:agent    # ship to the cloud (prompts login on first run)
 motus serve chat <your-agent-url>              # chat with the live agent
 ```
 
