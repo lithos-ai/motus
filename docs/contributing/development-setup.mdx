@@ -1,99 +1,61 @@
 ---
 title: "Development Setup"
-description: "Set up a local development environment for contributing to Motus."
+description: "Get a local Motus checkout running in a few minutes."
 ---
 
-## Prerequisites
+## What you need
 
-- **Python 3.12+** — check with `python3 --version`
-- **uv** — install from [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/)
-- **git**
-- **Docker Desktop** (optional) — needed for sandbox-related tests
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** handles packaging, virtual envs, and installs the right Python for you. If you have it, you have everything the project needs on the Python side.
+- **git** to clone.
+- **Docker** only if you plan to run or modify the sandbox tests.
 
-## Clone and install
+## Clone, install, verify
 
 <Steps>
-  <Step title="Clone the repository">
+  <Step title="Clone">
     ```bash
-    git clone https://github.com/gpuOS-ai/motus.git
+    git clone https://github.com/lithos-ai/motus.git
     cd motus
     ```
   </Step>
-  <Step title="Install dependencies">
+  <Step title="Install">
     ```bash
     uv sync --all-extras
     ```
-    `uv sync --all-extras` installs all dependencies including optional groups (dev, docs, test) in a local `.venv`.
+    `uv` reads `pyproject.toml`, provisions the right Python version, creates a `.venv`, and installs the project with every optional group (`dev`, `docs`, `test`). Re-run any time you pull new dependencies.
   </Step>
   <Step title="Set up pre-commit hooks">
     ```bash
     uv run pre-commit install
     ```
-    This registers git hooks that run **ruff** (linting + formatting) on every commit. If ruff finds issues, the commit is blocked until you fix them. You can run the checks manually:
-
+    This registers a git hook that runs **ruff** (linting and formatting) on every commit. To run the checks manually:
     ```bash
     uv run pre-commit run --all-files
     ```
   </Step>
-  <Step title="Verify setup">
+  <Step title="Verify">
     ```bash
     uv run pytest tests/unit/ -x -q
     ```
-    All unit tests should pass without any API keys or external services. If you see failures, check that you installed with `--all-extras` and are running Python 3.12+.
+    Unit tests run without API keys or Docker. If something fails here, re-check that `uv sync --all-extras` completed cleanly.
   </Step>
 </Steps>
 
-## Editor setup
+The ruff config lives in `pyproject.toml` under `[tool.ruff]`. Any editor ruff integration that respects `pyproject.toml` will pick it up automatically, which is most of them.
 
-The ruff configuration lives in `pyproject.toml` under `[tool.ruff]`. Point your editor at this config to get consistent linting and formatting.
+## Previewing the docs
 
-<Tabs>
-  <Tab title="VS Code">
-    1. Install the [Ruff extension](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff).
-    2. The extension auto-detects `pyproject.toml` settings.
-    3. Enable format-on-save for `.py` files:
-
-    ```json
-    {
-      "[python]": {
-        "editor.defaultFormatter": "charliermarsh.ruff",
-        "editor.formatOnSave": true
-      }
-    }
-    ```
-  </Tab>
-  <Tab title="PyCharm">
-    1. Install the [Ruff plugin](https://plugins.jetbrains.com/plugin/20574-ruff) from the marketplace.
-    2. Under **Settings > Tools > Ruff**, confirm the config path points to `pyproject.toml`.
-    3. Enable "Run ruff on save" in the plugin settings.
-  </Tab>
-</Tabs>
-
-## Running the docs locally
+If you touch anything under `docs/`, preview the change before you open a PR:
 
 ```bash
+cd docs
 npx mintlify dev
 ```
 
-Opens at [http://localhost:3000](http://localhost:3000). The site rebuilds on file changes.
-
-## Project layout
-
-```
-src/motus/
-├── agent/          # Agent implementations (ReActAgent, etc.)
-├── memory/         # Memory systems (CompactionMemory, etc.)
-├── models/         # Model backends
-├── runtime/        # Core runtime (AgentRuntime, AgentFuture, TaskInstance)
-└── tools/          # Built-in tools
-
-tests/
-├── unit/           # Fast tests, no API keys
-└── integration/    # VCR-based replay tests
-```
+Opens at [http://localhost:3000](http://localhost:3000) and rebuilds on file changes.
 
 ## Next steps
 
-- Read the [Code Style](/contributing/code-style) guide for conventions beyond what ruff enforces.
-- Read the [Testing](/contributing/testing) guide before writing your first test.
-- Read the [Pull Requests](/contributing/pull-requests) process when you are ready to submit.
+- [Code Style](/contributing/code-style) for conventions beyond what ruff enforces.
+- [Testing](/contributing/testing) before writing your first test.
+- [Pull Requests](/contributing/pull-requests) when you are ready to submit.
