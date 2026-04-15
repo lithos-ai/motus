@@ -206,10 +206,14 @@ class LocalScheduler(Scheduler):
 
     def __init__(self) -> None:
         self._scheduler = sched.scheduler(time.time, lambda _: None)
-        self._handlers: dict[str, Callable[[], None] | Callable[[], Awaitable[None]]] = {}
+        self._handlers: dict[
+            str, Callable[[], None] | Callable[[], Awaitable[None]]
+        ] = {}
         self._jobs: dict[str, _LocalJob] = {}
 
-    def on(self, name: str, handler: Callable[[], None] | Callable[[], Awaitable[None]]) -> None:
+    def on(
+        self, name: str, handler: Callable[[], None] | Callable[[], Awaitable[None]]
+    ) -> None:
         """Register a handler that fires when notification *name* triggers."""
         self._handlers[name] = handler
 
@@ -224,8 +228,12 @@ class LocalScheduler(Scheduler):
     ) -> str:
         job_id = f"local-{uuid.uuid4().hex[:12]}"
         interval = _parse_interval(schedule_type, expression)
-        job = _LocalJob(name=name, job_id=job_id, interval=interval,
-                        one_shot=(schedule_type == "at"))
+        job = _LocalJob(
+            name=name,
+            job_id=job_id,
+            interval=interval,
+            one_shot=(schedule_type == "at"),
+        )
         self._jobs[job_id] = job
         self._schedule_next(job)
         return job_id

@@ -14,7 +14,6 @@ from motus.utils.scheduler import (
     _parse_interval,
 )
 
-
 # ======================================================================
 # Helpers
 # ======================================================================
@@ -53,7 +52,9 @@ class TestCloudSchedulerDefaults(unittest.TestCase):
         self.assertEqual(s._project_id, "proj_xyz")
 
     def test_explicit_args_override_env(self):
-        with mock.patch.dict(os.environ, {"LITHOSAI_API_URL": "https://wrong.com"}, clear=False):
+        with mock.patch.dict(
+            os.environ, {"LITHOSAI_API_URL": "https://wrong.com"}, clear=False
+        ):
             s = CloudScheduler(api_url="https://right.com")
         self.assertEqual(s._api_url, "https://right.com")
 
@@ -67,14 +68,21 @@ class TestCloudSchedulerSchedule(unittest.IsolatedAsyncioTestCase):
         fake_resp = _mock_response({"notification_id": "notif_001", "status": "active"})
 
         s = CloudScheduler(
-            api_url="https://api.example.com", api_key="key_123",
-            session_id="sess_abc", session_token="ses_tok", project_id="proj_xyz",
+            api_url="https://api.example.com",
+            api_key="key_123",
+            session_id="sess_abc",
+            session_token="ses_tok",
+            project_id="proj_xyz",
         )
 
-        with mock.patch("motus.utils.scheduler.urllib.request.urlopen", return_value=fake_resp) as m:
+        with mock.patch(
+            "motus.utils.scheduler.urllib.request.urlopen", return_value=fake_resp
+        ) as m:
             result = await s.schedule(
-                "daily-digest", schedule_type="rate",
-                expression="rate(5 minutes)", message="Time to check.",
+                "daily-digest",
+                schedule_type="rate",
+                expression="rate(5 minutes)",
+                message="Time to check.",
             )
 
         self.assertEqual(result, "notif_001")
@@ -95,13 +103,24 @@ class TestCloudSchedulerSchedule(unittest.IsolatedAsyncioTestCase):
 
     async def test_custom_timezone(self):
         fake_resp = _mock_response({"notification_id": "notif_002"})
-        s = CloudScheduler(api_url="https://api.example.com", api_key="k",
-                           session_id="s", session_token="t", project_id="p")
+        s = CloudScheduler(
+            api_url="https://api.example.com",
+            api_key="k",
+            session_id="s",
+            session_token="t",
+            project_id="p",
+        )
 
-        with mock.patch("motus.utils.scheduler.urllib.request.urlopen", return_value=fake_resp) as m:
-            await s.schedule("tz-test", schedule_type="cron",
-                             expression="cron(0 9 * * ? *)", message="morning",
-                             timezone="America/New_York")
+        with mock.patch(
+            "motus.utils.scheduler.urllib.request.urlopen", return_value=fake_resp
+        ) as m:
+            await s.schedule(
+                "tz-test",
+                schedule_type="cron",
+                expression="cron(0 9 * * ? *)",
+                message="morning",
+                timezone="America/New_York",
+            )
 
         body = json.loads(m.call_args[0][0].data)
         self.assertEqual(body["timezone"], "America/New_York")
@@ -110,24 +129,42 @@ class TestCloudSchedulerSchedule(unittest.IsolatedAsyncioTestCase):
 class TestCloudSchedulerRemove(unittest.IsolatedAsyncioTestCase):
     async def test_sends_delete(self):
         fake_resp = _mock_response()
-        s = CloudScheduler(api_url="https://api.example.com", api_key="key_123",
-                           session_id="s", session_token="t", project_id="p")
+        s = CloudScheduler(
+            api_url="https://api.example.com",
+            api_key="key_123",
+            session_id="s",
+            session_token="t",
+            project_id="p",
+        )
 
-        with mock.patch("motus.utils.scheduler.urllib.request.urlopen", return_value=fake_resp) as m:
+        with mock.patch(
+            "motus.utils.scheduler.urllib.request.urlopen", return_value=fake_resp
+        ) as m:
             await s.remove("notif_001")
 
         req = m.call_args[0][0]
         self.assertEqual(req.get_method(), "DELETE")
-        self.assertEqual(req.full_url, "https://api.example.com/notifications/notif_001")
+        self.assertEqual(
+            req.full_url, "https://api.example.com/notifications/notif_001"
+        )
 
 
 class TestCloudSchedulerList(unittest.IsolatedAsyncioTestCase):
     async def test_sends_get(self):
-        fake_resp = _mock_response([{"notification_id": "n1"}, {"notification_id": "n2"}])
-        s = CloudScheduler(api_url="https://api.example.com", api_key="k",
-                           session_id="s", session_token="t", project_id="p")
+        fake_resp = _mock_response(
+            [{"notification_id": "n1"}, {"notification_id": "n2"}]
+        )
+        s = CloudScheduler(
+            api_url="https://api.example.com",
+            api_key="k",
+            session_id="s",
+            session_token="t",
+            project_id="p",
+        )
 
-        with mock.patch("motus.utils.scheduler.urllib.request.urlopen", return_value=fake_resp) as m:
+        with mock.patch(
+            "motus.utils.scheduler.urllib.request.urlopen", return_value=fake_resp
+        ) as m:
             result = await s.list()
 
         self.assertEqual(len(result), 2)
@@ -137,27 +174,49 @@ class TestCloudSchedulerList(unittest.IsolatedAsyncioTestCase):
 class TestCloudSchedulerErrors(unittest.IsolatedAsyncioTestCase):
     async def test_http_error(self):
         import urllib.error
+
         error = urllib.error.HTTPError(
-            url="https://api.example.com/notifications", code=422,
-            msg="Unprocessable", hdrs={},
+            url="https://api.example.com/notifications",
+            code=422,
+            msg="Unprocessable",
+            hdrs={},
             fp=BytesIO(b'{"detail": "bad"}'),
         )
-        s = CloudScheduler(api_url="https://api.example.com", api_key="k",
-                           session_id="s", session_token="t", project_id="p")
+        s = CloudScheduler(
+            api_url="https://api.example.com",
+            api_key="k",
+            session_id="s",
+            session_token="t",
+            project_id="p",
+        )
 
-        with mock.patch("motus.utils.scheduler.urllib.request.urlopen", side_effect=error):
+        with mock.patch(
+            "motus.utils.scheduler.urllib.request.urlopen", side_effect=error
+        ):
             with self.assertRaises(SchedulerError) as ctx:
-                await s.schedule("fail", schedule_type="rate",
-                                 expression="rate(1 hour)", message="msg")
+                await s.schedule(
+                    "fail",
+                    schedule_type="rate",
+                    expression="rate(1 hour)",
+                    message="msg",
+                )
         self.assertEqual(ctx.exception.status, 422)
 
     async def test_url_error(self):
         import urllib.error
-        error = urllib.error.URLError("Connection refused")
-        s = CloudScheduler(api_url="https://api.example.com", api_key="k",
-                           session_id="s", session_token="t", project_id="p")
 
-        with mock.patch("motus.utils.scheduler.urllib.request.urlopen", side_effect=error):
+        error = urllib.error.URLError("Connection refused")
+        s = CloudScheduler(
+            api_url="https://api.example.com",
+            api_key="k",
+            session_id="s",
+            session_token="t",
+            project_id="p",
+        )
+
+        with mock.patch(
+            "motus.utils.scheduler.urllib.request.urlopen", side_effect=error
+        ):
             with self.assertRaises(SchedulerError):
                 await s.list()
 
@@ -173,8 +232,9 @@ class TestLocalScheduler(unittest.IsolatedAsyncioTestCase):
         calls = []
         scheduler.on("test-job", lambda: calls.append("fired"))
 
-        job_id = await scheduler.schedule("test-job", schedule_type="rate",
-                                          expression="rate(1 seconds)")
+        job_id = await scheduler.schedule(
+            "test-job", schedule_type="rate", expression="rate(1 seconds)"
+        )
 
         self.assertIn(job_id, scheduler._jobs)
 
@@ -186,14 +246,18 @@ class TestLocalScheduler(unittest.IsolatedAsyncioTestCase):
     async def test_remove_cancels_job(self):
         scheduler = LocalScheduler()
         scheduler.on("test-job", lambda: None)
-        job_id = await scheduler.schedule("test-job", schedule_type="rate",
-                                          expression="rate(60 seconds)")
+        job_id = await scheduler.schedule(
+            "test-job", schedule_type="rate", expression="rate(60 seconds)"
+        )
         await scheduler.remove(job_id)
         self.assertNotIn(job_id, scheduler._jobs)
 
     async def test_on_registers_handler(self):
         scheduler = LocalScheduler()
-        handler = lambda: None
+
+        def handler():
+            pass
+
         scheduler.on("my-job", handler)
         self.assertIs(scheduler._handlers["my-job"], handler)
 
@@ -208,8 +272,9 @@ class TestLocalScheduler(unittest.IsolatedAsyncioTestCase):
         # Directly test the _fire path
         job = scheduler._jobs.get("nonexistent")  # won't exist yet
         # Schedule and then simulate fire
-        job_id = await scheduler.schedule("async-job", schedule_type="at",
-                                          expression="at(2025-01-01T00:00:00)")
+        job_id = await scheduler.schedule(
+            "async-job", schedule_type="at", expression="at(2025-01-01T00:00:00)"
+        )
         job = scheduler._jobs[job_id]
         scheduler._fire(job)
         await asyncio.sleep(0)  # let the event loop process the task
@@ -218,8 +283,9 @@ class TestLocalScheduler(unittest.IsolatedAsyncioTestCase):
     async def test_one_shot_removes_after_fire(self):
         scheduler = LocalScheduler()
         scheduler.on("once", lambda: None)
-        job_id = await scheduler.schedule("once", schedule_type="at",
-                                          expression="at(2025-01-01T00:00:00)")
+        job_id = await scheduler.schedule(
+            "once", schedule_type="at", expression="at(2025-01-01T00:00:00)"
+        )
         job = scheduler._jobs[job_id]
         scheduler._fire(job)
         self.assertNotIn(job_id, scheduler._jobs)
@@ -227,8 +293,9 @@ class TestLocalScheduler(unittest.IsolatedAsyncioTestCase):
     async def test_recurring_reschedules_after_fire(self):
         scheduler = LocalScheduler()
         scheduler.on("recurring", lambda: None)
-        job_id = await scheduler.schedule("recurring", schedule_type="rate",
-                                          expression="rate(30 seconds)")
+        job_id = await scheduler.schedule(
+            "recurring", schedule_type="rate", expression="rate(30 seconds)"
+        )
         job = scheduler._jobs[job_id]
         queue_len_before = len(scheduler._scheduler.queue)
         scheduler._fire(job)
