@@ -1,6 +1,6 @@
 ---
 name: motus
-version: 0.2.0
+version: 0.3.0
 description: Build, configure, and deploy AI agents using the Motus framework. Use when user wants to create agents, define tools, set up workflows, configure memory or guardrails, or deploy agents locally or to the cloud. Triggers on mentions of motus, ReActAgent, agent_task, tool creation, MCP integration, motus deploy, motus serve.
 argument-hint: "[deploy [--name name] [import-path]] or [deploy [--project-id id] [import-path]] or [serve [import-path]] or [description of agent to build]"
 ---
