@@ -85,10 +85,19 @@ def _print_update_message(current: str, latest: str) -> None:
     )
 
 
+def _ensure_utf8_stdout():
+    """Reconfigure stdout/stderr to UTF-8 on platforms that default to a narrower encoding."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 # -- Entry point ---------------------------------------------------------------
 
 
 def main():
+    _ensure_utf8_stdout()
     parser = argparse.ArgumentParser(
         prog="motus",
         description="Motus Agent Framework",

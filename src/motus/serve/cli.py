@@ -218,7 +218,13 @@ def _send_and_wait(client, base_url, session_id, message, params=None):
             # continue polling — worker is still running, waiting for resume
         elif status == "idle":
             if data.get("response"):
-                print(data["response"]["content"])
+                content = data["response"]["content"]
+                try:
+                    print(content)
+                except UnicodeEncodeError:
+                    sys.stdout.buffer.write(
+                        content.encode("utf-8", errors="replace") + b"\n"
+                    )
             return
         else:
             # running or unknown — keep polling
