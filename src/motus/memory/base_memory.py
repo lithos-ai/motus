@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 import tiktoken
 
+from motus.memory.session_state import SessionState
 from motus.models import ChatMessage
 
 logger = logging.getLogger(__name__)
