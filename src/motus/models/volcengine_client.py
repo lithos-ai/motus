@@ -122,32 +122,37 @@ class VolcEngineChatClient(BaseChatClient):
                 }
         return result
 
-    def _parse_response(self, response, model: str) -> ChatCompletion:
-        """Convert response to ChatCompletion."""
-        choice = response.choices[0]
-        message = choice.message
+    def _build_tool_calls_from_stream(
+        self, tool_calls_map: dict[int, dict]
+    ) -> Optional[list[ToolCall]]:
+        """Build ToolCall list from aggregated streaming tool_calls_map."""
+        if not tool_calls_map:
+            return None
+        return [
+            ToolCall(
+                id=tool_call["id"],
+                function=FunctionCall(
+                    name=tool_call["name"],
+                    arguments=tool_call["arguments"],
+                ),
+            )
+            for _, tool_call in sorted(tool_calls_map.items())
+        ]
 
-        tool_calls = None
-        if message.tool_calls:
-            tool_calls = [
-                ToolCall(
-                    id=tc.id,
-                    function=FunctionCall(
-                        name=tc.function.name,
-                        arguments=tc.function.arguments,
-                    ),
-                )
-                for tc in message.tool_calls
-            ]
-
-        return ChatCompletion(
-            id=response.id,
-            model=model,
-            content=message.content,
-            tool_calls=tool_calls,
-            finish_reason=choice.finish_reason or "stop",
-            usage=self._extract_usage(response),
-        )
+    def _build_tool_calls_from_response(self, tool_calls) -> Optional[list[ToolCall]]:
+        """Build ToolCall list from a non-streaming response message."""
+        if not tool_calls:
+            return None
+        return [
+            ToolCall(
+                id=tool_call.id,
+                function=FunctionCall(
+                    name=tool_call.function.name,
+                    arguments=tool_call.function.arguments,
+                ),
+            )
+            for tool_call in tool_calls
+        ]
 
     async def create(
         self,
@@ -171,7 +176,6 @@ class VolcEngineChatClient(BaseChatClient):
         if tools:
             request_kwargs["tools"] = self._convert_tools(tools)
 
-        # aggregate streaming chunks into final content, tool_calls, finish_reason, and usage
         content_parts: list[str] = []
         tool_calls_map: dict[int, dict] = {}
         finish_reason = "stop"
@@ -183,7 +187,6 @@ class VolcEngineChatClient(BaseChatClient):
             if chunk.id:
                 response_id = chunk.id
 
-            # the final chunk contains usage and finish_reason, but we also check each chunk for updates in case of early finish or incremental usage reporting
             if getattr(chunk, "usage", None):
                 usage_data = chunk.usage
 
@@ -198,7 +201,6 @@ class VolcEngineChatClient(BaseChatClient):
             if delta.content:
                 content_parts.append(delta.content)
 
-            # tool_calls can also be streamed incrementally, so we need to aggregate them across chunks based on their index
             if delta.tool_calls:
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
@@ -214,28 +216,14 @@ class VolcEngineChatClient(BaseChatClient):
                                 tc_delta.function.arguments
                             )
 
-        content = "".join(content_parts) or None
-
-        tool_calls = None
-        if tool_calls_map:
-            tool_calls = [
-                ToolCall(
-                    id=data["id"],
-                    function=FunctionCall(
-                        name=data["name"], arguments=data["arguments"]
-                    ),
-                )
-                for _, data in sorted(tool_calls_map.items())
-            ]
-
         return ChatCompletion(
             id=response_id,
             model=model,
-            content=content,
-            tool_calls=tool_calls,
+            content="".join(content_parts) or None,
+            tool_calls=self._build_tool_calls_from_stream(tool_calls_map),
             finish_reason=finish_reason or "stop",
             parsed=None,
-            usage=self._extract_usage(usage_data) if usage_data else None,
+            usage=self._extract_usage(usage_data),
         )
 
     async def parse(
@@ -283,24 +271,11 @@ class VolcEngineChatClient(BaseChatClient):
             except Exception:
                 parsed = None
 
-        tool_calls = None
-        if message.tool_calls:
-            tool_calls = [
-                ToolCall(
-                    id=tc.id,
-                    function=FunctionCall(
-                        name=tc.function.name,
-                        arguments=tc.function.arguments,
-                    ),
-                )
-                for tc in message.tool_calls
-            ]
-
         return ChatCompletion(
             id=response.id,
             model=model,
             content=message.content,
-            tool_calls=tool_calls,
+            tool_calls=self._build_tool_calls_from_response(message.tool_calls),
             finish_reason=choice.finish_reason or "stop",
             parsed=parsed,
             usage=self._extract_usage(response),
