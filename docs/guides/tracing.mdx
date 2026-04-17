@@ -133,24 +133,8 @@ config = TraceConfig(
 | `project` | \`str | None\` | `MOTUS_PROJECT` / `motus.toml` | Project tag for cloud traces |
 | `build` | \`str | None\` | `MOTUS_BUILD` / `motus.toml` | Build tag for cloud traces |
 
-## Self-managed Agent tracing
-
-With a Motus Cloud account, spans stream to the Motus dashboard in real time. Authenticate with:
-
-```bash
-motus login
-```
-
-Then run your agent with tracing enabled:
-
-```bash
-MOTUS_TRACING=1 python my_agent.py
-```
-
-Tag traces with project and build identifiers for easier filtering in the dashboard:
-
-```bash
-MOTUS_PROJECT=my-project MOTUS_BUILD=v1.2.3 python my_agent.py
-```
-
 ## Cloud Tracing
+
+When your agent is deployed to Motus Cloud via `motus deploy`, traces are automatically streamed to the Motus dashboard — no additional configuration needed. The cloud infrastructure sets `MOTUS_ON_CLOUD=1`, which enables cloud trace upload alongside your existing credentials.
+
+Local runs never send traces to the cloud, even if you are logged in. This prevents accidental uploads during development.

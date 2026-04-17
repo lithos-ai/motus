@@ -19,20 +19,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from ..types import MODEL_CALL, TOOL_CALL
-from .pricing import TEXT_MODEL_PRICING
-
-
-def normalize_model_name(model_name: str) -> str:
-    """Normalize model name for pricing lookup.
-
-    Strips date suffixes (e.g., "claude-sonnet-4-20250514" -> "claude-sonnet-4")
-    and handles common variations.
-    """
-    if not model_name:
-        return model_name
-    # Strip date suffixes (e.g., -20250514, -2025-05-14)
-    normalized = model_name.split("-202")[0] if "-202" in model_name else model_name
-    return normalized
 
 
 def load_trace_data(path: str = "tracer_state.json") -> Dict[str, Any]:
@@ -86,13 +72,12 @@ def convert_single_span_to_otel(
                 attributes["model.tokens.reasoning"] = usage[
                     "completion_tokens_details"
                 ]["reasoning_tokens"]
-            # Normalize model name for pricing lookup (strip date suffixes)
-            pricing_model_name = normalize_model_name(meta.get("model_name", ""))
-            if pricing_model_name in TEXT_MODEL_PRICING:
-                pricing = TEXT_MODEL_PRICING[pricing_model_name]
-                input_k = usage.get("prompt_tokens", 0) / 1000
-                output_k = usage.get("completion_tokens", 0) / 1000
-                cost = input_k * pricing.input_per_1k + output_k * pricing.output_per_1k
+            # Calculate cost using the unified pricing registry
+            from motus.models.pricing import calculate_cost
+
+            model_name = output.get("model") or meta.get("model_name", "")
+            cost = calculate_cost(model_name, usage)
+            if cost is not None:
                 attributes["model.cost_usd"] = round(cost, 5)
 
     # Add tool schema metadata

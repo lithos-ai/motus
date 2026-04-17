@@ -187,5 +187,9 @@ class TraceConfig:
 
     @property
     def cloud_enabled(self) -> bool:
-        """Whether cloud trace upload is configured."""
-        return bool(self.cloud_api_url and self.cloud_api_key)
+        """Whether cloud trace upload is active.
+
+        Only True when MOTUS_ON_CLOUD=1, which is set automatically by
+        cloud deployment infrastructure.
+        """
+        return os.getenv("MOTUS_ON_CLOUD", "").lower() in ("1", "true", "yes")

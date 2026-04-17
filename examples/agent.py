@@ -8,11 +8,11 @@ Deploy:   motus deploy agent:agent
 import asyncio
 
 from motus.agent import ReActAgent
-from motus.models import ChatMessage, OpenAIChatClient
+from motus.models import AnthropicChatClient, ChatMessage
 
 agent = ReActAgent(
-    client=OpenAIChatClient(),
-    model_name="anthropic/claude-opus-4.6",
+    client=AnthropicChatClient(),
+    model_name="claude-haiku-4-5",
     system_prompt="You are a helpful assistant.",
 )
 
