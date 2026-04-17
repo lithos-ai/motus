@@ -386,12 +386,19 @@ ANTHROPIC_MODELS: Dict[str, ModelLimits] = {
         max_output_tokens=16_000,
         description="Claude Opus 4.5 - frontier intelligence",
     ),
+    "claude-opus-4-7": ModelLimits(
+        model_id="claude-opus-4-7",
+        provider=ModelProvider.ANTHROPIC,
+        context_window=1_000_000,
+        max_output_tokens=128_000,
+        description="Claude Opus 4.7 - most capable model, step-change in agentic coding",
+    ),
     "claude-opus-4-6": ModelLimits(
         model_id="claude-opus-4-6",
         provider=ModelProvider.ANTHROPIC,
         context_window=1_000_000,
         max_output_tokens=128_000,
-        description="Claude Opus 4.6 - latest most capable model",
+        description="Claude Opus 4.6 - legacy most capable model",
     ),
     # Claude Sonnet 4 series
     "claude-sonnet-4-20250514": ModelLimits(

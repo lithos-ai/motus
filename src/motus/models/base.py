@@ -71,7 +71,11 @@ class ReasoningConfig:
         if not self.enabled:
             return {"type": "disabled"}
 
-        is_adaptive_model = "claude-opus-4-6" in model or "claude-sonnet-4-6" in model
+        is_adaptive_model = (
+            "claude-opus-4-7" in model
+            or "claude-opus-4-6" in model
+            or "claude-sonnet-4-6" in model
+        )
 
         if is_adaptive_model:
             param: dict = {"type": "adaptive"}
@@ -87,7 +91,11 @@ class ReasoningConfig:
         """Return the effort level for the Anthropic output_config, if applicable."""
         if not self.enabled:
             return None
-        is_adaptive_model = "claude-opus-4-6" in model or "claude-sonnet-4-6" in model
+        is_adaptive_model = (
+            "claude-opus-4-7" in model
+            or "claude-opus-4-6" in model
+            or "claude-sonnet-4-6" in model
+        )
         if is_adaptive_model and self.effort:
             return self.effort
         return None
