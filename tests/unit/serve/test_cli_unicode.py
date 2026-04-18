@@ -16,7 +16,7 @@ class TestCliUnicodeOutput(unittest.TestCase):
 
         _ensure_utf8_stdout()
         # This would crash on cp1252 without the fix
-        print("Hello 👋😊 — curly quotes \"test\"")
+        print('Hello 👋😊 — curly quotes "test"')
 
 
 if __name__ == "__main__":
