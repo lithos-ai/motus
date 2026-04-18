@@ -124,16 +124,69 @@ def _validate_result(result) -> tuple[ChatMessage, list[ChatMessage]]:
 
 
 def _get_trace_metrics() -> dict | None:
-    """Collect trace metrics from the motus runtime if available."""
-    try:
-        from motus.runtime.agent_runtime import get_runtime
+    """Summarize the spans collected during this turn.
 
-        rt = get_runtime()
-        if hasattr(rt, "scheduler") and hasattr(rt.scheduler, "tracer"):
-            return rt.scheduler.tracer.get_turn_metrics()
+    Walks the ``OfflineSpanCollector``'s buffered ReadableSpans and returns
+    ``{total_duration, total_tokens, has_error}`` — the shape the serve
+    session schema expects. Returns ``None`` if tracing is disabled or no
+    spans were recorded.
+    """
+    try:
+        import json
+
+        from motus.tracing import get_collector
+        from motus.tracing.agent_tracer import ATTR_ERROR, ATTR_MODEL_OUTPUT, ATTR_USAGE
+
+        collector = get_collector()
+        if collector is None or not collector.spans:
+            return {
+                "trace_id": None,
+                "total_duration": 0.0,
+                "total_tokens": 0,
+                "has_error": False,
+            }
+
+        min_start = float("inf")
+        max_end = 0
+        total_tokens = 0
+        has_error = False
+
+        for span in collector.spans:
+            start_us = (span.start_time or 0) // 1000
+            end_us = (span.end_time or span.start_time or 0) // 1000
+            if start_us <= 0:
+                continue
+            if start_us < min_start:
+                min_start = start_us
+            if end_us > max_end:
+                max_end = end_us
+
+            attrs = span.attributes or {}
+            if attrs.get(ATTR_ERROR):
+                has_error = True
+
+            usage_json = attrs.get(ATTR_USAGE) or attrs.get(ATTR_MODEL_OUTPUT)
+            if usage_json:
+                try:
+                    data = json.loads(usage_json) if isinstance(usage_json, str) else {}
+                    usage = data.get("usage", data) if isinstance(data, dict) else {}
+                    if isinstance(usage, dict):
+                        total_tokens += usage.get("total_tokens", 0)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        total_duration = 0.0
+        if max_end > min_start:
+            total_duration = (max_end - min_start) / 1_000_000
+
+        return {
+            "trace_id": None,
+            "total_duration": total_duration,
+            "total_tokens": total_tokens,
+            "has_error": has_error,
+        }
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _finalize_trace() -> None:
@@ -144,13 +197,9 @@ def _finalize_trace() -> None:
     the main process kills this subprocess.
     """
     try:
-        from motus.runtime.agent_runtime import get_runtime
+        from motus.tracing.agent_tracer import flush_cloud_trace
 
-        rt = get_runtime()
-        if hasattr(rt, "scheduler") and hasattr(rt.scheduler, "tracer"):
-            exporter = rt.scheduler.tracer._cloud_exporter
-            if exporter is not None:
-                exporter.close()  # flush remaining spans + POST /complete
+        flush_cloud_trace()
     except Exception:
         pass
 
@@ -188,11 +237,9 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
 
         if session_id:
             try:
-                from motus.runtime.agent_runtime import get_runtime
+                from motus.tracing.agent_tracer import set_session_id
 
-                rt = get_runtime()
-                if hasattr(rt, "scheduler") and hasattr(rt.scheduler, "tracer"):
-                    rt.scheduler.tracer.set_session_id(session_id)
+                set_session_id(session_id)
             except Exception:
                 pass  # tracer unavailable is not fatal
 

@@ -37,9 +37,10 @@ from .agent_tracer import (
     ATTR_TOOL_INPUT,
     ATTR_TOOL_META,
     ATTR_TOOL_OUTPUT,
-    get_tracer,
     json_attr,
 )
+
+tracer = trace.get_tracer(__name__)
 
 
 def _safe_dump(obj: Any) -> Any:
@@ -58,8 +59,6 @@ def traced_model_call(func):
 
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
-        tracer = get_tracer()
-
         # Extract model info from args
         # model_serve_task(client, model, messages, tools, ...)
         model = kwargs.get("model") or (args[1] if len(args) > 1 else "unknown")
@@ -122,8 +121,6 @@ def traced_agent_call(func):
 
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
-        tracer = get_tracer()
-
         # args[0] is self (the agent instance)
         agent = args[0] if args else None
         agent_name = getattr(agent, "name", None) or (
@@ -155,8 +152,6 @@ def traced_tool_call(func):
 
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
-        tracer = get_tracer()
-
         # args[0] is self (the Tool instance)
         tool = args[0] if args else None
         tool_name = getattr(tool, "name", "unknown")
@@ -190,7 +185,6 @@ def traced(name: str | None = None, task_type: str = "normal_task"):
 
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            tracer = get_tracer()
             with tracer.start_as_current_span(
                 span_name,
                 attributes={

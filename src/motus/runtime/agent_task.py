@@ -263,7 +263,9 @@ def register_agent_task(
     # If it hasn't been inited yet, automatically initialize it
     rt = get_runtime()
     if parent_stack is None:
-        parent_stack = rt.scheduler.tracer.get_stack()
+        from .tracing import get_stack
+
+        parent_stack = get_stack()
     return rt.submit_task_registration(
         func,
         args,

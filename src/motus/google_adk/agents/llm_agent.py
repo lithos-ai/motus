@@ -15,8 +15,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from opentelemetry import trace
-
 try:
     from google.adk.agents.llm_agent import Agent as _ADKAgent
     from google.adk.runners import InMemoryRunner
@@ -36,59 +34,15 @@ _APP_NAME = "motus"
 _USER_ID = "motus_user"
 _SESSION_ID = "motus_session"
 
-_otel_registered = False
-
-
-def _get_tracer() -> trace.Tracer:
-    """Get the OTel tracer from motus tracing setup."""
-    from motus.runtime.tracing.agent_tracer import get_tracer
-
-    return get_tracer()
-
-
-def _ensure_tracing() -> None:
-    """Register MotusSpanProcessor with the OTel TracerProvider (once per process).
-
-    ADK emits OTel spans on the global TracerProvider. Our MotusSpanProcessor
-    re-emits them on the motus tracer with motus.* attributes so they flow
-    through our configured SpanProcessors.
-    """
-    global _otel_registered
-    if _otel_registered:
-        return
-
-    try:
-        from opentelemetry import trace as otel_trace
-        from opentelemetry.sdk.trace import TracerProvider
-
-        from motus.google_adk._motus_tracing import MotusSpanProcessor
-
-        processor = MotusSpanProcessor()
-
-        # Add our processor to the existing TracerProvider if one is already set
-        # (ADK or another library may have configured it). Otherwise, create one.
-        provider = otel_trace.get_tracer_provider()
-        if isinstance(provider, TracerProvider):
-            provider.add_span_processor(processor)
-        else:
-            # Proxy wrapper -- set up a new TracerProvider with our processor
-            from google.adk.telemetry.setup import OTelHooks, maybe_set_otel_providers
-
-            maybe_set_otel_providers([OTelHooks(span_processors=[processor])])
-
-        _otel_registered = True
-        logger.debug("Registered MotusSpanProcessor with Google ADK OTel")
-    except Exception as e:
-        logger.debug(f"Could not register MotusSpanProcessor: {e}")
-
-
-def get_tracer() -> trace.Tracer:
-    """Public accessor for the OTel tracer."""
-    return _get_tracer()
-
 
 class Agent(_ADKAgent):
-    """Google ADK Agent with a built-in ``run_turn`` method for motus serve."""
+    """Google ADK Agent with a built-in ``run_turn`` method for motus serve.
+
+    ADK emits spans on the global TracerProvider, which motus already owns
+    (``setup_tracing`` runs at ``motus`` import time). ADK's gen_ai.* spans
+    flow through our SpanProcessors and are rendered via ``span_convert``'s
+    gen_ai.* fallbacks — no bridge processor needed.
+    """
 
     async def run_turn(
         self, message: ChatMessage, state: list[ChatMessage]
@@ -101,8 +55,6 @@ class Agent(_ADKAgent):
         from google.adk.events import Event
 
         from motus.models import ChatMessage as _CM
-
-        _ensure_tracing()
 
         runner = InMemoryRunner(self, app_name=_APP_NAME)
         session = await runner.session_service.create_session(

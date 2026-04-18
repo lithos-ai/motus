@@ -15,8 +15,18 @@ from typing import (
     List,
 )
 
+from opentelemetry import trace
+
+from ..tracing.agent_tracer import (
+    ATTR_ERROR,
+    ATTR_FUNC,
+    ATTR_TASK_TYPE,
+    export_trace,
+    get_config,
+    shutdown_tracing,
+)
 from .agent_future import AgentFuture
-from .hooks import emit_on_task, hooks
+from .hooks import emit_on_task, hooks  # noqa: F401 — re-exported for tests
 from .task_instance import (
     DEFAULT_POLICY,
     TaskCancelledError,
@@ -28,8 +38,15 @@ from .task_instance import (
     _scan_deps,
     stitch_creation_chain,
 )
-from .tracing.agent_tracer import TraceManager
+from .tracing import (
+    ATTR_PARENT_TASK_ID,
+    ATTR_TASK_ID,
+    _current_task_id,
+    get_stack,
+)
 from .types import TASK, AgentFutureId, AgentTaskId, TaskType
+
+tracer = trace.get_tracer(__name__)
 
 logging.basicConfig(
     level=getattr(
@@ -68,51 +85,14 @@ class GraphScheduler:
         # Future registry (needed for create_agent_future and lookups by id).
         self.agent_futures: Dict[AgentFutureId, AgentFuture] = {}
 
-        # Tracer (hook-driven)
-        # TraceManager reads configuration from MOTUS_TRACING/MOTUS_COLLECTION_LEVEL env vars
-        self.tracer = TraceManager()
-        self._tracing_hooks_registered = False
-        if self.tracer.config.is_collecting:
-            self.enable_tracing()
-
-        # Auto-connect analytics if available (no-op if analytics not enabled)
-        self._connect_analytics()
-
-    def enable_tracing(self) -> None:
-        if self._tracing_hooks_registered:
-            return
-        hooks.register("task_start", self.tracer.on_task_start, prepend=True)
-        hooks.register("task_end", self.tracer.on_task_end, prepend=True)
-        hooks.register("task_error", self.tracer.on_task_error, prepend=True)
-        hooks.register("task_cancelled", self.tracer.on_task_cancelled, prepend=True)
-        self._tracing_hooks_registered = True
-
-    def _connect_analytics(self) -> None:
-        """Auto-connect tracer to analytics if available."""
-        try:
-            from motus.serve.analytics.collector import get_tracer_callback
-
-            callback = get_tracer_callback()
-            if callback is not None:
-                self.tracer.set_analytics_callback(callback)
-        except ImportError:
-            pass  # Analytics module not available
+        # Tracing is configured from MOTUS_TRACING / MOTUS_COLLECTION_LEVEL env vars
+        # by agent_tracer.setup_tracing(). Parent propagation rides the OTel
+        # context via the per-task wrapper below, so no hook registrations
+        # are needed here.
 
     def shutdown(self) -> None:
         """Cancel in-flight tasks, poison pending futures, shut down executor."""
-        # 1. Deregister tracing hooks to prevent accumulation across
-        #    runtime lifecycles (the hooks registry is a module-level global).
-        if self._tracing_hooks_registered:
-            for event_type, callback in [
-                ("task_start", self.tracer.on_task_start),
-                ("task_end", self.tracer.on_task_end),
-                ("task_error", self.tracer.on_task_error),
-                ("task_cancelled", self.tracer.on_task_cancelled),
-            ]:
-                hooks.deregister(event_type, callback)
-            self._tracing_hooks_registered = False
-
-        # 2. Cancel in-flight asyncio.Tasks.  In single-loop mode the
+        # 1. Cancel in-flight asyncio.Tasks.  In single-loop mode the
         #    caller's loop keeps running after shutdown, so without this
         #    wrapper() coroutines would continue executing on a dead
         #    scheduler.
@@ -120,7 +100,7 @@ class GraphScheduler:
             if task._asyncio_task is not None and not task._asyncio_task.done():
                 task._asyncio_task.cancel()
 
-        # 3. Poison futures → unblocks executor threads waiting on resolve()
+        # 2. Poison futures → unblocks executor threads waiting on resolve()
         shutdown_err = RuntimeError("Motus runtime is shutting down")
         for af in list(self.agent_futures.values()):
             if not af.af_done():
@@ -129,7 +109,7 @@ class GraphScheduler:
                 except Exception:
                     pass  # race: another thread resolved it first
 
-        # 4. Shut down the executor (threads are already unblocked)
+        # 3. Shut down the executor (threads are already unblocked)
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
@@ -175,7 +155,7 @@ class GraphScheduler:
         Register a new task. Return immediately with placeholder AgentFuture(s).
         """
         if parent_stack is None:
-            parent_stack = self.tracer.get_stack()
+            parent_stack = get_stack()
 
         task_id = self._next_task_id()
         logger.debug(f"[Scheduler] Registering task {task_id.id} for: {func.__name__}")
@@ -292,17 +272,44 @@ class GraphScheduler:
             logger.debug(
                 f"enter {task.name}, with task_id: {getattr(func, 'task_id', None)}"
             )
+            # Wrap the task body in an OTel span so children spawned from
+            # inside ``_invoke()`` inherit the parent context naturally.
+            # motus.task_id_int / motus.parent_task_id attributes let the
+            # viewer rebuild the task tree independent of OTel span IDs.
+            parent_task_id = task.parent_stack[-1] if task.parent_stack else -1
+            span_ctx = tracer.start_as_current_span(
+                task.name,
+                attributes={
+                    ATTR_FUNC: task.name,
+                    ATTR_TASK_TYPE: task.task_type or "",
+                    ATTR_TASK_ID: task.id.id,
+                    ATTR_PARENT_TASK_ID: parent_task_id,
+                },
+            )
             try:
-                await emit_on_task(
-                    "task_start",
-                    func,
-                    tuple(real_args),
-                    dict(real_kwargs),
-                    task_id=task.id,
-                    metadata={"parent_stack": task.parent_stack},
-                    task_type=task.task_type,
-                )
-                result = await _invoke()
+                with span_ctx as span:
+                    tid_token = _current_task_id.set(task.id.id)
+                    try:
+                        await emit_on_task(
+                            "task_start",
+                            func,
+                            tuple(real_args),
+                            dict(real_kwargs),
+                            task_id=task.id,
+                            metadata={"parent_stack": task.parent_stack},
+                            task_type=task.task_type,
+                        )
+                        result = await _invoke()
+                    except BaseException as e:
+                        # Record error on the active span before it closes so
+                        # the trace carries the failure even if downstream
+                        # async hooks never fire (e.g., during shutdown).
+                        span.set_attribute(ATTR_ERROR, str(e))
+                        span.set_status(trace.StatusCode.ERROR, str(e))
+                        span.record_exception(e)
+                        raise
+                    finally:
+                        _current_task_id.reset(tid_token)
 
             except asyncio.CancelledError:
                 # asyncio.Task was cancelled (e.g. via _cancel_task).
@@ -413,18 +420,11 @@ class GraphScheduler:
         # available for tasks that reached RUNNING state, including those
         # cancelled mid-execution.  Tasks cancelled while still PENDING
         # (before wrapper() runs) will have hook_data=None and emit no hook.
+        # Errors are recorded synchronously on the task's OTel span inside
+        # wrapper() itself, so we don't need a separate state hatch here.
         if task.hook_data is not None:
             info = task.hook_data
             if error is not None:
-                # Record error synchronously on the tracer so the message is
-                # captured even if the async hook below never executes (e.g.
-                # during process shutdown).
-                task_id = info["task_id"]
-                if self.tracer and task_id.id in self.tracer.task_meta:
-                    meta = self.tracer.task_meta[task_id.id]
-                    if not meta.get("error"):
-                        meta["error"] = str(error)
-
                 # Distinguish cancellation from regular errors.
                 hook_type = (
                     "task_cancelled"
@@ -737,21 +737,17 @@ class AgentRuntime:
         else:
             self._loop.call_soon_threadsafe(self._scheduler._cancel_future, future)
 
-    def enable_tracing(self) -> None:
-        self._scheduler.enable_tracing()
-
     def export_trace(self):
-        self._scheduler.tracer.export_trace()
+        export_trace()
 
     def shutdown(self):
         """Shut down the runtime: export traces, poison futures, stop loop."""
         if self._shutdown:
             return
         self._shutdown = True
-        if self._scheduler.tracer.config.export_enabled:
+        if get_config().export_enabled:
             self.export_trace()
-        if self._scheduler.tracer._cloud_exporter is not None:
-            self._scheduler.tracer._cloud_exporter.close()
+        shutdown_tracing()
         self._scheduler.shutdown()
         if self._owns_loop:
             self._loop.call_soon_threadsafe(self._loop.stop)
