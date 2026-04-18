@@ -1,0 +1,41 @@
+---
+title: "motus serve get"
+description: "Get details for a session, with optional long-polling."
+---
+
+Get details for a session. Supports long-polling so you can block until a running turn completes. This maps directly to `GET /sessions/{id}` described in the [Sessions API reference](/reference/api/sessions).
+
+## Usage
+
+```bash
+motus serve get <url> <id> [options]
+```
+
+## Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--wait` | `false` | Block until the session is no longer `"running"` |
+| `--timeout` | — | Maximum seconds to wait (only applies with `--wait`) |
+
+## Examples
+
+### Get session details
+
+```bash
+motus serve get http://localhost:8000 550e8400-e29b-41d4-a716-446655440000
+```
+
+### Long-poll until complete
+
+```bash
+motus serve get http://localhost:8000 550e8400-e29b-41d4-a716-446655440000 --wait --timeout 30
+```
+
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "idle",
+  "response": { "role": "assistant", "content": "hi there" }
+}
+```

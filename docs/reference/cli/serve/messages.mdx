@@ -1,0 +1,27 @@
+---
+title: "motus serve messages"
+description: "Retrieve the full conversation history for a session."
+---
+
+Retrieve the full conversation history for a session. This maps directly to `GET /sessions/{id}/messages` described in the [Messages API reference](/reference/api/messages).
+
+## Usage
+
+```bash
+motus serve messages <url> <id>
+```
+
+## Examples
+
+### Get message history
+
+```bash
+motus serve messages http://localhost:8000 550e8400-e29b-41d4-a716-446655440000
+```
+
+```json
+[
+  { "role": "user", "content": "hello" },
+  { "role": "assistant", "content": "hi there" }
+]
+```

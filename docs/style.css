@@ -1,0 +1,15 @@
+/* Sidebar navigation hover highlight */
+#sidebar-group a {
+  transition: background 0.15s ease !important;
+  border-radius: 6px !important;
+}
+
+#sidebar-group a:hover {
+  background: rgba(20, 12, 12, 0.08) !important;
+  border-radius: 6px !important;
+}
+
+/* Dark mode */
+html.dark #sidebar-group a:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+}

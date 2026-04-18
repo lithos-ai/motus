@@ -5,6 +5,7 @@ Uses the Google Gen AI SDK (google-genai).
 Documentation: https://googleapis.github.io/python-genai/
 """
 
+import base64
 import json
 import uuid
 from typing import Optional, Type
@@ -76,12 +77,24 @@ class GeminiChatClient(BaseChatClient):
                 system_instruction = msg.content
 
             elif msg.role == "user":
-                contents.append(
-                    types.Content(
-                        role="user",
-                        parts=[types.Part.from_text(text=msg.content or "")],
+                if msg.base64_image:
+                    parts = []
+                    if msg.content:
+                        parts.append(types.Part.from_text(text=msg.content))
+                    parts.append(
+                        types.Part.from_bytes(
+                            data=base64.b64decode(msg.base64_image),
+                            mime_type="image/png",
+                        )
                     )
-                )
+                    contents.append(types.Content(role="user", parts=parts))
+                else:
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_text(text=msg.content or "")],
+                        )
+                    )
 
             elif msg.role == "assistant":
                 # Gemini uses "model" role instead of "assistant"

@@ -1,0 +1,29 @@
+---
+title: Overview
+description: "Reference for the Motus agent server REST API. Manage sessions, send messages, and receive results via webhooks."
+---
+
+The Motus agent server exposes a REST API for managing conversations with your agent. Start a server with [`motus serve start`](/reference/cli/serve/start), then interact with it over HTTP.
+
+All endpoints are served from the base URL of your running server (e.g., `http://localhost:8000`).
+
+## Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| [`/health`](/reference/api/sessions#get-health) | `GET` | Server health check with worker and session counts |
+| [`/sessions`](/reference/api/sessions#post-sessions) | `POST` | Create a new conversation session |
+| [`/sessions/{id}`](/reference/api/sessions#put-sessionsid) | `PUT` | Create a session with a client-specified ID |
+| [`/sessions`](/reference/api/sessions#get-sessions) | `GET` | List all active sessions |
+| [`/sessions/{id}`](/reference/api/sessions#get-sessionsid) | `GET` | Get session details (supports long-polling) |
+| [`/sessions/{id}`](/reference/api/sessions#delete-sessionsid) | `DELETE` | Delete a session and free resources |
+| [`/sessions/{id}/messages`](/reference/api/messages#post-sessionssession_idmessages) | `POST` | Send a message to a session |
+| [`/sessions/{id}/messages`](/reference/api/messages#get-sessionssession_idmessages) | `GET` | Retrieve conversation history |
+
+## Guides
+
+| Topic | Description |
+|---|---|
+| [Sessions](/reference/api/sessions) | Session lifecycle — create, inspect, poll, and delete |
+| [Messages](/reference/api/messages) | Send messages and retrieve conversation history |
+| [Webhooks](/reference/api/webhooks) | Receive turn results via HTTP callback instead of polling |

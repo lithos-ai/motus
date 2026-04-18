@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Actus - Trace Viewer</title>
+    <title>Motus - Trace Viewer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -16,37 +16,17 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="logo">
-                    <div class="logo-icon">A</div>
-                    <span class="logo-text">Actus</span>
+                    <div class="logo-icon">M</div>
+                    <span class="logo-text">Motus</span>
                 </div>
             </div>
 
             <nav class="sidebar-nav">
                 <div class="nav-section">
                     <div class="nav-section-title">Observability</div>
-                    <a href="#" class="nav-item active" data-page="traces" onclick="navigateToPage('traces'); return false;">
+                    <a href="#" class="nav-item active" data-page="traces">
                         <span class="nav-icon"></span>
                         <span>Traces</span>
-                    </a>
-                    <a href="#" class="nav-item" data-page="spans" onclick="navigateToPage('spans'); return false;">
-                        <span class="nav-icon"></span>
-                        <span>Spans</span>
-                    </a>
-                    <a href="#" class="nav-item" data-page="logs" onclick="navigateToPage('logs'); return false;">
-                        <span class="nav-icon"></span>
-                        <span>Logs</span>
-                    </a>
-                </div>
-
-                <div class="nav-section">
-                    <div class="nav-section-title">Analytics</div>
-                    <a href="#" class="nav-item" data-page="metrics" onclick="navigateToPage('metrics'); return false;">
-                        <span class="nav-icon"></span>
-                        <span>Metrics</span>
-                    </a>
-                    <a href="#" class="nav-item" data-page="agents" onclick="navigateToPage('agents'); return false;">
-                        <span class="nav-icon"></span>
-                        <span>Agents</span>
                     </a>
                 </div>
             </nav>
@@ -76,10 +56,6 @@
                         <input type="checkbox" id="filterMagicTasks" checked onchange="toggleMagicTaskFilter()">
                         <span>Hide magic tasks</span>
                     </label>
-                    <div class="view-toggle">
-                        <button id="taskViewBtn" class="view-btn active" onclick="switchView('task')">Task View</button>
-                        <button id="agentViewBtn" class="view-btn" onclick="switchView('agent')">Agent View</button>
-                    </div>
                     <div class="live-indicator" id="liveIndicator">
                         <span id="liveStatus" class="live-status">LIVE</span>
                         <button id="toggleLive" class="live-toggle-btn" onclick="toggleAutoRefresh()">Pause</button>

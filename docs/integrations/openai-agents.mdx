@@ -1,0 +1,181 @@
+---
+title: "OpenAI Agents SDK"
+description: "Run OpenAI Agents SDK code with Motus tracing and deployment."
+---
+
+Let Motus run your existing OpenAI Agents SDK code with automatic tracing
+and cloud deployment. Import from `motus.openai_agents` instead of `agents`.
+Your agent definitions, tool functions, and run logic stay exactly the same.
+
+## Installation
+
+<Tabs>
+  <Tab title="uv">
+    ```bash
+    uv sync --extra openai-agents
+    ```
+  </Tab>
+  <Tab title="pip">
+    ```bash
+    pip install 'lithosai-motus[openai-agents]'
+    ```
+  </Tab>
+</Tabs>
+
+## Basic usage
+
+Replace your `agents` import with `motus.openai_agents`:
+
+```python
+from motus.openai_agents import Agent, Runner
+
+agent = Agent(name="assistant", instructions="You are helpful.")
+result = await Runner.run(agent, "Hello!")
+print(result.final_output)
+```
+
+The `Runner` wraps every call with tracing and model interception. You do not need to change your agent definitions, tool functions, or run logic.
+
+## What Motus adds
+
+### Tracing
+
+Every agent turn, tool call, and model generation is captured by `TraceManager`. The `MotusTracingProcessor` replaces the SDK's default `BackendSpanExporter` (which posts traces to `api.openai.com`) on import. Traces flow into the Motus trace viewer, Jaeger export, and analytics pipeline.
+
+Tracing is auto-registered when you import `motus.openai_agents`. You can also register it explicitly:
+
+```python
+from motus.openai_agents import register_tracing
+
+register_tracing()
+```
+
+To export traces manually before process exit:
+
+```python
+from motus.openai_agents import get_tracer
+
+tracer = get_tracer()
+if tracer:
+    tracer.export_trace()
+```
+
+<Note>
+  Traces are auto-exported on process exit when `TraceManager.config.export_enabled` is `True`. Manual export is only needed when you want to flush mid-run.
+</Note>
+
+### Model proxy
+
+When deployed to Motus cloud, the platform automatically routes OpenAI Responses API calls through the model proxy. No `OPENAI_API_KEY` is needed in the deployed environment - the proxy handles authentication, rate limiting, and cost tracking transparently.
+
+### Model wrapping
+
+`MotusOpenAIProvider` and `MotusMultiProvider` sit in the model call path as transparent pass-throughs. Future releases will add hooks for caching, routing, and cost control at this layer.
+
+### Tool wrapping
+
+Tool invocations are intercepted before execution. Each `function_tool` call produces a traced span with input arguments and output. Future releases will add tool-level optimization and caching.
+
+## Runner methods
+
+`Runner` exposes the same three methods as the SDK's original `Runner`:
+
+<CodeGroup>
+
+```python async
+result = await Runner.run(agent, "Hello!")
+```
+
+```python sync
+result = Runner.run_sync(agent, "Hello!")
+```
+
+```python streaming
+stream = Runner.run_streamed(agent, "Hello!")
+```
+
+</CodeGroup>
+
+Each method registers tracing, wraps tools, and injects a `MotusOpenAIProvider` into the `RunConfig` before delegating to the original SDK runner.
+
+## Run configuration
+
+You can pass a custom `RunConfig`. Motus upgrades the default `OpenAIProvider` or `MultiProvider` to their Motus counterparts. If you supply your own custom provider, Motus preserves it:
+
+```python
+from motus.openai_agents import Runner, RunConfig, MotusOpenAIProvider
+
+config = RunConfig(model_provider=MotusOpenAIProvider())
+result = await Runner.run(agent, "Hello!", run_config=config)
+```
+
+## Deployment
+
+### Local serving
+
+```bash
+motus serve start myapp:agent --port 8000
+```
+
+Where `agent` is an OpenAI `Agent` instance. No adapter import is needed.
+
+### Cloud deployment
+
+```bash
+cd my_project
+motus deploy --name my-agent tools:agent
+```
+
+When deploying to Motus cloud, include `requirements.txt` with
+`openai-agents>=0.13.4` (the SDK is not in the base image). No API key secrets
+are needed. The platform routes Responses API calls through the model proxy.
+
+Session state (conversation history) is persisted in DynamoDB and survives
+backend restarts, failovers, and scaling events.
+
+<Tip>
+  Guardrail tripwire exceptions are caught and returned as refusal messages. Structured output (Pydantic models, dataclasses) is serialized to JSON automatically.
+</Tip>
+
+## What works
+
+All OpenAI Agents SDK features are supported:
+
+- `function_tool` definitions
+- `Agent` with instructions, tools, and handoffs
+- `Runner.run()`, `Runner.run_sync()`, `Runner.run_streamed()`
+- Handoffs between agents
+- Guardrails (input and output)
+- Custom tools and MCP tools
+- Multi-provider routing (OpenAI, LiteLLM)
+
+## Motus-specific exports
+
+In addition to re-exporting the full `agents` package, `motus.openai_agents` provides these additional names:
+
+| Export | Description |
+| --- | --- |
+| `MotusModel` | Base model wrapper |
+| `MotusResponsesModel` | Responses API model wrapper |
+| `MotusChatCompletionsModel` | Chat Completions API model wrapper |
+| `MotusLitellmModel` | LiteLLM model wrapper |
+| `MotusOpenAIProvider` | Provider that returns Motus model wrappers |
+| `MotusMultiProvider` | Multi-provider with Motus interception |
+| `MotusLitellmProvider` | LiteLLM provider with Motus interception |
+| `MotusTracingProcessor` | Bridges OpenAI Agents SDK spans into `TraceManager` |
+| `register_tracing()` | Registers the tracing processor (called automatically on import) |
+| `get_tracer()` | Returns the `TraceManager` instance |
+
+<Note>
+  `from motus.openai_agents import X` re-exports everything from the `agents` package. Motus overrides `Runner`, `OpenAIProvider`, `MultiProvider`, and model classes with its own wrappers at import time.
+</Note>
+## Traced span types
+
+The integration produces span types in `TraceManager` via the `MotusTracingProcessor`, which bridges OpenAI Agents SDK span events:
+
+| Span type | Description |
+|---|---|
+| `agent` | Agent invocation spans. Contains agent name, instructions, and handoff information. |
+| `model_call` | LLM generation spans. Contains model name, token usage, and request/response data. |
+| `tool_call` | Tool execution spans. Contains tool name, input arguments, output, and error status. |
+| `guardrail` | Guardrail evaluation spans. Contains guardrail name and pass/fail result. |

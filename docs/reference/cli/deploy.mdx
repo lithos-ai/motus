@@ -1,0 +1,69 @@
+---
+title: "motus deploy"
+description: "Package and deploy an agent to Motus Cloud."
+---
+
+Package and deploy your agent to Motus Cloud.
+
+`motus deploy` opens an authentication dialog similar to
+[`motus login`](/reference/cli/login.mdx) when the user is unauthenticated.
+
+## Usage
+
+```bash
+motus deploy [import-path] [options]
+```
+
+## Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `import-path` | Read from `motus.toml` | Python import path to your agent in `module:variable` format (e.g., `myapp:agent`) |
+| `--name` | — | Project name. Creates a new project if none exists with this name. Mutually exclusive with `--project-id`. |
+| `--project-id` | Read from `motus.toml` | ID of an existing project to deploy to. Mutually exclusive with `--name`. |
+| `--git-url` | — | Git repository URL. When provided, the build service clones the repo instead of uploading local files. |
+| `--git-ref` | — | Branch, tag, or commit SHA to check out. Requires `--git-url`. |
+| `--secret` | — | `KEY=VALUE` secret injected into the agent container. Use `KEY` alone to read the value from your local environment. Repeatable. |
+
+<Note>
+  On your first deploy, you must provide either `--name` or `--project-id`. After a successful deploy, Motus writes `project_id`, `build_id`, and `import_path` to `motus.toml` in your project directory, so subsequent deploys can run without any flags.
+</Note>
+
+### How it works
+
+When you run `motus deploy`, it:
+
+1. Validates your import path by importing it locally.
+2. Resolves or creates the project using `--project-id` or `--name`.
+3. Packs your project files into a `.tar.zst` archive (skipping dotfiles, `__pycache__`, `.pyc`, virtualenvs, and `.gitignore`-excluded paths) and uploads them — or, for Git deploys, instructs the build service to clone the repository directly.
+4. Streams build status via SSE: `queued` → `building` → `built` → `deploying` → `deployed` → `healthy`.
+
+## Examples
+
+### First deploy
+
+```bash
+motus deploy --name my-project myapp:agent
+```
+
+### Subsequent deploy
+
+```bash
+# Reads project ID and import path from motus.toml
+motus deploy
+```
+
+### Deploy with secrets
+
+```bash
+motus deploy --secret OPENAI_API_KEY=sk-123 --secret DATABASE_URL
+```
+
+### Deploy from a Git repository
+
+```bash
+motus deploy --name my-project \
+  --git-url https://github.com/org/repo.git \
+  --git-ref main \
+  myapp:agent
+```

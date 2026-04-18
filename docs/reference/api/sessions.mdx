@@ -1,0 +1,250 @@
+---
+title: "Sessions"
+description: "REST API reference for session management. Sessions represent individual conversations with your agent — each one holds its own state and message history."
+---
+
+## GET /health
+
+Server health check.
+
+### Response
+
+**`200 OK`** — returns a `HealthResponse`.
+
+```json
+{
+  "status": "ok",
+  "max_workers": 4,
+  "running_workers": 2,
+  "total_sessions": 2
+}
+```
+
+<ResponseField name="status" type="string" required>
+  Server status. Always `"ok"` when the server is reachable.
+</ResponseField>
+
+<ResponseField name="max_workers" type="number" required>
+  Maximum number of concurrent worker processes configured on the server.
+</ResponseField>
+
+<ResponseField name="running_workers" type="number" required>
+  Number of worker processes currently executing agent turns.
+</ResponseField>
+
+<ResponseField name="total_sessions" type="number" required>
+  Total number of sessions currently held in memory.
+</ResponseField>
+
+---
+
+A session is created before you send any messages. The server keeps all sessions in memory; they do not persist across server restarts. When `--ttl` is configured on the server, idle and errored sessions are automatically swept after the TTL period elapses.
+
+### Session status
+
+| Status | Description |
+|---|---|
+| `idle` | Waiting for input. Initial state after creation. |
+| `running` | Currently processing a message. Concurrent sends are rejected with `409`. |
+| `error` | The agent raised an exception. The `error` field contains the message. A session in `error` state can still receive new messages. |
+
+---
+
+## POST /sessions
+
+Create a new conversation session.
+
+Returns a `Location` header pointing to the new session URL.
+
+### Request body
+
+The request body is optional. Send `{}` or omit the body entirely to start with an empty session.
+
+<ParamField body="state" type="ChatMessage[]">
+  Preload the session with an existing conversation history. Each message must include a `role` (`"user"` or `"assistant"`) and `content` string. Omit this field to start with an empty session.
+</ParamField>
+
+### Response
+
+**`201 Created`** — returns a `SessionResponse` and a `Location` header.
+
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "idle",
+  "response": null,
+  "error": null
+}
+```
+
+<ResponseField name="session_id" type="string" required>
+  Unique identifier for the session (UUID).
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current session status: `"idle"`, `"running"`, or `"error"`.
+</ResponseField>
+
+<ResponseField name="response" type="ChatMessage | null">
+  The agent's most recent response message. `null` until at least one turn has completed successfully.
+</ResponseField>
+
+<ResponseField name="error" type="string | null">
+  Error message from the most recent failed turn. `null` when status is not `"error"`.
+</ResponseField>
+
+### Errors
+
+| Code | Condition |
+|---|---|
+| `503` | The server has reached its `--max-sessions` limit. |
+
+---
+
+## PUT /sessions/{session_id}
+
+Create a session with a client-specified ID.
+
+<Warning>
+  This endpoint requires the server to be started with `--allow-custom-ids`. Without it, all `PUT /sessions/{id}` requests return `405`.
+</Warning>
+
+The request body and response are identical to `POST /sessions`.
+
+### Path parameters
+
+<ParamField path="session_id" type="string" required>
+  The UUID you want to assign to this session.
+</ParamField>
+
+### Response
+
+**`201 Created`** — returns a `SessionResponse` and a `Location` header.
+
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "idle",
+  "response": null,
+  "error": null
+}
+```
+
+### Errors
+
+| Code | Condition |
+|---|---|
+| `400` | The provided session ID is not a valid UUID. |
+| `405` | Custom session IDs are not enabled on this server. |
+| `409` | A session with this ID already exists. |
+| `503` | The server has reached its `--max-sessions` limit. |
+
+---
+
+## GET /sessions
+
+List all active sessions.
+
+### Response
+
+**`200 OK`** — returns a list of `SessionSummary` objects.
+
+```json
+[
+  {
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "total_messages": 4,
+    "status": "idle"
+  }
+]
+```
+
+<ResponseField name="session_id" type="string" required>
+  Unique session identifier.
+</ResponseField>
+
+<ResponseField name="total_messages" type="number" required>
+  Total number of messages in the session's conversation history.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current session status: `"idle"`, `"running"`, or `"error"`.
+</ResponseField>
+
+---
+
+## GET /sessions/{session_id}
+
+Get session details and the agent's most recent response. Supports optional long-polling to block until a running turn finishes.
+
+### Path parameters
+
+<ParamField path="session_id" type="string" required>
+  The session UUID.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="wait" type="boolean" default="false">
+  When `true`, the request blocks until the session is no longer `"running"`.
+</ParamField>
+
+<ParamField query="timeout" type="float">
+  Maximum seconds to wait when `wait=true`. If the timeout elapses before the turn finishes, the response is returned with `status: "running"`. Omit for an unlimited wait.
+</ParamField>
+
+### Response
+
+**`200 OK`** — returns a `SessionResponse`.
+
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "idle",
+  "response": { "role": "assistant", "content": "hi there" },
+  "error": null
+}
+```
+
+While `status` is `"running"`, both `response` and `error` are `null`. They are populated only after the turn completes.
+
+### Long-poll behavior
+
+| Scenario | HTTP status | `status` field |
+|---|---|---|
+| Agent finished successfully | `200` | `"idle"` |
+| Agent raised an exception | `200` | `"error"` |
+| Timeout elapsed before completion | `200` | `"running"` |
+| Session not found or deleted while waiting | `404` | — |
+
+### Errors
+
+| Code | Condition |
+|---|---|
+| `404` | Session not found. |
+
+---
+
+## DELETE /sessions/{session_id}
+
+Delete a session and free its resources.
+
+### Path parameters
+
+<ParamField path="session_id" type="string" required>
+  The session UUID.
+</ParamField>
+
+### Response
+
+**`204 No Content`**
+
+<Note>
+  It is safe to call this endpoint while a turn is running. The in-progress task is cancelled and the worker process is killed immediately.
+</Note>
+
+### Errors
+
+| Code | Condition |
+|---|---|
+| `404` | Session not found. |

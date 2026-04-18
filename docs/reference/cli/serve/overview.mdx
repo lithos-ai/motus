@@ -1,0 +1,28 @@
+---
+title: "Overview"
+description: "CLI reference for the motus serve command group. Start an agent HTTP server and interact with it from the terminal."
+---
+
+The `motus serve` command group starts an agent HTTP server and provides
+subcommands to interact with it (chatting, managing sessions, and sending
+messages) all from the terminal. It's a frontend to the [API](/reference/api/overview).
+
+## Usage
+
+```bash
+motus serve <command> [options]
+```
+
+## Subcommands
+
+| Command | Description |
+|---|---|
+| [`motus serve start`](/reference/cli/serve/start) | Start an HTTP server that wraps an agent |
+| [`motus serve chat`](/reference/cli/serve/chat) | Send a message or enter an interactive REPL |
+| [`motus serve health`](/reference/cli/serve/health) | Check the health of a running server |
+| [`motus serve create`](/reference/cli/serve/create) | Create a new session |
+| [`motus serve sessions`](/reference/cli/serve/sessions) | List all active sessions |
+| [`motus serve get`](/reference/cli/serve/get) | Get details for a session |
+| [`motus serve delete`](/reference/cli/serve/delete) | Delete a session |
+| [`motus serve messages`](/reference/cli/serve/messages) | Retrieve conversation history for a session |
+| [`motus serve send`](/reference/cli/serve/send) | Send a message to an existing session |

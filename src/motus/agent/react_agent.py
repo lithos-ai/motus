@@ -92,6 +92,17 @@ class ReActAgent(AgentBase[str]):
             reasoning=reasoning,
         )
 
+    def _fork_kwargs(self) -> dict:
+        kwargs = super()._fork_kwargs()
+        kwargs.update(
+            {
+                "timeout": self._timeout,
+                "cache_policy": self._cache_policy,
+                "step_callback": self.step_callback,
+            }
+        )
+        return kwargs
+
     async def _run(
         self,
         user_prompt: Optional[str] = None,

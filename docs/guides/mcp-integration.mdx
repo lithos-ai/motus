@@ -1,0 +1,213 @@
+---
+title: "MCP Integration"
+description: "Connect any MCP-compatible tool server to a Motus agent with get_mcp()."
+---
+
+The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standard for exposing tools and data sources to AI agents. Filesystem access, browser automation, search APIs, database clients, and most SaaS integrations already have an MCP server you can plug in. In Motus, `get_mcp()` is the single entry point: give it a command or a URL, pass the returned session to your agent's `tools=[...]`, and every tool the server publishes becomes a regular agent tool with the same schema, guardrail support, and tracing as tools you write by hand.
+
+## Stdio (local process)
+
+The server runs as a child process and Motus talks to it over stdin/stdout. Good for servers distributed as a CLI (`npx`, `uvx`, a local binary).
+
+```python
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+from motus.tools import get_mcp
+
+session = get_mcp(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+)
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    tools=[session],
+)
+
+response = await agent("List files in /workspace")
+```
+
+`npx`-based servers need [Node.js](https://nodejs.org/) on the host. `uvx` servers need [uv](https://github.com/astral-sh/uv).
+
+## HTTP (remote server)
+
+Point to a running MCP endpoint. Pass `headers` for authentication. The agent wiring is the same as stdio; only the session constructor changes:
+
+```python
+from motus.tools import get_mcp
+
+session = get_mcp(
+    url="https://mcp.jina.ai/v1",
+    headers={"Authorization": "Bearer <your-token>"},
+)
+
+agent = ReActAgent(client=OpenAIChatClient(), model_name="gpt-4o", tools=[session])
+```
+
+Motus connects via the streamable HTTP transport. If you need a custom `httpx.AsyncClient` (to configure timeouts, proxies, or mTLS), pass it as `http_client=` instead of `headers=`.
+
+## Docker sandbox
+
+Launch an MCP server inside a container when you want its file access, network, or dependencies isolated from the host. Motus starts the container, maps `port`, and connects to it over HTTP:
+
+```python
+from motus.tools import get_mcp
+
+session = get_mcp(
+    image="node:20",
+    command="npx",
+    args=["@playwright/mcp", "--port", "8080"],
+    port=8080,
+)
+```
+
+<Warning>
+  `port=` only maps the container port to the host; it does **not** tell the server what to listen on. If the server binds a different port, the first connection attempt fails with a `TimeoutError` after about 30 seconds. You have to configure the server explicitly, either via a CLI flag (`--port 8080` above) or an env var:
+
+  ```python
+  get_mcp(
+      image="node:20",
+      command="npx",
+      args=["@modelcontextprotocol/server-everything", "streamableHttp"],
+      env={"PORT": "3000"},
+      port=3000,
+  )
+  ```
+</Warning>
+
+Pass a pre-built `sandbox=` object instead of `image=` when you want to share a container with other tools or configure mounts and network policies. See [Sandboxed execution](/concepts/tools#sandboxed-execution).
+
+## Session lifecycle
+
+`get_mcp()` returns an `MCPSession`. The constructor only stores connection parameters. The real connection opens later, either lazily on the agent's first tool call or eagerly when you enter an `async with` block.
+
+**Lazy connect** is the shortest path. Hand the session to the agent and Motus takes over: the connection opens on the first tool call that needs it and is reused for every subsequent call. Pick this when you do not need to control exactly when the connection opens or closes.
+
+```python
+session = get_mcp(command="npx", args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"])
+agent = ReActAgent(client=client, model_name="gpt-4o", tools=[session])
+response = await agent("Read /workspace/README.md")
+```
+
+**Explicit `async with`** is for when you need control. You need to inspect the server's tools before building the agent, you want a deterministic close point (between tests, between requests, when switching MCP servers), or you want graceful shutdown rather than relying on garbage collection.
+
+```python
+async with get_mcp(command="npx", args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]) as session:
+    print(list(session))  # ['read_file', 'list_directory', 'write_file', ...]
+    agent = ReActAgent(client=client, model_name="gpt-4o", tools=[session])
+    response = await agent("Read /workspace/README.md")
+# Session closes cleanly on exit
+```
+
+Once connected, `MCPSession` behaves like a mapping of tool name to tool: `list(session)`, `len(session)`, and `session["read_file"]` all work. Each tool is also exposed as an attribute (`session.read_file`), which the `tool()` wrapper below picks up.
+
+<Note>
+  If a server-side tool name collides with an `MCPSession` attribute (`close`, `aclose`, and similar), the attribute is exposed as `mcptool_<name>` instead. `session["close"]` still works regardless.
+</Note>
+
+## Filtering, renaming, and guarding tools
+
+MCP servers often publish more tools than you want the model to see. Use `tools()` to wrap the whole session, or `tool()` to pick out a single method.
+
+```python
+from motus.tools import get_mcp, tools
+
+async def validate_path(path: str):
+    if not path.startswith("/workspace"):
+        raise ValueError(f"Path {path!r} is outside the allowed root")
+
+async with get_mcp(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+) as session:
+    wrapped = tools(
+        session,
+        prefix="fs_",                                  # "read_file" becomes "fs_read_file"
+        blocklist={"write_file", "create_directory"},  # hide destructive ops
+        input_guardrails=[validate_path],              # default for every tool in the session
+    )
+    agent = ReActAgent(client=client, model_name="gpt-4o", tools=wrapped)
+    response = await agent("List files in /workspace")
+```
+
+Order of operations: Motus filters by the original tool name, then applies `prefix`, then attaches session-wide guardrails to any tool that does not already have its own.
+
+### `tools()` options for MCP
+
+| Parameter | Description |
+|---|---|
+| `prefix` | Prepend to every tool name the agent sees. |
+| `allowlist` | Only expose these names (original, unprefixed). |
+| `blocklist` | Exclude these names (original, unprefixed). |
+| `input_guardrails` | Session-wide input guardrails, applied to tools without their own. |
+| `output_guardrails` | Session-wide output guardrails, applied to tools without their own. |
+
+### Configuring a single tool
+
+If you only want to tweak one tool, grab it by attribute (or by key) and wrap it with `tool()`:
+
+```python
+from motus.tools import get_mcp, tool
+
+async with get_mcp(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+) as session:
+    agent = ReActAgent(
+        client=client,
+        model_name="gpt-4o",
+        tools=[tool(session.read_file, input_guardrails=[validate_path])],
+    )
+    response = await agent("Read /workspace/config.yaml")
+```
+
+`tool()` on an MCP tool accepts `name`, `description`, `schema`, `input_guardrails`, `output_guardrails`, `requires_approval`, and the `on_start`/`on_end`/`on_error` hooks. Use `requires_approval=True` to gate a destructive MCP tool behind a user approval prompt; see [Human-in-the-Loop](/guides/human-in-the-loop) for how the approval flow works end to end.
+
+## Mixing MCP with other tools
+
+An agent can hold MCP sessions, plain Python functions, class-based tool collections, and other agents in the same `tools=[...]` list. Motus normalizes them all during agent startup.
+
+```python
+from motus.tools import get_mcp
+
+async def summarize(text: str) -> str:
+    """Summarize a block of text."""
+    ...
+
+fs_session = get_mcp(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+)
+search_session = get_mcp(
+    url="https://mcp.jina.ai/v1",
+    headers={"Authorization": "Bearer <token>"},
+)
+
+agent = ReActAgent(
+    client=client,
+    model_name="gpt-4o",
+    tools=[
+        fs_session,      # every tool from the filesystem server
+        search_session,  # every tool from the remote search server
+        summarize,       # a plain Python function
+    ],
+)
+```
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Tools" icon="screwdriver-wrench" href="/concepts/tools">
+    How the `@tool` and `@tools` decorators, guardrails, and sandboxes fit together.
+  </Card>
+  <Card title="Guardrails" icon="shield-check" href="/guides/guardrails">
+    Validate and transform tool inputs and outputs with plain Python functions.
+  </Card>
+  <Card title="MCP servers catalog" icon="server" href="https://modelcontextprotocol.io/servers">
+    A catalog of community-maintained MCP servers you can plug into your agent.
+  </Card>
+  <Card title="Human-in-the-Loop" icon="hand" href="/guides/human-in-the-loop">
+    Gate destructive MCP tools behind user approval with `requires_approval=True`.
+  </Card>
+</CardGroup>

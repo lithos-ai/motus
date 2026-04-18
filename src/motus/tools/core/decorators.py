@@ -65,6 +65,8 @@ def tool(
                 target._input_guardrails = input_guardrails
             if output_guardrails is not None:
                 target._output_guardrails = output_guardrails
+            if requires_approval:
+                target.set_requires_approval(True)
             tool_name = target.name
         else:
             if name:

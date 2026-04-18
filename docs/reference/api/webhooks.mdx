@@ -1,0 +1,113 @@
+---
+title: "Webhooks"
+description: "Receive agent turn results via HTTP callback instead of polling. Include a webhook field in your message request and the server will POST the result to your URL when the turn completes."
+---
+
+Instead of polling `GET /sessions/{id}` for the result of a turn, you can include a `webhook` field in your `POST /sessions/{id}/messages` request body. When the agent turn completes (successfully, with an error, or on cancellation), the server delivers a `WebhookPayload` to your URL.
+
+### Complete example
+
+```json
+{
+  "content": "hello",
+  "webhook": {
+    "url": "https://example.com/hook",
+    "token": "secret",
+    "include_messages": false
+  }
+}
+```
+
+---
+
+## WebhookSpec
+
+Fields you include in the `webhook` property of a `MessageRequest`.
+
+<ParamField body="url" type="string" required>
+  The URL the server will POST the `WebhookPayload` to after the turn completes.
+</ParamField>
+
+<ParamField body="token" type="string | null" default="null">
+  When set, the server includes an `Authorization: Bearer <token>` header in the delivery request. Use this to authenticate incoming webhook calls on your end.
+</ParamField>
+
+<ParamField body="include_messages" type="boolean" default="false">
+  When `true`, the full conversation history is included as the `messages` field in the `WebhookPayload`. Useful if you want the entire transcript without making a separate `GET /sessions/{id}/messages` call.
+</ParamField>
+
+---
+
+## WebhookPayload
+
+The JSON body the server POSTs to your webhook URL after the turn completes.
+
+```json
+{
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "idle",
+  "response": { "role": "assistant", "content": "hi there" },
+  "error": null,
+  "messages": null,
+  "trace_metrics": null
+}
+```
+
+<ResponseField name="session_id" type="string" required>
+  The session UUID that completed the turn.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Final status of the turn: `"idle"` on success or `"error"` on failure.
+</ResponseField>
+
+<ResponseField name="response" type="ChatMessage | null">
+  The agent's response message. Populated when `status` is `"idle"`.
+</ResponseField>
+
+<ResponseField name="error" type="string | null">
+  Error message from the agent. Populated when `status` is `"error"`.
+</ResponseField>
+
+<ResponseField name="messages" type="ChatMessage[] | null">
+  Full conversation history for the session. Only included when `include_messages` was `true` in the `WebhookSpec`. `null` otherwise.
+</ResponseField>
+
+<ResponseField name="trace_metrics" type="TraceMetrics | null">
+  Turn metrics from the agent runtime. Included when the runtime has tracing enabled; `null` otherwise.
+</ResponseField>
+
+---
+
+## TraceMetrics
+
+Metrics collected from the agent runtime and attached to the webhook payload when available.
+
+<ResponseField name="trace_id" type="string | null">
+  Trace identifier for this turn. `null` if tracing is not enabled.
+</ResponseField>
+
+<ResponseField name="total_duration" type="float">
+  Total wall-clock time for the turn, in seconds.
+</ResponseField>
+
+<ResponseField name="total_tokens" type="number">
+  Total number of tokens consumed during the turn across all model calls.
+</ResponseField>
+
+<ResponseField name="has_error" type="boolean">
+  `true` if the turn encountered an error, even if it was partially handled.
+</ResponseField>
+
+---
+
+## Delivery behavior
+
+- Webhooks are delivered **asynchronously** after the turn completes. Delivery does not block the turn itself or affect the session state.
+- Each delivery attempt uses a **10-second timeout**.
+- If delivery fails — due to a network error, a non-2xx response, or a timeout — the failure is logged but **does not affect the turn result**. The session state remains unchanged and no retry is attempted.
+- When `token` is set, the delivery request includes an `Authorization: Bearer <token>` header.
+
+<Tip>
+  If you need guaranteed delivery, poll `GET /sessions/{id}` with `wait=true` as a fallback in case your webhook endpoint is temporarily unavailable.
+</Tip>

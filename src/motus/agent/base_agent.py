@@ -296,6 +296,26 @@ class AgentBase(ABC, Generic[T]):
     # Agent Operations
     # -------------------------------------------------------------------------
 
+    def _fork_kwargs(self) -> dict:
+        """Kwargs passed when reconstructing this agent in ``fork()``.
+
+        Subclasses with extra ``__init__`` parameters should override this
+        and merge their own kwargs into ``super()._fork_kwargs()``.
+        """
+        return {
+            "client": self._client,
+            "model_name": self._model_name,
+            "name": self.name,
+            "system_prompt": self._system_prompt,
+            "tools": self._tools,
+            "response_format": self._response_format,
+            "max_steps": self._max_steps,
+            "memory_type": self._memory_type,
+            "input_guardrails": list(self._input_guardrails),
+            "output_guardrails": list(self._output_guardrails),
+            "reasoning": self._reasoning,
+        }
+
     def fork(self) -> "AgentBase[T]":
         """
         Create a copy of this agent with the same configuration and history.
@@ -306,21 +326,9 @@ class AgentBase(ABC, Generic[T]):
         Returns:
             A new agent instance with copied state
         """
-        new_memory = self._memory.fork()
-
-        new_agent = self.__class__(
-            client=self._client,
-            model_name=self._model_name,
-            name=self.name,
-            system_prompt=self._system_prompt,
-            tools=self._tools,
-            max_steps=self._max_steps,
-            memory=new_memory,
-            input_guardrails=list(self._input_guardrails),
-            output_guardrails=list(self._output_guardrails),
-        )
-
-        return new_agent
+        kwargs = self._fork_kwargs()
+        kwargs["memory"] = self._memory.fork()
+        return self.__class__(**kwargs)
 
     def as_tool(
         self,

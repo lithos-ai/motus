@@ -1,0 +1,46 @@
+---
+title: "motus serve send"
+description: "Send a message to an existing session on a running Motus agent server."
+---
+
+Send a message to an existing session. Returns immediately unless `--wait` is used. This maps directly to `POST /sessions/{id}/messages` described in the [Messages API reference](/reference/api/messages).
+
+## Usage
+
+```bash
+motus serve send <url> <id> <message> [options]
+```
+
+## Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--role` | `user` | Message role: `system`, `user`, `assistant`, or `tool` |
+| `--wait` | `false` | Wait for the turn to complete and print the final session state |
+| `--timeout` | — | Maximum seconds to wait (only applies with `--wait`) |
+| `--webhook-url` | — | URL to POST the turn result to when it completes |
+| `--webhook-token` | — | Bearer token for the webhook `Authorization` header |
+| `--webhook-include-messages` | `false` | Include the full message history in the webhook payload |
+| `--param` | — | `KEY=VALUE` parameter passed to the agent as `user_params` (repeatable). Numeric values are auto-coerced to `int` or `float`. |
+
+## Examples
+
+### Fire and forget
+
+```bash
+motus serve send http://localhost:8000 550e8400-e29b-41d4-a716-446655440000 "hello"
+```
+
+### Wait for the turn to finish
+
+```bash
+motus serve send http://localhost:8000 550e8400-e29b-41d4-a716-446655440000 "hello" --wait
+```
+
+### Send with a webhook
+
+```bash
+motus serve send http://localhost:8000 550e8400-e29b-41d4-a716-446655440000 "hello" \
+  --webhook-url https://example.com/hook \
+  --webhook-token secret
+```

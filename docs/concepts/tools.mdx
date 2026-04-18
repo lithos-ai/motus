@@ -1,0 +1,351 @@
+---
+title: "Tools"
+description: "Give your agent the ability to do things: call functions, run shell commands, query an MCP server, or delegate to another agent."
+---
+
+A tool is any Python callable a `ReActAgent` can invoke to do something outside the LLM. In practice that means:
+
+- A plain Python function
+- A method on a class
+- Another agent (wrapped as a callable)
+- A method exposed by an MCP server
+
+Pass any of these into `tools=[...]` and the agent sees them as named, schema-typed functions it can call by name.
+
+## Functions are tools
+
+The fastest way to give an agent a tool is to pass a plain Python function.
+
+```python
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+
+
+async def search(query: str) -> str:
+    """Search the web for a query."""
+    return await web_search(query)
+
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    tools=[search],
+)
+```
+
+Motus reads the name, the docstring, and the type hints and builds the JSON Schema the LLM sees. Sync and async functions both work.
+
+<Tip>
+  Parameters without type annotations must have a default value. Adding docstrings to functions and descriptions to parameters is strongly recommended so the model understands when and how to call your tool.
+</Tip>
+
+## The `@tool` decorator
+
+Use `@tool` to customize how a function is exposed to the model: its name, description, schema, guardrails, an approval gate, or lifecycle hooks.
+
+```python
+from motus.tools import tool
+
+
+@tool(name="web_search", description="Search the web and return the top result.")
+async def search(query: str) -> str:
+    return await web_search(query)
+```
+
+`tool()` also works as a post-hoc patcher on a callable you don't own:
+
+```python
+configured = tool(third_party_fn, name="fetch", input_guardrails=[validate_url])
+```
+
+| Option | What it does |
+|---|---|
+| `name` | Tool name the model sees (default: function name) |
+| `description` | Tool description (default: docstring) |
+| `schema` | Input schema override. Accepts a Pydantic model, an `InputSchema` subclass, or a raw JSON Schema dict. |
+| `input_guardrails` / `output_guardrails` | Functions that validate or rewrite input and output. See [Guardrails](/guides/guardrails). |
+| `requires_approval` | When `True`, the agent pauses before running the tool and waits for human confirmation. See [Human in the Loop](/guides/human-in-the-loop). |
+| `on_start`, `on_end`, `on_error` | Per-tool lifecycle hook callbacks. See [Tracing](/guides/tracing). |
+
+## Describing parameters
+
+You have three ways to describe what a tool's arguments mean. Pick whichever is most convenient.
+
+### Pydantic model (recommended)
+
+Define a `BaseModel` subclass with `Field` descriptors. This gives you validation constraints, nested objects, enums, and rich descriptions all in one place.
+
+```python
+from pydantic import BaseModel, Field
+
+
+class Filter(BaseModel):
+    field: str = Field(description="Column to filter on")
+    value: str = Field(description="Value to match")
+
+
+class SearchInput(BaseModel):
+    query: str = Field(description="The search query")
+    filters: list[Filter] = Field(default=[], description="Optional filters")
+    max_results: int = Field(ge=1, le=50, default=10, description="Max results")
+
+
+@tool(schema=SearchInput)
+async def search(query: str, filters: list, max_results: int = 10) -> str: ...
+```
+
+Nested models like `Filter` are expanded into the JSON Schema the model sees. The function signature is what Motus calls when the tool runs, so make sure the field names match the parameter names.
+
+### `Annotated` for inline descriptions
+
+A lighter alternative when you only need to add descriptions and do not need validation. Add a string after the type in an `Annotated` wrapper.
+
+```python
+from typing import Annotated
+
+
+async def search(
+    query: Annotated[str, "The search query"],
+    max_results: Annotated[int, "Max results to return"] = 10,
+) -> str: ...
+```
+
+### Raw JSON Schema
+
+For exact control over the schema the model sees, pass a dict directly.
+
+```python
+@tool(schema={
+    "type": "object",
+    "properties": {"query": {"type": "string"}},
+    "required": ["query"],
+})
+async def search(query: str) -> str: ...
+```
+
+### Type mapping
+
+When Motus infers the schema from your type hints, this is the mapping it uses.
+
+| Python | JSON Schema |
+|---|---|
+| `str`, `int`, `float`, `bool` | `string`, `integer`, `number`, `boolean` |
+| `list[T]` | `array` with `items` |
+| `dict[str, T]` | `object` with `additionalProperties` |
+| `T \| None` | `anyOf [T, null]` |
+| `BaseModel`, `TypedDict`, dataclass | `object` with `properties` |
+| `Annotated[T, "desc"]` | schema of `T` plus `description` |
+
+## Tool collections from a class
+
+Group related tools into a class with the `@tools` decorator. Public methods become tools automatically, and `self` is stripped from the schema.
+
+```python
+from motus.tools import tools
+
+
+@tools(prefix="db_")
+class DatabaseTools:
+    def __init__(self, conn_string: str):
+        self.conn = connect(conn_string)
+
+    async def query(self, sql: str) -> str:
+        """Execute a SQL query."""
+        return str(self.conn.execute(sql))
+
+    async def insert(self, table: str, data: dict) -> str:
+        """Insert a row."""
+        ...
+
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    tools=[DatabaseTools("postgres://...")],
+)
+# Exposes "db_query" and "db_insert" to the model.
+```
+
+`tools()` also works as a function call on an instance you don't own, for cases where you want to pick specific methods:
+
+```python
+tools(some_instance, allowlist={"get", "list"}, prefix="api_")
+```
+
+| Option | What it does |
+|---|---|
+| `prefix` | Prepended to every tool name |
+| `include_private` | Expose methods starting with `_` (default `False`) |
+| `allowlist` / `blocklist` | Filter methods by name |
+| `method_schemas` | Per-method schema overrides |
+| `method_aliases` | Rename methods |
+| `input_guardrails` / `output_guardrails` | Default guardrails applied to every method |
+
+A per-method `@tool` overrides the class-level `@tools` options for that one method:
+
+```python
+@tools(prefix="db_", input_guardrails=[log_all])
+class DatabaseTools:
+    @tool(name="raw_query", input_guardrails=[validate_sql])
+    async def query(self, sql: str) -> str: ...
+    # Exposed as "db_raw_query" with [validate_sql]
+
+    async def insert(self, table: str, data: dict) -> str: ...
+    # Exposed as "db_insert" with [log_all]
+```
+
+## Built-in tools
+
+Motus ships a ready-made set of tools that cover the common needs of a code-writing agent: running shell commands, reading and writing files, searching the filesystem, and keeping a checklist of its own work. Most agents that do anything with code can drop these in without writing their own.
+
+Get them from `builtin_tools()`, which works out of the box against your local machine.
+
+```python
+from motus.tools import builtin_tools
+
+
+agent = ReActAgent(
+    client=OpenAIChatClient(),
+    model_name="gpt-4o",
+    tools=[*builtin_tools()],
+)
+```
+
+| Tool | What it does |
+|---|---|
+| `bash` | Run a shell command. Default 120s timeout, max 600s, output truncated to 30000 characters. |
+| `read_file` | Read a file with line numbers. Accepts `offset` and `limit` (default: first 2000 lines). |
+| `write_file` | Write a file, creating parent directories if needed. |
+| `edit_file` | Exact string replacement. Fails on ambiguous matches unless `replace_all=True`. |
+| `glob_search` | Find files by glob pattern. |
+| `grep_search` | Regex search with context, type filters, and output modes. |
+| `to_do` | A checklist the agent maintains to track its own progress across a long task. |
+
+Pass `skills_dir="..."` to add a `load_skill` tool that lets the agent load self-contained instructions from disk on demand. See [Skills](/concepts/skills).
+
+<Warning>
+  With no sandbox, `builtin_tools()` runs `bash`, `write_file`, and `edit_file` directly against your machine. That means the agent can delete files, install packages, or run any shell command, just like a person with terminal access. Use a sandbox (see below) for untrusted prompts, and use [approval gates](#approval-gates) on tools you do not want the agent running without permission.
+</Warning>
+
+<Tip>
+  You can customize an individual built-in tool by re-decorating it. The object returned by `builtin_tools()` has attribute access to every tool, so you can patch just one:
+
+  ```python
+  bt = builtin_tools()
+  tool(bt.bash, description="Only read-only commands", input_guardrails=[no_rm])
+  agent = ReActAgent(..., tools=[*bt])
+  ```
+</Tip>
+
+## Sandboxed execution
+
+A `Sandbox` in Motus is an execution environment that the built-in tools run inside: you create it, the tools bound to it execute commands there, and you close it when you're done. It is not a tool itself; it is the place tools run. Two implementations ship with Motus:
+
+- `LocalShell`, the default, runs commands directly on your host machine.
+- `DockerSandbox` runs everything inside a container, so a rogue command cannot touch your host.
+
+`builtin_tools()` uses `LocalShell` when you do not pass anything. To isolate execution, create a `DockerSandbox` and hand it in:
+
+```python
+from motus.tools import builtin_tools, DockerSandbox
+
+
+with DockerSandbox.create(image="python:3.12") as sandbox:
+    agent = ReActAgent(
+        client=OpenAIChatClient(),
+        model_name="gpt-4o",
+        tools=[*builtin_tools(sandbox=sandbox)],
+    )
+    await agent("...")
+```
+
+For a managed sandbox with mounts, ports, or a pre-built image, use the `get_sandbox()` factory. It reuses a single global provider under the hood, so repeated calls do not spin up new containers.
+
+## MCP tools
+
+Any [Model Context Protocol](https://modelcontextprotocol.io/) server can be used as a tool source via `get_mcp()`.
+
+```python
+from motus.tools import get_mcp
+
+
+# Local stdio server
+async with get_mcp(
+    command="npx",
+    args=["-y", "@anthropic/mcp-server-filesystem", "/workspace"],
+) as session:
+    agent = ReActAgent(
+        client=OpenAIChatClient(),
+        model_name="gpt-4o",
+        tools=[session],
+    )
+    await agent("List the Python files under /workspace.")
+
+
+# Remote HTTP server
+async with get_mcp(url="http://localhost:3000/mcp") as session: ...
+
+
+# Stdio server running inside a Docker sandbox
+async with get_mcp(
+    image="node:20",
+    command="npx",
+    args=["@playwright/mcp", "--port", "8080"],
+    port=8080,
+) as session: ...
+```
+
+The session exposes every tool the MCP server advertises.
+
+Both patterns for managing the session work. If you pass an unconnected `get_mcp(...)` session to the agent without `async with`, the agent connects it lazily on its first run. Using `async with` gives you deterministic cleanup when the block exits. See [MCP Integration](/guides/mcp-integration) for connection options, filtering, and renaming tools.
+
+## Agents as tools
+
+An agent can be another agent's tool. The caller treats it like any other entry in `tools=[...]`.
+
+```python
+researcher = ReActAgent(
+    client=client,
+    model_name="gpt-4o",
+    name="researcher",
+    system_prompt="You research topics in depth.",
+)
+
+orchestrator = ReActAgent(
+    client=client,
+    model_name="gpt-4o",
+    tools=[researcher],
+)
+```
+
+For a custom name, description, or stateful memory across calls, use `researcher.as_tool(name="do_research", stateful=True)`. See [Multi-agent](/guides/multi-agent) for the full composition guide.
+
+## Approval gates
+
+Mark a dangerous tool with `requires_approval=True` and the agent will pause before running it, emit an approval request to the caller, and resume once the caller approves.
+
+```python
+import os
+
+
+@tool(requires_approval=True)
+async def delete_file(path: str) -> str:
+    """Delete a file from disk."""
+    os.remove(path)
+    return f"Deleted {path}"
+```
+
+`motus serve` surfaces these pauses through its REST API so a client can prompt the user and respond. See [Human in the Loop](/guides/human-in-the-loop) for the full protocol.
+
+## Registration cheat sheet
+
+A quick reference for how to pass each kind of tool to an agent.
+
+| What you have | How to pass it |
+|---|---|
+| A function you own | `tools=[my_func]` |
+| A function you don't own | `tools=[tool(other_func, name="...")]` |
+| A class with methods | `tools=[MyClass()]` (class decorated with `@tools`) |
+| An instance you don't own | `tools=[tools(instance, allowlist={"get"})]` |
+| An MCP server | `tools=[session]` (from `get_mcp(...)`) |
+| Another agent | `tools=[other_agent]` or `other_agent.as_tool(...)` |

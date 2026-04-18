@@ -1,0 +1,233 @@
+---
+title: "Sandbox"
+description: "A safe, disposable place for agents to run code, shell commands, and long-lived processes. Same API locally and in the cloud."
+---
+
+Any time an agent runs a shell command or executes Python, the interesting question is *where*. Your laptop is fine for prototyping and wrong for almost everything else: a stray `rm -rf`, a runaway `pip install`, or a model that decides to `curl` a dubious URL reaches straight into your machine. A sandbox is the boundary that prevents that.
+
+`Sandbox` is an abstract execution environment. You create one, run commands in it, move files in and out, and close it when you are done. Because the interface is a clean abstract class, a sandbox can be backed by anything: a local Docker container, a remote machine, a microVM, a serverless runtime, your own in-house isolation technology. Motus ships two reference backends so you do not have to start from scratch:
+
+- **`DockerSandbox`** runs work inside a local Docker container. Great for local development and self-hosted deployments.
+- **`CloudSandbox`** talks to a remote sandbox over a REST API. Used automatically when your agent runs on [Motus Cloud](/cloud/overview); see [Cloud Sandbox](/cloud/sandbox) for the cloud-specific behavior.
+
+**The same `get_sandbox(...)` call works in both places**. You get a `DockerSandbox` on your laptop and a `CloudSandbox` when the deploy target is Motus Cloud. If neither fits, implement the `Sandbox` interface yourself and callers of `get_sandbox()` keep working unchanged.
+
+## Quick start
+
+```python
+import asyncio
+from motus.tools import get_sandbox
+
+async def main():
+    with get_sandbox(image="python:3.12") as sb:
+        print(await sb.sh("echo hello from the sandbox"))
+        print(await sb.sh("ls /tmp"))
+
+asyncio.run(main())
+```
+
+That's the whole loop. `get_sandbox()` picks the right backend, the `with` block tears it down on exit, and each `exec`/`sh` call returns the command's output as a string.
+
+## Local and cloud, one call
+
+Your code makes the same `get_sandbox(...)` call in both environments. Locally it returns a `DockerSandbox`. When the same agent runs on Motus Cloud, it returns a `CloudSandbox` that talks to a sandbox the cloud side manages for you. The switch happens automatically.
+
+Motus Cloud currently runs your agent inside a fixed, Motus-provided sandbox image. See [Cloud Sandbox](/cloud/sandbox) for the cloud-specific lifecycle, limits, and console UI.
+
+## Creating a sandbox
+
+`get_sandbox()` is the recommended entry point. It manages a global provider behind the scenes, so repeated calls in the same process do not spin up redundant infrastructure.
+
+<CodeGroup>
+```python from an image
+with get_sandbox(image="python:3.12") as sb:
+    ...
+```
+
+```python from a Dockerfile
+with get_sandbox(dockerfile="./sandbox") as sb:
+    ...
+```
+
+```python with mounts and env
+with get_sandbox(
+    image="node:20",
+    mounts={"/local/project": "/workspace"},
+    env={"NODE_ENV": "production"},
+) as sb:
+    ...
+```
+
+```python with port mapping
+# {8080: None} maps container port 8080 to a random host port.
+with get_sandbox(image="node:20", ports={8080: None}) as sb:
+    url = sb.endpoint(8080)  # "http://localhost:<assigned port>"
+```
+
+```python attach to existing container
+with get_sandbox(connect="my-dev-container") as sb:
+    # Closing the sandbox will NOT stop or remove a connected container.
+    ...
+```
+</CodeGroup>
+
+For fine-grained control, the `DockerSandbox` class is a direct factory with the same options plus an async variant:
+
+```python
+from motus.tools import DockerSandbox
+
+async with await DockerSandbox.acreate("python:3.12", mounts={"/tmp/data": "/data"}) as sb:
+    await sb.sh("ls /data")
+```
+
+### Parameter reference
+
+| Parameter | Type | Description |
+|---|---|---|
+| `image` | `str` | Docker image to run. Default `"python:3.12"`. |
+| `dockerfile` | `str \| None` | Path to a directory with a Dockerfile. Built on creation. |
+| `name` | `str \| None` | Container name. If provided, must be unique. |
+| `env` | `dict[str, str] \| None` | Environment variables inside the container. |
+| `mounts` | `dict[str, str] \| None` | Host-to-container bind mounts (`{"/local": "/inside"}`). |
+| `ports` | `dict[int, int \| None] \| None` | Container-to-host port mapping. `None` value picks a random host port. |
+| `connect` | `str \| None` | Docker backend only. Attach to an existing container by name or id. When set, `image` and `dockerfile` are ignored. |
+
+## What you can do in a sandbox
+
+Every sandbox exposes the same small surface, built on `exec()`.
+
+| Method | Purpose |
+|---|---|
+| `exec(*cmd, input=, cwd=, env=)` | Run an arbitrary command. Returns the command output as a string (Docker and Cloud interleave stdout + stderr; `LocalShell` returns stdout on success and both streams on non-zero exit). |
+| `python(script)` | Shortcut for `exec("python3", "-c", script)`. |
+| `sh(command)` | Shortcut for `exec("sh", "-c", command)`. |
+| `put(local_path, sandbox_path)` | Copy a file in. |
+| `get(sandbox_path, local_path)` | Copy a file out. |
+| `endpoint(port)` | URL to reach a service listening on `port` inside the sandbox. |
+
+```python
+async def pip_install_and_verify():
+    with get_sandbox(image="python:3.12") as sb:
+        await sb.put("./requirements.txt", "/app/requirements.txt")
+        await sb.sh("cd /app && pip install -r requirements.txt")
+        version = await sb.sh("python3 -c 'import requests; print(requests.__version__)'")
+        # get() writes to disk and returns the resolved local path.
+        local_path = await sb.get("/app/output.json", "./output.json")
+```
+
+A non-zero exit code does not raise; the command output is returned as a string so the caller can inspect it. This matches the way a terminal behaves and lets the agent handle a failure the same way it handles any other tool output.
+
+## Handing a sandbox to an agent
+
+A `Sandbox` is both a Python object you can drive yourself and a tool collection an agent can call. Two common patterns:
+
+### Pass the sandbox directly
+
+```python
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+from motus.tools import get_sandbox
+
+with get_sandbox(image="python:3.12") as sb:
+    agent = ReActAgent(
+        client=OpenAIChatClient(),
+        model_name="gpt-4o",
+        tools=[sb],
+    )
+    await agent("Use python to compute the 50th Fibonacci number.")
+```
+
+Motus extracts the sandbox's `python` and `sh` methods and exposes them as tools (`Sandbox` is declared with `@tools(allowlist={"python", "sh"})`).
+
+### Use the full `builtin_tools` suite
+
+`builtin_tools(sandbox=sb)` wraps the sandbox in a richer developer toolkit: `bash`, `read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`, a todo list, and (when `skills_dir=` is passed) `load_skill`. See [Tools](/concepts/tools) for how these fit together.
+
+```python
+from motus.tools import builtin_tools, get_sandbox
+
+with get_sandbox(image="python:3.12") as sb:
+    agent = ReActAgent(
+        client=OpenAIChatClient(),
+        model_name="gpt-4o",
+        tools=[*builtin_tools(sandbox=sb)],
+    )
+    await agent("Find every TODO in /workspace and open an issue for each.")
+```
+
+Call `builtin_tools()` with no argument and it binds to a `LocalShell`, which runs commands directly on the host. Convenient for prototyping; not suitable once the model is running code you did not write yourself.
+
+## Lifecycle
+
+Context managers are the recommended path. Motus supports both sync and async:
+
+```python
+# Sync
+with get_sandbox(image="python:3.12") as sb:
+    ...  # sb.close() runs on exit
+
+# Async
+async with await DockerSandbox.acreate("python:3.12") as sb:
+    ...  # sb.aclose() runs on exit
+```
+
+For long-lived sandboxes driven from tests or a custom orchestrator, you can also close manually:
+
+```python
+sb = DockerSandbox.create("python:3.12")
+try:
+    ...
+finally:
+    sb.close()
+```
+
+### Ownership
+
+Sandboxes created with `create()` / `acreate()` own the underlying container: closing them attempts to stop and remove it. Sandboxes obtained with `connect(name)` do not own the container and will leave it running when closed. This is what you want when your sandbox is a shared dev environment rather than a disposable workspace.
+
+## Backends
+
+<Tabs>
+  <Tab title="DockerSandbox (local)">
+    The default on your laptop and on self-hosted deploys. Requires a running Docker daemon. Supports images, Dockerfiles, bind mounts, port mapping, and attach-to-existing.
+
+    The first time Motus brings up the `DockerToolProvider` in a process, it checks for a `ghcr.io/lithos-ai/sandbox` image (a Python base with common utilities) and builds it locally from the bundled Dockerfile if missing. This check only runs once per provider. Your `get_sandbox(image=...)` call is separate: it spins up whatever image you name.
+  </Tab>
+
+  <Tab title="CloudSandbox (Motus Cloud)">
+    Used automatically when your agent runs on Motus Cloud. It does not create or destroy containers itself; it is an HTTP client for a sandbox managed by the cloud side.
+
+    `exec`, `put`, and `get` all round-trip over the network, so you do not need Docker on the host. See [Cloud Sandbox](/cloud/sandbox) for the lifecycle, limits, and console UI.
+  </Tab>
+
+  <Tab title="LocalShell (no isolation)">
+    A zero-setup backend that runs commands directly on the host via `subprocess`. Not safe for untrusted code. Reach for it in dev, demos, or tests where the cost of booting a container is higher than the risk.
+
+    ```python
+    from motus.tools import LocalShell
+
+    async def main():
+        with LocalShell(cwd="/tmp/work") as sh:
+            print(await sh.sh("ls"))
+    ```
+
+    `LocalShell` implements the same `Sandbox` interface as Docker and cloud, so swapping to a real sandbox later is a one-line change.
+  </Tab>
+</Tabs>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Tools" icon="screwdriver-wrench" href="/concepts/tools">
+    How the `@tool` decorator, `builtin_tools`, and sandbox fit together.
+  </Card>
+  <Card title="Cloud Sandbox" icon="cube" href="/cloud/sandbox">
+    Per-session containers on Motus Cloud: lifecycle, limits, and console UI.
+  </Card>
+  <Card title="MCP integration" icon="plug" href="/guides/mcp-integration">
+    Running MCP servers inside a sandbox when you want their side effects contained.
+  </Card>
+  <Card title="Human in the Loop" icon="hand" href="/guides/human-in-the-loop">
+    Require approval before the agent runs commands that write to disk or reach the network.
+  </Card>
+</CardGroup>

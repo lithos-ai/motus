@@ -1,0 +1,135 @@
+---
+title: "Cloud Sandbox"
+description: "Where your deployed agent's shell commands actually run. One sandbox per session, managed for you."
+---
+
+When your agent on Motus Cloud runs a shell command, that code does not execute in the agent's own process. It runs inside a cloud sandbox: a network-isolated Linux container that the platform boots for each session and tears down when the session ends. You do not provision it, resize it, or SSH into it. You keep writing `get_sandbox()` the same way you do locally, and `get_sandbox()` returns a handle pointing at the right container.
+
+## Mental model
+
+### Why a sandbox at all
+
+Agent tools often shell out, install packages, and leave files on disk. A deployed agent needs its own predictable Linux environment for that work: stable toolchain, scratch filesystem, no crosstalk between conversations, no side effects on the rest of the platform. A sandbox is that environment. Code runs inside; the agent process and the rest of the platform stay outside.
+
+On Motus Cloud that environment is a per-session container. It is the only place on the cloud where `sb.sh(...)` calls actually land.
+
+### One sandbox per session
+
+The cloud hierarchy on [Motus Cloud](/cloud/overview) is `Project → Session → Trace → Span`. A session is one ongoing conversation between a user and your agent. The sandbox hangs off the session:
+
+```
+Session
+├── Sandbox (one, serves every request in the session)
+└── Traces (one per request, runs tool calls in the sandbox)
+```
+
+When a session is created, the platform records a sandbox for it but does not boot the container yet. The first time your agent actually runs something, the platform starts the container. Every later turn in the same session reuses it. When the session is deleted, the sandbox is deleted with it.
+
+You never start or stop a sandbox from agent code. It follows the session.
+
+### Pause, not delete
+
+Sandboxes do not stay running indefinitely. About an hour after the container boots, the platform pauses it. The container is torn down, but the workspace directory survives on persistent storage. The next time your agent calls in, the platform boots a fresh container against the same workspace and your files are right where you left them.
+
+From your code this is invisible: `sb.sh(...)` just works. The first call after a resume may take an extra second or two to warm up.
+
+### What persists, what does not
+
+| Where | Survives pause? |
+|---|---|
+| `/home/agent/workspace` | Yes. Persists for the entire session lifetime. |
+| Anywhere else on the filesystem | No. Rebuilt from the base image on every resume. |
+| Background processes | No. Anything you left running dies at pause time. |
+
+Rule of thumb: write state you want to keep under `/home/agent/workspace`. Everything else is fair game for the platform to recycle.
+
+## Using it from your agent
+
+The API is the same as the [local sandbox](/concepts/sandbox). You call `get_sandbox()` and you get a sandbox object back.
+
+```python
+from motus.tools import tool, get_sandbox
+
+@tool
+async def run_command(command: str) -> str:
+    """Run a shell command inside the sandbox and return its output."""
+    with get_sandbox() as sb:
+        return await sb.sh(command)
+```
+
+Locally, `get_sandbox()` spins up a Docker container. On Motus Cloud, it returns a `CloudSandbox` handle pointed at the session's already-provisioned container. Same code, different backend.
+
+<Note>
+  On cloud, leaving the `with` block closes the Python-side handle but does not tear down the container. The sandbox is still there for the next tool call in the same session.
+</Note>
+
+### What you can do in it
+
+| Method | What it does |
+|---|---|
+| `sb.sh("command")` | Run a shell command. Returns combined stdout and stderr as a string. |
+| `sb.python("script")` | Shortcut for running a short Python snippet. |
+| `sb.exec(*cmd, input=, cwd=, env=)` | General form. Arbitrary command with optional stdin, working directory, or per-call env vars. |
+
+<Note>
+  A non-zero exit does not raise. The output comes back as a string and the caller inspects it. Commands are capped at 300 seconds server-side.
+</Note>
+
+### What comes pre-installed
+
+Alpine Linux with the usual agent-workflow tools:
+
+- **Runtimes**: Python 3, bash
+- **Network tools**: curl, git, openssh-client
+- **Build tools**: gcc, make, build headers
+- **Everyday utilities**: vim, tmux, jq, less, sudo
+
+You run as `agent`, a non-root user with passwordless sudo if you need it. For anything missing, `apk add` or `pip install` at runtime.
+
+<Note>
+  Cloud uses a platform-provided image. `get_sandbox(image=..., dockerfile=..., ports=..., mounts=..., connect=..., env=...)` kwargs are accepted for code compatibility but ignored at runtime, and `sb.endpoint(port)` is not available.
+</Note>
+
+### Network policy
+
+Outbound to the public internet works. `curl`, `git clone`, `pip install`, calls to third-party APIs are all fine. Outbound to private IP ranges is blocked: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and the `169.254.0.0/16` link-local range. Inbound from the public internet is blocked. The agent can only initiate connections; nothing on the outside can reach in.
+
+## Managing sandboxes in the console
+
+The [Motus console](https://console.lithosai.cloud) exposes two entry points into sandboxes.
+
+### The Sandboxes page
+
+A list of your account's sandboxes. For each one you see:
+
+- **Sandbox ID**
+- **Status**: `active`, `paused`, `starting`, or `stopping`
+- **Last active timestamp**
+
+You can sort and filter by ID. The page is list-only right now; to get rid of a sandbox you delete the session that owns it.
+
+### The Files panel in the chat playground
+
+When you open a deployed agent in the console's chat playground, a **Files** button near the chat header opens a side panel that browses the session's workspace at `/home/agent/workspace`. From there you can:
+
+- Navigate the directory tree
+- Download individual files to your machine
+
+Handy for pulling artifacts the agent produced during a conversation.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Sandbox concepts" icon="cube" href="/concepts/sandbox">
+    The abstract `Sandbox` interface and how `DockerSandbox`, `CloudSandbox`, and `LocalShell` all fit under it.
+  </Card>
+  <Card title="Motus Cloud overview" icon="cloud" href="/cloud/overview">
+    Where Project, Session, Trace, and Span fit together.
+  </Card>
+  <Card title="Deployment" icon="cloud-arrow-up" href="/guides/deployment">
+    Get your agent running on the cloud where the sandbox is actually used.
+  </Card>
+  <Card title="Human in the Loop" icon="hand" href="/guides/human-in-the-loop">
+    Gate risky sandbox commands on user approval before they run.
+  </Card>
+</CardGroup>

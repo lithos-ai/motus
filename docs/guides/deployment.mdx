@@ -1,0 +1,163 @@
+---
+title: "Cloud Deployment"
+description: "Deploy agents to Motus Cloud with a single command."
+---
+
+Deploy your agent to Motus Cloud with `motus deploy`. On the first run, you provide a project name and an import path. Motus packages your code, uploads it, and streams build progress to your terminal. Every subsequent deploy reads configuration from `motus.toml`, so you only need to run `motus deploy`.
+
+## Quick start
+
+<Steps>
+  <Step title="Authenticate">
+    ```bash
+    motus login
+    ```
+  </Step>
+  <Step title="Deploy for the first time">
+    Provide a project name and the import path to your agent:
+
+    ```bash
+    motus deploy --name my-project myapp:agent
+    ```
+
+    Motus validates the import path locally, creates a project, packages your code, and streams build status until the deployment is healthy. A `motus.toml` file is written to your project directory.
+  </Step>
+  <Step title="Deploy again">
+    Subsequent deploys read everything from `motus.toml` — no flags needed:
+
+    ```bash
+    motus deploy
+    ```
+  </Step>
+</Steps>
+
+## Authentication
+
+Before deploying, authenticate with your Motus Cloud account:
+
+```bash
+motus login
+```
+
+This opens a browser window for OAuth. Credentials are stored in `~/.motus/credentials.json`.
+
+In CI or other non-interactive environments, set the `LITHOSAI_API_KEY` environment variable instead it overrides the credential file.
+
+Other auth commands:
+
+| Command | Description |
+| --- | --- |
+| `motus whoami` | Check your current identity |
+| `motus logout` | Revoke your key and clear stored credentials |
+
+## How it works
+
+A deployment proceeds through these stages:
+
+<Steps>
+  <Step title="Validate">
+    Validate the import path (`module:variable` format) by importing it locally.
+  </Step>
+  <Step title="Resolve project">
+    Look up an existing project by `--project-id`, or create one with `--name`.
+  </Step>
+  <Step title="Create build">
+    Create a build via the cloud API with the project ID, import path, optional Git source, and optional secrets.
+  </Step>
+  <Step title="Persist configuration">
+    Persist `project_id`, `build_id`, and `import_path` to `motus.toml` so subsequent deploys can reuse them. (`git_url` and `git_ref` are also saved when provided.)
+  </Step>
+  <Step title="Upload source code">
+    Collect project files, pack them into a `.tar.zst` archive, and upload via a presigned URL. Git deploys skip this step — the build service pulls the repository directly.
+  </Step>
+  <Step title="Stream build status">
+    Stream build status via SSE. The build progresses through:
+
+    `queued` → `building` → `built` → `deploying` → `deployed`
+
+    After deployment, health checks continue in the background until the build transitions to `healthy` (or `failed`).
+  </Step>
+</Steps>
+
+## Deploy from Git
+
+Instead of uploading local files, you can build directly from a Git repository:
+
+```bash
+motus deploy --name my-project --git-url https://github.com/org/repo --git-ref main server:app
+```
+
+The build service clones the repository at the specified ref. No local file archiving happens. `--git-ref` accepts a branch name, tag, or commit SHA.
+
+After the first deploy, `git_url` and `git_ref` are saved to `motus.toml` so subsequent `motus deploy` calls reuse them.
+
+## Secrets
+
+Pass secrets to your deployed agent with `--secret`. Provide a value inline or let Motus read it from your local environment:
+
+```bash
+# Inline value
+motus deploy --secret API_KEY=sk-123 --secret DATABASE_URL=postgres://...
+
+# Read from local environment (the value of DATABASE_URL in your shell)
+motus deploy --secret DATABASE_URL
+```
+
+The `--secret` flag is repeatable. Secrets are encrypted at rest and injected as environment variables in the build environment.
+
+## motus.toml
+
+The `motus.toml` file is created automatically on your first deploy and updated on every subsequent one. Motus walks up the directory tree to find it, so you can run `motus deploy` from any subdirectory.
+
+```toml
+project_id = "proj_abc123"
+build_id   = "build_def456"
+import_path = "server:app"
+```
+
+When deploying from Git, these fields are added as well:
+
+```toml
+git_url = "https://github.com/org/repo"
+git_ref = "main"
+```
+
+You can commit `motus.toml` to version control so your team shares the same project ID. Do not commit secrets.
+
+## Deploy flags
+
+Full reference for `motus deploy`:
+
+```text
+motus deploy [OPTIONS] [import-path]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `import-path` | from `motus.toml` | Python import path in `module:variable` format |
+| `--name` | — | Project name — creates a new project if one does not exist |
+| `--project-id` | from `motus.toml` | Target an existing project by ID |
+| `--git-url` | — | Git repository URL — builds from Git instead of uploading local files |
+| `--git-ref` | — | Branch, tag, or commit SHA to check out (requires `--git-url`) |
+| `--secret` | — | `KEY=VALUE` or `KEY` (reads from environment). Repeatable. |
+
+`--name` and `--project-id` are mutually exclusive. On the first deploy you must provide one of them; on subsequent deploys the project ID is read from `motus.toml`.
+
+## Ignore rules
+
+When packaging local files, Motus applies a three-layer ignore strategy:
+
+1. **Dotfiles** are always excluded — `.env`, `.git/`, `.vscode/`, and any other file or directory whose name begins with `.`.
+2. **Default patterns** exclude common build artifacts:
+   ```text
+   __pycache__/
+   *.pyc
+   *venv*/
+   *.egg-info/
+   dist/
+   build/
+   htmlcov/
+   ```
+3. **`.gitignore` files** in your project tree are respected. Nested `.gitignore` files are scoped to their own directory.
+
+Git-based deploys bypass archiving entirely — the build service clones the repository directly.

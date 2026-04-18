@@ -1,0 +1,70 @@
+---
+title: "Plugin"
+---
+
+The Motus system is easy for your coding agent to use, whether you use Claude Code, Codex, Cursor, or Gemini CLI. The /motus skill is automatically installed with the CLI.
+
+```sh
+curl -fsSL https://www.lithosai.com/motus/install.sh | sh
+```
+
+/motus enables your agent to deploy existing agents or even to create new ones which exploit Motus-unique features.
+
+## Usage
+
+```text
+/motus                                              # guided agent creation
+/motus I need a customer support agent with PII redaction
+/motus deploy                                       # auto-detect and guided deploy
+/motus deploy agent:my_agent                        # specify entry point
+/motus deploy my-project agent:my_agent             # direct cloud deploy
+```
+
+## Alternative Installation Methods
+
+### Claude Code Plugin Marketplace
+
+```sh
+claude plugin marketplace add lithos-ai/motus && claude plugin install motus
+```
+
+Or from within Claude Code:
+
+```text
+/plugin marketplace add lithos-ai/motus
+/plugin install motus
+```
+
+#### Enable Automatic Updates
+
+The `curl | sh` installation above enables automatic plugin updates. If you used the later alternative installation method, you'll need to enable automatic updates as follows:
+
+1. Open Claude Code and run `/plugin`
+2. Go to **Marketplaces** tab
+3. Select **motus-marketplace**
+4. Choose **Enable auto-update**
+
+### npx skills
+
+`npx skills` installs the skill for wider range of coding agents.
+
+```sh
+npx skills add lithos-ai/motus
+```
+
+## Team Setup for Claude Code
+
+Add to your project's `.claude/settings.json` for automatic availability:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "motus-marketplace": {
+      "source": { "source": "github", "repo": "lithos-ai/motus" }
+    }
+  },
+  "enabledPlugins": {
+    "motus@motus-marketplace": true
+  }
+}
+```

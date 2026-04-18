@@ -55,7 +55,24 @@ class AnthropicChatClient(BaseChatClient):
                 system_prompt = msg.content
 
             elif msg.role == "user":
-                anthropic_messages.append({"role": "user", "content": msg.content})
+                if msg.base64_image:
+                    content_parts = [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": msg.base64_image,
+                            },
+                        },
+                    ]
+                    if msg.content:
+                        content_parts.append({"type": "text", "text": msg.content})
+                    anthropic_messages.append(
+                        {"role": "user", "content": content_parts}
+                    )
+                else:
+                    anthropic_messages.append({"role": "user", "content": msg.content})
 
             elif msg.role == "assistant":
                 if msg.reasoning_details or msg.tool_calls:

@@ -1,0 +1,140 @@
+---
+title: "Tracing"
+description: "Automatically record every LLM call and tool invocation as a structured span no manual instrumentation required."
+---
+
+Every `@agent_task` LLM calls, tool invocations, and task dependencies is recorded as a span automatically. No manual instrumentation required. Traces capture timing, inputs, outputs, and parent relationships so you can understand exactly what your agent did and why.
+
+<Tip>
+  Run `MOTUS_TRACING=1 python my_agent.py` to enable detailed tracing with file export in a single environment variable.
+</Tip>
+
+## Collection levels
+
+| Level | Captures | Overhead |
+| --- | --- | --- |
+| `disabled` | Nothing | None |
+| `basic` (default) | Task names, timing, parent relationships | Minimal |
+| `detailed` | \+ full messages, tool arguments, model outputs | Higher |
+
+`MOTUS_TRACING=1` sets collection to `detailed` and enables file export. The `basic` level is always on by default it adds negligible overhead and gives you timing data for every run.
+
+## Environment variables
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `MOTUS_TRACING` | `1` enables `detailed` collection \+ file export | off |
+| `MOTUS_COLLECTION_LEVEL` | Explicit level: `disabled`, `basic`, or `detailed`. Overrides the level set by `MOTUS_TRACING` but not its export behavior. | `basic` |
+| `MOTUS_TRACING_EXPORT` | `1` enables file export only (without changing the collection level) | off |
+| `MOTUS_TRACING_ONLINE` | `1` enables detailed collection \+ file export \+ live SSE viewer | off |
+| `MOTUS_TRACING_DIR` | Custom output directory | `traces/trace_<timestamp>/` |
+
+## Export formats
+
+After a run, `TraceManager.export_trace()` writes the following files to the output directory:
+
+| File | Description |
+| --- | --- |
+| `tracer_state.json` | Raw span metadata — timing, parent relationships, and extracted fields |
+| `trace_viewer.html` | Interactive span tree with timing bars and search. Opens automatically on exit when `MOTUS_TRACING=1`. |
+| `jaeger_traces.json` | OpenTelemetry-format spans for Jaeger, Zipkin, or any OTLP backend |
+
+## Lifecycle hooks
+
+Tracing is built on `HookManager`. You can register callbacks at three levels of specificity  global (every task), per-name (a specific function or tool), and per-type (all tool calls or all model calls).
+
+### Registering hooks
+
+```python
+from motus.runtime.hooks import (
+    register_hook,        # global — fires for every task
+    register_task_hook,   # per-name — fires for a specific function or tool
+    register_tool_hook,   # per-type — fires for all tool calls
+    register_model_hook,  # per-type — fires for all model calls
+)
+
+register_hook("task_end", my_callback)
+register_task_hook("web_search", "task_end", my_callback)
+register_tool_hook("task_end", my_callback)
+```
+
+### Decorator equivalents
+
+```python
+from motus.runtime.hooks import global_hook, task_hook, tool_task_hook
+
+@global_hook("task_error")
+def on_error(event):
+    logging.error(f"{event.name} failed: {event.error}")
+
+@task_hook("fetch_data", "task_end")
+def on_fetch(event):
+    logging.info(f"Fetched: {event.result}")
+
+@tool_task_hook("task_end")
+def on_tool(event):
+    logging.info(f"Tool {event.name}: {event.result}")
+```
+
+Execution order within each event: global hooks, then name hooks, then type hooks. Pass `prepend=True` to run a callback first within its group. Both sync and async callbacks are supported. Exceptions in callbacks are logged and never propagated.
+
+### HookEvent fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `event_type` | `str` | `"task_start"`, `"task_end"`, `"task_error"`, or `"task_cancelled"` |
+| `name` | `str` | Function or tool name |
+| `task_type` | `str` | `"normal_task"`, `"tool_call"`, `"model_call"`, `"agent_call"`, or `"magic_task"` |
+| `args` | `tuple` | Positional arguments passed to the task |
+| `kwargs` | `dict` | Keyword arguments passed to the task |
+| `result` | `Any` | Return value (populated on `task_end` only) |
+| `error` | `Exception` | Exception instance (populated on `task_error` and `task_cancelled` only) |
+| `task_id` | `AgentTaskId` | Unique identifier for this task instance |
+| `metadata` | `dict` | Additional context, such as `parent_stack` |
+
+## Programmatic access
+
+```python
+from motus.runtime import get_runtime
+
+tracer = get_runtime().scheduler.tracer  # auto-inits runtime if needed
+
+tracer.export_trace()
+tracer.get_trace_id()           # UUID for this session
+
+for task_id, meta in tracer.task_meta.items():
+    print(f"{meta['func']}: {meta.get('ended_at', 'running')}")
+```
+
+## Advanced configuration
+
+For fine-grained control, construct a `TraceConfig` directly instead of relying on environment variables:
+
+```python
+from pathlib import Path
+from motus.runtime.tracing import TraceConfig, CollectionLevel
+
+config = TraceConfig(
+    collection_level=CollectionLevel.DETAILED,
+    export_enabled=True,
+    log_dir=Path("my_traces/run_001"),
+)
+```
+
+| Field | Type | Default | Description |  |
+| --- | --- | --- | --- | --- |
+| `collection_level` | `CollectionLevel` | from env | What data to collect |  |
+| `export_enabled` | `bool` | from env | Write trace files on export |  |
+| `online_tracing` | `bool` | from env | Start a local SSE viewer |  |
+| `log_dir` | `Path` | `traces/trace_<ts>/` | Output directory |  |
+| `json_path` | `str` | `"tracer_state.json"` | JSON state filename |  |
+| `cloud_api_url` | \`str | None\` | from credentials | Cloud API endpoint |
+| `cloud_api_key` | \`str | None\` | from credentials | Cloud API key |
+| `project` | \`str | None\` | `MOTUS_PROJECT` / `motus.toml` | Project tag for cloud traces |
+| `build` | \`str | None\` | `MOTUS_BUILD` / `motus.toml` | Build tag for cloud traces |
+
+## Cloud Tracing
+
+When your agent is deployed to Motus Cloud via `motus deploy`, traces are automatically streamed to the Motus dashboard — no additional configuration needed. The cloud infrastructure sets `MOTUS_ON_CLOUD=1`, which enables cloud trace upload alongside your existing credentials.
+
+Local runs never send traces to the cloud, even if you are logged in. This prevents accidental uploads during development.

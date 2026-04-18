@@ -32,26 +32,42 @@ class Tool(ABC):
         self._input_guardrails = input_guardrails or []
         self._output_guardrails = output_guardrails or []
 
-        self.requires_approval = requires_approval
-
+        self.requires_approval = False
         if requires_approval:
-            tool_self = self  # closure capture
+            self.set_requires_approval(True)
 
-            async def _builtin_approval_guardrail(**kwargs):
-                from motus.guardrails import ToolRejected
-                from motus.serve.interrupt import interrupt
+    def _make_approval_guardrail(self):
+        tool_self = self  # closure capture
 
-                decision = await interrupt(
-                    {
-                        "type": "tool_approval",
-                        "tool_name": tool_self.name,
-                        "tool_args": kwargs,
-                    }
-                )
-                if not decision.get("approved"):
-                    raise ToolRejected(f"User rejected {tool_self.name}")
+        async def _builtin_approval_guardrail(**kwargs):
+            from motus.guardrails import ToolRejected
+            from motus.serve.interrupt import interrupt
 
-            self._input_guardrails.insert(0, _builtin_approval_guardrail)
+            decision = await interrupt(
+                {
+                    "type": "tool_approval",
+                    "tool_name": tool_self.name,
+                    "tool_args": kwargs,
+                }
+            )
+            if not decision.get("approved"):
+                raise ToolRejected(f"User rejected {tool_self.name}")
+
+        return _builtin_approval_guardrail
+
+    def set_requires_approval(self, value: bool) -> None:
+        """Enable or disable the approval gate on this tool (idempotent)."""
+        if value == self.requires_approval:
+            return
+        self.requires_approval = value
+        if value:
+            self._input_guardrails.insert(0, self._make_approval_guardrail())
+        else:
+            self._input_guardrails = [
+                g
+                for g in self._input_guardrails
+                if getattr(g, "__name__", "") != "_builtin_approval_guardrail"
+            ]
 
     def __call__(self, args: str):
         """Parse JSON args, then delegate to _execute."""

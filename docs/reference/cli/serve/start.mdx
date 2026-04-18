@@ -1,0 +1,52 @@
+---
+title: "motus serve start"
+description: "Start an HTTP server that wraps an agent at a given import path."
+---
+
+Start an HTTP server that wraps the agent at the given import path.
+
+## Usage
+
+```bash
+motus serve start <agent> [options]
+```
+
+### Positional argument
+
+<ParamField path="agent" type="string" required>
+  Python import path to the agent object in `module:variable` format. For example, `myapp:my_agent` imports `my_agent` from `myapp.py`. The object must be importable from the working directory.
+</ParamField>
+
+## Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host` | `0.0.0.0` | Network address to bind to |
+| `--port` | `8000` | Port to listen on |
+| `--workers` | CPU count | Maximum concurrent worker processes |
+| `--ttl` | `0` | Idle/error session expiry in seconds (`0` disables expiry) |
+| `--timeout` | `0` | Maximum seconds per agent turn before the worker is killed (`0` means no limit) |
+| `--max-sessions` | `0` | Maximum number of concurrent sessions (`0` means unlimited) |
+| `--shutdown-timeout` | `0` | Seconds to wait for in-flight tasks on shutdown before cancelling (`0` waits indefinitely) |
+| `--allow-custom-ids` | `false` | Enable `PUT /sessions/{id}` so clients can specify their own session IDs |
+| `--log-level` | `info` | Log verbosity: `debug`, `info`, `warning`, or `error` |
+
+## Examples
+
+### Start with custom port and workers
+
+```bash
+motus serve start myapp:my_agent --port 8080 --workers 8
+```
+
+### Enable custom session IDs with idle TTL
+
+```bash
+motus serve start myapp:my_agent --allow-custom-ids --ttl 3600
+```
+
+### Limit concurrency and set a per-turn timeout
+
+```bash
+motus serve start myapp:my_agent --max-sessions 50 --timeout 30
+```

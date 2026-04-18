@@ -1,0 +1,30 @@
+---
+title: "motus serve sessions"
+description: "List all active sessions on a running Motus agent server."
+---
+
+List all active sessions. This maps directly to `GET /sessions` described in the [Sessions API reference](/reference/api/sessions).
+
+## Usage
+
+```bash
+motus serve sessions <url>
+```
+
+## Examples
+
+### List sessions
+
+```bash
+motus serve sessions http://localhost:8000
+```
+
+```json
+[
+  {
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "total_messages": 4,
+    "status": "idle"
+  }
+]
+```

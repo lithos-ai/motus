@@ -1,0 +1,163 @@
+---
+title: "Multi-Agent"
+description: "Compose agents with as_tool() and fork() so a supervisor can delegate to specialists and explore independent conversation branches."
+---
+
+A single agent with many tools quickly becomes a monolith. Motus gives you two primitives for breaking it apart:
+
+- `agent.as_tool()` turns a specialist agent into a tool that a supervisor can call.
+- `agent.fork()` makes an independent copy of an agent at its current conversation state so you can explore branches without touching the original.
+
+They compose freely. A supervisor can hold several specialists as tools, and you can fork any of them whenever you want an isolated branch.
+
+## Agent as tool
+
+`as_tool()` is the core building block for supervisor and specialist patterns. Wrap any agent and hand the result to another agent's `tools=[...]` list.
+
+```python
+from motus.agent import ReActAgent
+from motus.models import OpenAIChatClient
+
+client = OpenAIChatClient()
+
+researcher = ReActAgent(
+    client=client,
+    model_name="gpt-4o",
+    name="researcher",
+    system_prompt="You research topics thoroughly and return detailed findings.",
+)
+
+supervisor = ReActAgent(
+    client=client,
+    model_name="gpt-4o",
+    system_prompt="You coordinate research tasks and synthesize results.",
+    tools=[
+        researcher.as_tool(
+            name="research",
+            description="Delegate a research question. Input is a single string prompt; output is the researcher's findings.",
+        ),
+    ],
+)
+
+async def main():
+    return await supervisor("What are the latest advances in fusion energy?")
+
+# asyncio.run(main())
+```
+
+The supervisor sees a normal tool with one parameter, `request: str`. When the LLM decides to call it, Motus forwards the string to the specialist, runs the specialist's full agent loop, and returns the result to the supervisor as if it were any other tool output.
+
+<Tip>
+  Always pass a real `description`. The default is `"Delegate to sub-agent: <name>"`, which tells the supervisor's LLM almost nothing about when to use the tool. A sentence or two about what the specialist is for, what input it expects, and what it returns makes a big difference in tool selection quality.
+</Tip>
+
+### Parameter reference
+
+All parameters are keyword-only.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str \| None` | the agent's `name` | Tool name exposed to the supervisor. Override when the supervisor needs a clearer verb (e.g. `"research"` instead of `"researcher"`). |
+| `description` | `str \| None` | `"Delegate to sub-agent: <name>"` | Tool description the supervisor's LLM reads when deciding whether to call it. |
+| `output_extractor` | `Callable \| None` | `None` | Post-process the specialist's return value before it goes back to the supervisor. See [Output extractors](#output-extractors). |
+| `stateful` | `bool` | `False` | See [Stateful vs. stateless](#stateful-vs-stateless). |
+| `max_steps` | `int \| None` | the agent's own `max_steps` | Override the specialist's reasoning step cap for this tool. |
+| `input_guardrails` | `list \| None` | `None` | Guardrails run on the `request` string before the specialist sees it. |
+| `output_guardrails` | `list \| None` | `None` | Guardrails run on the specialist's output before it returns to the supervisor. |
+
+### Stateful vs. stateless
+
+The `stateful` flag controls whether the specialist's conversation history accumulates across tool calls within a single supervisor run.
+
+<Tabs>
+  <Tab title="Stateless (default)">
+    Each call forks the specialist, so every invocation starts from the specialist's original state (system prompt plus any pre-loaded messages). The fork is a lightweight memory copy, not a model call. Concurrent invocations never share memory, which makes this safe for fan-out.
+
+    ```python
+    tools=[researcher.as_tool(description="...")]  # stateful=False
+    ```
+  </Tab>
+  <Tab title="Stateful">
+    The tool calls the same specialist instance every time, so its memory grows across calls in the supervisor run. Use this when the specialist benefits from remembering earlier context, for example a researcher that builds on its own previous findings.
+
+    ```python
+    tools=[researcher.as_tool(description="...", stateful=True)]
+    ```
+
+    <Warning>
+      Stateful specialists are not safe to call concurrently within one supervisor run. All calls write to one shared memory buffer, so parallel invocations (like a model emitting two simultaneous tool calls that both hit the stateful specialist) will race and corrupt the conversation. Stick to sequential calls, or keep `stateful=False` for parallel paths.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Output extractors
+
+By default the specialist's result is passed back as-is; non-string results are JSON-encoded before reaching the supervisor. `output_extractor` runs on the specialist's return value first. Two common uses:
+
+- **Pull a field out of a structured result.** If the specialist returns a Pydantic model, return just the field the supervisor actually needs.
+- **Shrink a long answer.** The specialist may produce pages of analysis; the supervisor may only want the headline.
+
+```python
+from pydantic import BaseModel
+
+class AnalysisResult(BaseModel):
+    summary: str
+    evidence: list[str]
+
+# analyst is a ReActAgent configured with response_format=AnalysisResult
+tools=[
+    analyst.as_tool(
+        description="Analyze a dataset and return a one-line summary.",
+        output_extractor=lambda r: r.summary,
+    ),
+]
+```
+
+The extractor runs after the specialist finishes and before the supervisor sees the result. Raising inside it aborts the tool call like any other exception.
+
+### Errors
+
+When the specialist raises, the exception is caught at the tool boundary and surfaced to the supervisor as a regular tool error (`{"error": "..."}`). The supervisor's model sees the failure as feedback and can retry with a different input or give up, the same way it handles any other tool exception.
+
+## Forking
+
+`agent.fork()` makes an independent copy of the agent with the same configuration and a forked copy of the conversation. Changes to the fork's memory never affect the original.
+
+```python
+agent = ReActAgent(client=client, model_name="gpt-4o")
+
+async def main():
+    await agent("Summarize the pros and cons of microservices.")
+
+    # Two independent branches from the same starting point
+    branch_a = agent.fork()
+    branch_b = agent.fork()
+
+    pro = await branch_a("Now argue strongly in favor.")
+    con = await branch_b("Now argue strongly against.")
+
+    # The original is unchanged
+    recap = await agent("What did you just summarize?")
+    return pro, con, recap
+```
+
+The fork carries over every `__init__` argument (client, model, system prompt, tools, guardrails, `response_format`, `reasoning`, `timeout`, `cache_policy`, `step_callback`, and so on) and gets its own independent copy of the conversation memory.
+
+Forking is useful for A/B comparisons, self-consistency sampling, and any case where you want to branch from a known conversation state without mutating the original. If you just want a fresh empty agent, instantiate a new `ReActAgent` rather than forking; fork's job is preserving the accumulated conversation.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Agents" icon="robot" href="/concepts/agents">
+    Everything a `ReActAgent` can do on its own: tools, memory, guardrails, reasoning.
+  </Card>
+  <Card title="Workflow" icon="diagram-project" href="/concepts/workflow">
+    Deep dive on `@agent_task`, the task graph, and parallel execution.
+  </Card>
+  <Card title="Tools" icon="screwdriver-wrench" href="/concepts/tools">
+    How the `@tool` decorator and guardrails work under the hood.
+  </Card>
+  <Card title="Tracing" icon="magnifying-glass-chart" href="/guides/tracing">
+    Debugging multi-agent flows is much easier with tracing on.
+  </Card>
+</CardGroup>

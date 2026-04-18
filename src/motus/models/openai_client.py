@@ -72,7 +72,21 @@ class OpenAIChatClient(BaseChatClient):
             if msg.role == "system":
                 openai_messages.append({"role": "system", "content": msg.content})
             elif msg.role == "user":
-                openai_messages.append({"role": "user", "content": msg.content})
+                if msg.base64_image:
+                    content_parts = []
+                    if msg.content:
+                        content_parts.append({"type": "text", "text": msg.content})
+                    content_parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{msg.base64_image}",
+                            },
+                        }
+                    )
+                    openai_messages.append({"role": "user", "content": content_parts})
+                else:
+                    openai_messages.append({"role": "user", "content": msg.content})
             elif msg.role == "assistant":
                 assistant_msg = {"role": "assistant", "content": msg.content}
                 if msg.tool_calls:

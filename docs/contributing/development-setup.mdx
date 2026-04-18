@@ -1,0 +1,61 @@
+---
+title: "Development Setup"
+description: "Get a local Motus checkout running in a few minutes."
+---
+
+## What you need
+
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** handles packaging, virtual envs, and installs the right Python for you. If you have it, you have everything the project needs on the Python side.
+- **git** to clone.
+- **Docker** only if you plan to run or modify the sandbox tests.
+
+## Clone, install, verify
+
+<Steps>
+  <Step title="Clone">
+    ```bash
+    git clone https://github.com/lithos-ai/motus.git
+    cd motus
+    ```
+  </Step>
+  <Step title="Install">
+    ```bash
+    uv sync --all-extras
+    ```
+    `uv` reads `pyproject.toml`, provisions the right Python version, creates a `.venv`, and installs the project with every optional group (`dev`, `docs`, `test`). Re-run any time you pull new dependencies.
+  </Step>
+  <Step title="Set up pre-commit hooks">
+    ```bash
+    uv run pre-commit install
+    ```
+    This registers a git hook that runs **ruff** (linting and formatting) on every commit. To run the checks manually:
+    ```bash
+    uv run pre-commit run --all-files
+    ```
+  </Step>
+  <Step title="Verify">
+    ```bash
+    uv run pytest tests/unit/ -x -q
+    ```
+    Unit tests run without API keys or Docker. If something fails here, re-check that `uv sync --all-extras` completed cleanly.
+  </Step>
+</Steps>
+
+The ruff config lives in `pyproject.toml` under `[tool.ruff]`. Any editor ruff integration that respects `pyproject.toml` will pick it up automatically, which is most of them.
+
+## Previewing the docs
+
+If you touch anything under `docs/`, preview the change before you open a PR:
+
+```bash
+cd docs
+npx mintlify dev
+```
+
+Opens at [http://localhost:3000](http://localhost:3000) and rebuilds on file changes.
+
+## Next steps
+
+- [Code Style](/contributing/code-style) for conventions beyond what ruff enforces.
+- [Testing](/contributing/testing) before writing your first test.
+- [Pull Requests](/contributing/pull-requests) when you are ready to submit.

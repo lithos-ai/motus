@@ -1,0 +1,187 @@
+---
+title: "Skills"
+description: "Self-contained instruction packs an agent loads on demand, instead of bloating the system prompt with every procedure it might ever need."
+---
+
+A useful agent often needs many different procedures at its fingertips: how to review code, how to deploy a service, how to onboard a new user, how to file a support ticket. Put all of that into the system prompt and the prompt swells: the model's attention gets diffuse and you burn tokens on every call for instructions the current request does not need.
+
+That is what skills are for. Each skill is a folder on disk with a `SKILL.md` file that carries a short description and a longer instruction body. The agent only sees the descriptions up front. When a user request matches one, the agent calls `load_skill(...)` to pull in the full instructions (and any companion files) just for that turn.
+
+## Anatomy of a skill
+
+A skill is a directory that contains at least a `SKILL.md` file. Everything else in the folder (reference docs, checklists, templates) is optional and lives alongside it.
+
+```
+skills/
+  code_review/
+    SKILL.md
+    review_checklist.md
+  deploy/
+    SKILL.md
+    deploy-reference.md
+  research/
+    SKILL.md
+```
+
+`SKILL.md` is markdown with YAML frontmatter:
+
+```markdown
+---
+name: code_review
+description: Review code for bugs, style issues, and improvement opportunities
+---
+# Code Review Skill
+
+When asked to review code, follow this checklist:
+
+1. **Correctness** - Identify bugs, edge cases, off-by-one errors.
+2. **Security** - Check for injection, auth issues, secret exposure.
+3. **Performance** - Flag unnecessary allocations, N+1 queries, missing indexes.
+4. **Readability** - Suggest clearer naming, simpler control flow.
+
+See `review_checklist.md` in this directory for the full checklist.
+```
+
+Both frontmatter fields are optional but you should fill them in:
+
+| Field | Purpose | Default |
+|---|---|---|
+| `name` | Identifier the agent uses to load this skill. | Directory name |
+| `description` | One-line summary the agent reads when deciding whether to load. | Empty string |
+
+Everything after the frontmatter is the instruction body, in plain markdown. The agent sees that text verbatim once the skill is loaded, so write it the way you would write instructions for a careful but junior teammate.
+
+## Wiring skills into an agent
+
+Pass `skills_dir` to `builtin_tools()` and the agent picks up a `load_skill` tool automatically:
+
+```python
+import asyncio
+from motus.agent import ReActAgent
+from motus.models import AnthropicChatClient
+from motus.tools import builtin_tools
+
+async def main():
+    agent = ReActAgent(
+        client=AnthropicChatClient(),
+        model_name="claude-haiku-4-5-20251001",
+        system_prompt="You are a helpful coding assistant. When a user request matches an available skill, load it first to get detailed instructions.",
+        tools=builtin_tools(skills_dir="path/to/skills/"),
+    )
+    print(await agent("Review this code for bugs:\ndef divide(a, b):\n    return a / b"))
+
+asyncio.run(main())
+```
+
+The `load_skill` tool shows up next to the other built-in tools. Without `skills_dir`, `load_skill` is simply absent and the rest still work.
+
+Directories that do not exist log a warning and yield zero skills. Subdirectories without a `SKILL.md` are silently skipped. A subdirectory with a malformed `SKILL.md` logs a warning and is skipped. YAML keys beyond `name` and `description` (like `version:`) are parsed but ignored. Calling `load_skill("bogus_name")` returns a helpful error string listing the available skills, rather than raising.
+
+## What the agent actually sees
+
+When you wire skills in, the `load_skill` tool's description is auto-generated and lists every skill by name and description:
+
+```text
+Load detailed instructions for a skill.
+
+Skills are self-contained units of knowledge and instructions. Load a skill
+when the user's request matches one of the available skills.
+
+Available skills:
+- code_review: Review code for bugs, style issues, and improvement opportunities
+- deploy: Deploy an agent to the Motus cloud
+- research: Conduct thorough research on a topic using search and file tools
+
+Returns the skill's instructions as markdown text, along with the skill
+directory path for accessing companion files via file tools.
+```
+
+That listing is what drives the model's routing decision, which is why the `description` field in your `SKILL.md` is load-bearing. A vague description like `"Deployment stuff"` usually loses to a specific one like `"Deploy an agent to the Motus cloud"`.
+
+## How a turn with skills unfolds
+
+<Steps>
+  <Step title="Discovery (at agent construction)">
+    `builtin_tools(skills_dir=...)` scans the directory once, parses every `SKILL.md` it finds, and builds the `load_skill` tool. The agent never re-scans at runtime.
+  </Step>
+  <Step title="Matching (during the turn)">
+    The model reads the tool descriptions (including the skill listing) and decides whether the user's request matches a skill. If yes, it calls `load_skill("skill_name")`.
+  </Step>
+  <Step title="Loading and follow-up">
+    The tool returns a string that starts with `Skill directory: /abs/path/to/skills/code_review` and then the full instructions. The directory path is right there, so the agent can reach for its file tools (`read_file`, `glob_search`) to pull in companion files from the same folder as it needs them.
+  </Step>
+</Steps>
+
+A skill that the agent never loads costs nothing beyond the one-line description in the `load_skill` tool definition.
+
+<Note>
+  Skills are instruction-shaped, not action-shaped. Loading a skill only adds text to the conversation; it does not fire other tools or mutate state. If a skill tells the agent to run a command, the agent still has to call the relevant tool itself. Skills are scoped per agent (whatever `skills_dir` you passed to that one `builtin_tools` call) and are not dynamic: new `SKILL.md` files dropped into the folder after construction do not show up until you rebuild the agent.
+</Note>
+
+## A concrete example
+
+Here is what a request looks like end to end with the [bundled example](https://github.com/lithos-ai/motus/tree/main/examples/skills):
+
+```text
+User: Review this code for bugs: def divide(a, b): return a/b
+
+# The request matches the code_review skill, so the agent loads it first.
+Agent calls: load_skill(skill_name="code_review")
+Tool returns:
+    Skill directory: /abs/path/to/skills/code_review
+
+    # Code Review Skill
+    When asked to review code, follow this checklist:
+    1. Correctness - ...
+    2. Security - ...
+    ...
+    See `review_checklist.md` in this directory for the full checklist.
+
+Agent calls: read_file(path="/abs/path/to/skills/code_review/review_checklist.md")
+Tool returns: (full checklist contents)
+
+Agent: (produces the review, following the loaded checklist)
+```
+
+The agent only paid for the full checklist on turns that actually needed it.
+
+## Writing skills that work
+
+<Tip>
+  The `description` field is load-bearing. It is the only thing the model sees before deciding whether to load the skill, so write it like a good commit subject: specific, verb-forward, scoped.
+</Tip>
+
+A few habits that pay off:
+
+- **One skill per task.** Separate `deploy` and `rollback` skills are easier to match and safer to follow than a single `deployment` skill that tries to do both. A big skill tends to get loaded for everything adjacent, and the agent wanders.
+- **Push heavy reference material into companion files.** `SKILL.md` should cover the workflow and link out; a 400-line API table belongs in a companion file the agent reads only when it needs it.
+- **Write instructions like you would for a careful junior.** Numbered steps, bold labels, explicit output formats. The agent follows these as directives, not as suggestions.
+
+## Skills vs. system prompt vs. tools
+
+They all add behavior, but they answer different questions.
+
+| Mechanism | When to reach for it |
+|---|---|
+| **System prompt** | Identity, global rules, the agent's persona. Always in context. |
+| **Tools** | Actions with side effects (run a command, read a file, call an API). |
+| **Skills** | Procedures the agent occasionally needs to follow, not always. Instruction-shaped, not action-shaped. |
+
+If a piece of guidance fits on one line and applies to every turn, put it in the system prompt. If it is a procedure that only some requests need, make it a skill.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Tools" icon="screwdriver-wrench" href="/concepts/tools">
+    How built-in tools, custom tools, and guardrails fit together.
+  </Card>
+  <Card title="Agents" icon="robot" href="/concepts/agents">
+    Wiring agents, system prompts, and memory.
+  </Card>
+  <Card title="Memory" icon="brain" href="/concepts/memory">
+    What stays in context across turns, and how to keep it bounded.
+  </Card>
+  <Card title="Example on GitHub" icon="github" href="https://github.com/lithos-ai/motus/tree/main/examples/skills">
+    Runnable `research` and `code_review` skills with an agent that uses them.
+  </Card>
+</CardGroup>
