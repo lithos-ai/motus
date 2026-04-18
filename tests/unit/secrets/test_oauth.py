@@ -44,7 +44,9 @@ class TestStorage:
         storage._put("tokens", {"access_token": "abc"})
         assert storage._get("tokens") == {"access_token": "abc"}
 
-    def test_put_creates_parent_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_put_creates_parent_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         nested = tmp_path / "deeply" / "nested" / "tokens.json"
         monkeypatch.setattr(oauth, "TOKENS_FILE", nested)
         oauth._Storage("https://a.example")._put("tokens", {"access_token": "abc"})
@@ -57,8 +59,12 @@ class TestStorage:
     def test_distinct_origins_are_isolated(self, tokens_file: Path):
         oauth._Storage("https://a.example")._put("tokens", {"access_token": "a"})
         oauth._Storage("https://b.example")._put("tokens", {"access_token": "b"})
-        assert oauth._Storage("https://a.example")._get("tokens") == {"access_token": "a"}
-        assert oauth._Storage("https://b.example")._get("tokens") == {"access_token": "b"}
+        assert oauth._Storage("https://a.example")._get("tokens") == {
+            "access_token": "a"
+        }
+        assert oauth._Storage("https://b.example")._get("tokens") == {
+            "access_token": "b"
+        }
 
     def test_put_preserves_other_keys_in_same_origin(self, tokens_file: Path):
         storage = oauth._Storage("https://a.example")
@@ -77,8 +83,12 @@ class TestStorage:
 
         def worker(i: int) -> None:
             try:
-                oauth._Storage(f"https://o{i}.example")._put("tokens", {"access_token": str(i)})
-            except BaseException as exc:  # pragma: no cover — surfaced by assertion below
+                oauth._Storage(f"https://o{i}.example")._put(
+                    "tokens", {"access_token": str(i)}
+                )
+            except (
+                BaseException
+            ) as exc:  # pragma: no cover — surfaced by assertion below
                 errors.append(exc)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]

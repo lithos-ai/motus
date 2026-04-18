@@ -37,7 +37,9 @@ async def main():
 
         trace_id = gen_trace_id()
         with trace(workflow_name="DeepWiki Streamable HTTP Example", trace_id=trace_id):
-            print(f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}\n")
+            print(
+                f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}\n"
+            )
             result = await Runner.run(
                 agent,
                 "For the repository openai/codex, tell me the primary programming language.",

@@ -17,10 +17,10 @@ Requires: ``pip install anthropic[mcp]``.
 import asyncio
 import os
 
+import rich
 from anthropic import AsyncAnthropic
 from anthropic.lib.tools.mcp import async_mcp_tool
 from mcp import ClientSession
-import rich
 
 from motus.mcp.client.streamable_http import streamable_http_client
 

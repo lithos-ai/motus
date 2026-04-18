@@ -14,7 +14,6 @@ import urllib.parse
 from contextlib import ExitStack
 
 import httpx
-
 from mcp.client.auth import OAuthClientProvider
 
 from .oauth import (
@@ -74,7 +73,9 @@ class _DaprAuth(httpx.Auth):
 
     def _fetch(self, origin: str):
         if not _DAPR_HTTP_PORT:
-            raise RuntimeError("DAPR_HTTP_PORT is not set; DaprAuth requires a daprd sidecar.")
+            raise RuntimeError(
+                "DAPR_HTTP_PORT is not set; DaprAuth requires a daprd sidecar."
+            )
         name = urllib.parse.quote(origin, safe="")
         url = f"http://localhost:{_DAPR_HTTP_PORT}/v1.0/secrets/{self._secret_store}/{name}"
         response = yield httpx.Request("GET", url)
@@ -124,7 +125,9 @@ class _ConsoleAuth(httpx.Auth):
                 if has_cached_refresh_token(origin):
                     self._providers[origin] = make_provider(origin)
                 else:
-                    self._providers[origin] = self._stack.enter_context(open_auth(origin))
+                    self._providers[origin] = self._stack.enter_context(
+                        open_auth(origin)
+                    )
             try:
                 async for r in self._providers[origin].async_auth_flow(request):
                     yield r

@@ -10,13 +10,13 @@ decides which entry point to call.
 """
 
 import asyncio
-from contextlib import contextmanager, closing
 import http.server
 import json
 import sys
 import threading
 import urllib.parse
 import webbrowser
+from contextlib import closing, contextmanager
 
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.shared.auth import (
