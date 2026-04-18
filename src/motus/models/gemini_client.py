@@ -174,7 +174,9 @@ class GeminiChatClient(BaseChatClient):
                                 id=f"call_{uuid.uuid4().hex[:24]}",
                                 function=FunctionCall(
                                     name=fc.name,
-                                    arguments=json.dumps(dict(fc.args) if fc.args else {}),
+                                    arguments=json.dumps(
+                                        dict(fc.args) if fc.args else {}
+                                    ),
                                 ),
                             )
                         )
