@@ -6,14 +6,17 @@ import os
 from typing import Any, Optional, Type
 
 from pydantic import BaseModel
-from volcenginesdkarkruntime import AsyncArk
+
+try:
+    from volcenginesdkarkruntime import AsyncArk
+except ImportError:
+    AsyncArk = None
 
 from .base import (
     BaseChatClient,
     ChatCompletion,
     ChatMessage,
     FunctionCall,
-    ReasoningConfig,
     ToolCall,
     ToolDefinition,
 )
@@ -25,9 +28,15 @@ class VolcEngineChatClient(BaseChatClient):
 
     Wraps Ark to provide the unified interface.
 
+    Requires the ``volcengine`` optional dependency::
+
+        pip install lithosai-motus[volcengine]
+
     Args:
-        api_key: VolcEngine API key. If not provided, will look for VOLCENGINE_API_KEY in environment variables.
-        base_url: VolcEngine API base URL. (default: https://ark.cn-beijing.volces.com/api/v3)
+        api_key: VolcEngine API key. If not provided, will look for
+                 VOLCENGINE_API_KEY in environment variables.
+        base_url: VolcEngine API base URL.
+                  (default: https://ark.cn-beijing.volces.com/api/v3)
     """
 
     def __init__(
@@ -36,6 +45,11 @@ class VolcEngineChatClient(BaseChatClient):
         base_url: Optional[str] = None,
         **kwargs: Any,
     ):
+        if AsyncArk is None:
+            raise ImportError(
+                "volcenginesdkarkruntime is not installed. "
+                "Install it with: pip install lithosai-motus[volcengine]"
+            )
         if not base_url:
             base_url = os.getenv(
                 "VOLCENGINE_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"
@@ -159,18 +173,22 @@ class VolcEngineChatClient(BaseChatClient):
         model: str,
         messages: list[ChatMessage],
         tools: Optional[list[ToolDefinition]] = None,
-        reasoning: ReasoningConfig = ReasoningConfig.auto(),
         **kwargs,
     ) -> ChatCompletion:
         """Create a chat completion using Volcengine Ark API (manual streaming)."""
         ark_messages = self._convert_messages(messages)
 
+        # Pop stream/stream_options from kwargs to prevent callers from
+        # accidentally overriding them and breaking the streaming aggregation.
+        kwargs.pop("stream", None)
+        kwargs.pop("stream_options", None)
+
         request_kwargs = {
+            **kwargs,
             "model": model,
             "messages": ark_messages,
             "stream": True,
             "stream_options": {"include_usage": True},
-            **kwargs,
         }
 
         if tools:
@@ -223,7 +241,7 @@ class VolcEngineChatClient(BaseChatClient):
             tool_calls=self._build_tool_calls_from_stream(tool_calls_map),
             finish_reason=finish_reason or "stop",
             parsed=None,
-            usage=self._extract_usage(usage_data),
+            usage=self._extract_usage(usage_data) if usage_data else {},
         )
 
     async def parse(
@@ -232,7 +250,6 @@ class VolcEngineChatClient(BaseChatClient):
         messages: list[ChatMessage],
         response_format: Type[BaseModel],
         tools: Optional[list[ToolDefinition]] = None,
-        reasoning: ReasoningConfig = ReasoningConfig.auto(),
         **kwargs,
     ) -> ChatCompletion:
         """Create a chat completion with structured output using Volcengine Ark API.
