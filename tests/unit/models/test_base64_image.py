@@ -6,9 +6,8 @@ and that plain text messages are left unchanged.
 """
 
 import base64
-import json
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from motus.models import ChatMessage
 
