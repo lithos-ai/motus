@@ -319,13 +319,21 @@ class FunctionTool(Tool):
 
     def __call__(self, args: str):
         """Parse JSON args with type coercion, then delegate to _execute."""
-        if self.schema_model is not None:
-            payload = json.loads(args)
-            if not isinstance(payload, dict):
-                raise ValueError("Tool arguments must be a JSON object")
-            kwargs = self.schema_model.model_validate(payload).model_dump()
-        else:
-            kwargs = self.params.decode(args)
+        try:
+            if self.schema_model is not None:
+                payload = json.loads(args)
+                if not isinstance(payload, dict):
+                    raise ValueError("Tool arguments must be a JSON object")
+                kwargs = self.schema_model.model_validate(payload).model_dump()
+            else:
+                kwargs = self.params.decode(args)
+        except (json.JSONDecodeError, ValueError, Exception) as e:
+            # Return error to the model so it can retry with valid arguments,
+            # matching the base Tool.__call__ pattern.
+            return self._execute(
+                __json_error=f"Invalid tool arguments: {e}. "
+                f"Raw args: {str(args)[:200]}. Please retry with valid JSON."
+            )
         return self._execute(**kwargs)
 
     async def _invoke(self, **kwargs) -> Any:

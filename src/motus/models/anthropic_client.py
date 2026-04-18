@@ -105,6 +105,20 @@ class AnthropicChatClient(BaseChatClient):
 
             elif msg.role == "tool":
                 # Anthropic expects tool results as user messages with tool_result blocks
+                tool_content = msg.content
+                if msg.base64_image:
+                    # Include image alongside text in the tool result
+                    tool_content = [
+                        {"type": "text", "text": msg.content or ""},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": msg.base64_image,
+                            },
+                        },
+                    ]
                 anthropic_messages.append(
                     {
                         "role": "user",
@@ -112,7 +126,7 @@ class AnthropicChatClient(BaseChatClient):
                             {
                                 "type": "tool_result",
                                 "tool_use_id": msg.tool_call_id,
-                                "content": msg.content,
+                                "content": tool_content,
                             }
                         ],
                     }
