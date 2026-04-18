@@ -1,7 +1,7 @@
 """Span building helpers for Anthropic SDK tool runner tracing.
 
-Creates OTel spans directly using get_tracer() instead of building dicts
-for TraceManager.ingest_external_span().
+Spans are created on this module's OTel tracer; they flow through whichever
+SpanProcessors motus has configured (offline, live, cloud).
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Any
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 
-from motus.runtime.tracing.agent_tracer import (
+from motus.tracing.agent_tracer import (
     ATTR_ERROR,
     ATTR_FUNC,
     ATTR_MODEL_INPUT,
@@ -22,9 +22,10 @@ from motus.runtime.tracing.agent_tracer import (
     ATTR_TOOL_INPUT,
     ATTR_TOOL_OUTPUT,
     ATTR_USAGE,
-    get_tracer,
     json_attr,
 )
+
+tracer = trace.get_tracer(__name__)
 
 # Limit large values to prevent huge SSE payloads
 _MAX_VALUE_LEN = 4000
@@ -51,7 +52,7 @@ def start_agent_span(
     Returns the started (but not ended) span. Caller must call span.end()
     when the turn completes.
     """
-    tracer = get_tracer()
+
     span = tracer.start_span(
         f"anthropic_tool_runner({model})",
         attributes={
@@ -74,7 +75,7 @@ def emit_model_span(
     parent_context: otel_context.Context | None = None,
 ) -> None:
     """Create and immediately end a model_call span from a BetaMessage."""
-    tracer = get_tracer()
+
     ctx = parent_context or otel_context.get_current()
 
     span = tracer.start_span(
@@ -155,7 +156,7 @@ def emit_tool_span(
     error: str | None = None,
 ) -> None:
     """Create and immediately end a tool_call span."""
-    tracer = get_tracer()
+
     ctx = parent_context or otel_context.get_current()
 
     span = tracer.start_span(

@@ -23,7 +23,8 @@ from motus.anthropic._motus_tracing import (  # noqa: E402
     start_agent_span,
 )
 from motus.models import ChatMessage  # noqa: E402
-from motus.runtime.tracing.agent_tracer import (  # noqa: E402
+from motus.runtime.types import AGENT_CALL, MODEL_CALL, TOOL_CALL  # noqa: E402
+from motus.tracing.agent_tracer import (  # noqa: E402
     ATTR_FUNC,
     ATTR_MODEL_NAME,
     ATTR_TASK_TYPE,
@@ -32,7 +33,6 @@ from motus.runtime.tracing.agent_tracer import (  # noqa: E402
     setup_tracing,
     shutdown_tracing,
 )
-from motus.runtime.types import AGENT_CALL, MODEL_CALL, TOOL_CALL  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Mock Anthropic API — simulates tool-call → tool-result → final-answer
@@ -579,7 +579,7 @@ class TestRunnerTracingIntegration:
         """Return spans from the OfflineSpanCollector."""
         import json
 
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
 
         spans = _at._collector.spans if _at._collector else []
         result = []
@@ -609,9 +609,6 @@ class TestRunnerTracingIntegration:
     async def test_run_turn_produces_trace_spans(self, tool_runner):
         msg = ChatMessage.user_message("What's the weather in Paris?")
         await tool_runner.run_turn(msg, [])
-
-        tracer = anthropic_mod.get_tracer()
-        assert tracer is not None
 
         span_metas = self._get_collected_spans()
         assert len(span_metas) >= 3  # agent + model + tool(s)
@@ -664,9 +661,6 @@ class TestRunnerTracingIntegration:
 
         assert response.role == "assistant"
         assert response.content and len(response.content) > 0
-
-        tracer = anthropic_mod.get_tracer()
-        assert tracer is not None
 
         span_metas = self._get_collected_spans()
         assert len(span_metas) >= 3
@@ -775,14 +769,11 @@ class TestSearchToolExample:
     async def test_search_tool_tracing(self, mock_anthropic_search):
         """Search tool flow produces trace spans for all tool calls."""
 
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
         from examples.anthropic.search_tool import runner
 
         msg = ChatMessage.user_message("What is the weather in SF?")
         await runner.run_turn(msg, [])
-
-        tracer = anthropic_mod.get_tracer()
-        assert tracer is not None
 
         spans = _at._collector.spans if _at._collector else []
         tool_spans = [

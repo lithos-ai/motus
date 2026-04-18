@@ -18,7 +18,7 @@ from agents.tracing.spans import Span
 from agents.tracing.traces import Trace
 from opentelemetry import trace
 
-from motus.runtime.tracing.agent_tracer import (
+from motus.tracing.agent_tracer import (
     ATTR_AGENT_ID,
     ATTR_ERROR,
     ATTR_FUNC,
@@ -28,11 +28,11 @@ from motus.runtime.tracing.agent_tracer import (
     ATTR_TASK_TYPE,
     ATTR_TOOL_INPUT,
     ATTR_USAGE,
-    get_tracer,
     json_attr,
 )
 
 logger = logging.getLogger("AgentTracer")
+tracer = trace.get_tracer(__name__)
 
 
 def _iso_to_ns(iso_str: str | None) -> int:
@@ -73,8 +73,6 @@ class MotusTracingProcessor(TracingProcessor):
 
         # Map OAI span type -> motus task_type + display name
         task_type, func_name = self._classify(span_type, data)
-
-        tracer = get_tracer()
 
         # Build motus attributes
         attrs: dict[str, Any] = {

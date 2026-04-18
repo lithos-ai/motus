@@ -65,18 +65,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("AgentTracer")
 
 
-def _get_tracer() -> trace.Tracer:
-    """Get the OTel tracer from motus tracing setup."""
-    from motus.runtime.tracing.agent_tracer import get_tracer
-
-    return get_tracer()
-
-
-def get_tracer() -> trace.Tracer:
-    """Public accessor for the OTel tracer."""
-    return _get_tracer()
-
-
 def _state_to_anthropic_messages(state: list[ChatMessage]) -> list[dict[str, Any]]:
     """Convert motus ChatMessage state to Anthropic message format."""
     messages: list[dict[str, Any]] = []

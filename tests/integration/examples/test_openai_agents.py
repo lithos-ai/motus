@@ -24,7 +24,8 @@ from motus.openai_agents._motus_tracing import (  # noqa: E402
     MotusTracingProcessor,
     _iso_to_ns,
 )
-from motus.runtime.tracing.agent_tracer import (  # noqa: E402
+from motus.runtime.types import MODEL_CALL, TOOL_CALL  # noqa: E402
+from motus.tracing.agent_tracer import (  # noqa: E402
     ATTR_AGENT_ID,
     ATTR_ERROR,
     ATTR_FUNC,
@@ -37,7 +38,6 @@ from motus.runtime.tracing.agent_tracer import (  # noqa: E402
     setup_tracing,
     shutdown_tracing,
 )
-from motus.runtime.types import MODEL_CALL, TOOL_CALL  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers — build synthetic OAI SDK span objects for processor-level tests
@@ -240,7 +240,7 @@ class TestTracingProcessorSpanIngestion:
         """Return attributes dict from the last collected span."""
         import json
 
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
 
         spans = _at._collector.spans if _at._collector else []
         assert len(spans) >= 1, "Expected at least one collected span"
@@ -385,7 +385,7 @@ class TestSpanParentResolution:
 
     def test_parent_and_child_spans_created(self, processor):
         """Both parent and child OAI spans produce OTel spans."""
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
 
         parent = _make_span(span_id="p1", span_type="agent", name="Tutor")
         child = _make_span(
@@ -405,7 +405,7 @@ class TestSpanParentResolution:
 
     def test_multiple_children_created(self, processor):
         """Multiple child spans are all created as OTel spans."""
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
 
         parent = _make_span(span_id="p2", span_type="agent", name="Tutor")
         child1 = _make_span(
@@ -431,7 +431,7 @@ class TestSpanParentResolution:
 
     def test_root_span_created(self, processor):
         """A root span (no parent_id) is created as an OTel span."""
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
 
         span = _make_span(span_id="root", span_type="agent", name="Root")
 
@@ -453,7 +453,7 @@ class TestSpanParentResolution:
 class TestSpanIdCleanup:
     def test_span_processed_on_end(self, processor):
         """Spans are processed on on_span_end (no internal state to clean up)."""
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
 
         initial_count = len(_at._collector.spans) if _at._collector else 0
 
@@ -507,7 +507,7 @@ class TestRunnerTracingIntegration:
 
     def _get_collected_span_types(self):
         """Return set of task_type values from collected OTel spans."""
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
 
         spans = _at._collector.spans if _at._collector else []
         return {(s.attributes or {}).get(ATTR_TASK_TYPE) for s in spans}
@@ -525,10 +525,7 @@ class TestRunnerTracingIntegration:
 
         assert result.final_output and len(result.final_output) > 0
 
-        tracer = oai_mod.get_tracer()
-        assert tracer is not None
-
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
 
         spans = _at._collector.spans if _at._collector else []
         assert len(spans) >= 2
@@ -551,10 +548,7 @@ class TestRunnerTracingIntegration:
         assert response.role == "assistant"
         assert response.content and len(response.content) > 0
 
-        tracer = oai_mod.get_tracer()
-        assert tracer is not None
-
-        import motus.runtime.tracing.agent_tracer as _at
+        import motus.tracing.agent_tracer as _at
 
         spans = _at._collector.spans if _at._collector else []
         assert len(spans) >= 2

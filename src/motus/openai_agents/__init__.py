@@ -53,16 +53,7 @@ logger = logging.getLogger("AgentTracer")
 _processor_registered = False
 
 
-def _get_tracer():
-    """Get the OTel tracer from motus tracing setup."""
-    from opentelemetry import trace
-
-    from motus.runtime.tracing.agent_tracer import get_tracer
-
-    return get_tracer()
-
-
-def _ensure_tracing():
+def _ensure_tracing() -> None:
     """Register MotusTracingProcessor with OAI SDK (once per process).
 
     Replaces OAI SDK's default BackendSpanExporter (which tries to POST
@@ -71,24 +62,16 @@ def _ensure_tracing():
     """
     global _processor_registered
     if _processor_registered:
-        return _get_tracer()
+        return
 
     try:
         from agents import set_trace_processors
 
-        processor = MotusTracingProcessor()
-        set_trace_processors([processor])
+        set_trace_processors([MotusTracingProcessor()])
         _processor_registered = True
         logger.debug("Registered MotusTracingProcessor with OAI SDK")
     except Exception as e:
         logger.debug(f"Could not register MotusTracingProcessor: {e}")
-
-    return _get_tracer()
-
-
-def get_tracer():
-    """Public accessor for the OTel tracer."""
-    return _get_tracer()
 
 
 class Runner:
