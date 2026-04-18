@@ -17,7 +17,6 @@ import httpx
 
 from mcp.client.auth import OAuthClientProvider
 
-from . import _origin_of
 from .oauth import (
     get_static_bearer,
     has_cached_refresh_token,
@@ -27,6 +26,18 @@ from .oauth import (
 )
 
 _DAPR_HTTP_PORT = os.getenv("DAPR_HTTP_PORT")
+
+
+def _origin_of(server_url: str) -> str:
+    """Return ``scheme://host[:non-default-port]`` for keying per-server state."""
+    url = httpx.URL(server_url)
+    host = (url.host or "").lower()
+    port = url.port
+    if (url.scheme == "http" and port in (80, None)) or (
+        url.scheme == "https" and port in (443, None)
+    ):
+        return f"{url.scheme}://{host}"
+    return f"{url.scheme}://{host}:{port}"
 
 
 class _DaprAuth(httpx.Auth):
