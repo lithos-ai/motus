@@ -56,6 +56,9 @@ openai-agents = [
 google-adk = [
     "google-adk>=1.27.2",
 ]
+volcengine = [
+    "volcengine-python-sdk[ark]>=5.0.23",
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

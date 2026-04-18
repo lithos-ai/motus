@@ -18,6 +18,7 @@ from motus.models import (
     OpenRouterChatClient,
     ToolCall,
     ToolDefinition,
+    VolcEngineChatClient,
 )
 
 
@@ -94,6 +95,130 @@ class TestOpenAIChatClient(unittest.IsolatedAsyncioTestCase):
             self.skipTest("OPENAI_API_KEY not set")
         self.client = OpenAIChatClient(api_key=self.api_key)
         self.model = "gpt-4o-mini"
+
+    async def test_create_basic_completion(self):
+        messages = [
+            ChatMessage.system_message("You are a helpful assistant."),
+            ChatMessage.user_message("Say 'Hello, World!' and nothing else."),
+        ]
+
+        response = await self.client.create(
+            model=self.model,
+            messages=messages,
+        )
+
+        self.assertIsInstance(response, ChatCompletion)
+        self.assertIsNotNone(response.content)
+        self.assertIn("Hello", response.content)
+
+    async def test_create_tool_call(self):
+        messages = [
+            ChatMessage.user_message(
+                "Call get_weather for San Francisco and do not answer directly."
+            )
+        ]
+
+        response = await self.client.create(
+            model=self.model,
+            messages=messages,
+            tools=[weather_tool_definition()],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+
+        self.assertIsInstance(response, ChatCompletion)
+        self.assertIsNotNone(response.tool_calls)
+        self.assertGreater(len(response.tool_calls), 0)
+        tool_call = response.tool_calls[0]
+        self.assertIsInstance(tool_call, ToolCall)
+        self.assertEqual(tool_call.function.name, "get_weather")
+
+        args = json.loads(tool_call.function.arguments)
+        self.assertIn("San Francisco", args["location"])
+
+    async def test_parse_structured_output(self):
+        messages = [
+            ChatMessage.user_message(
+                content="Tell me about the weather in Miami. Return a structured response with location, temperature (in Fahrenheit), and conditions.",
+            )
+        ]
+
+        response = await self.client.parse(
+            model=self.model,
+            messages=messages,
+            response_format=WeatherResponse,
+        )
+
+        self.assertIsInstance(response, ChatCompletion)
+        weather_data = response.parsed
+        self.assertIsInstance(weather_data, WeatherResponse)
+        self.assertIsNotNone(weather_data.location)
+        self.assertIsNotNone(weather_data.temperature)
+        self.assertIsNotNone(weather_data.conditions)
+
+    async def test_multi_turn_conversation(self):
+        messages = [
+            ChatMessage.system_message("You are a helpful assistant."),
+            ChatMessage.user_message("My name is Alice."),
+        ]
+
+        response1 = await self.client.create(model=self.model, messages=messages)
+        self.assertIsInstance(response1, ChatCompletion)
+
+        messages.append(response1.to_message())
+        messages.append(ChatMessage.user_message("What is my name?"))
+
+        response2 = await self.client.create(model=self.model, messages=messages)
+        self.assertIsInstance(response2, ChatCompletion)
+        self.assertIsNotNone(response2.content)
+        self.assertIn("Alice", response2.content)
+
+    async def test_complete_tool_workflow(self):
+        messages = [
+            ChatMessage.user_message("Use get_weather to answer for New York."),
+        ]
+
+        first = await self.client.create(
+            model=self.model,
+            messages=messages,
+            tools=[weather_tool_definition()],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+
+        self.assertIsNotNone(first.tool_calls)
+        tool_call = first.tool_calls[0]
+
+        messages.append(first.to_message())
+        messages.append(
+            ChatMessage.tool_message(
+                content="The weather in New York is sunny and 72°F",
+                tool_call_id=tool_call.id,
+                name=tool_call.function.name,
+            )
+        )
+
+        final = await self.client.create(
+            model=self.model,
+            messages=messages,
+            tools=[weather_tool_definition()],
+        )
+
+        self.assertIsInstance(final, ChatCompletion)
+        self.assertIsNotNone(final.content)
+        self.assertIn("New York", final.content)
+
+
+@pytest.mark.slow
+class TestVolcEngineChatClient(unittest.IsolatedAsyncioTestCase):
+    """Tests for the VolcEngine-backed chat client."""
+
+    def setUp(self):
+        self.api_key = os.getenv("VOLCENGINE_API_KEY")
+        if not self.api_key:
+            self.skipTest("VOLCENGINE_API_KEY not set")
+        self.client = VolcEngineChatClient(api_key=self.api_key)
+        self.model = os.getenv("VOLCENGINE_MODEL")
+        if not self.model:
+            self.skipTest("VOLCENGINE_MODEL not set in environment variables")
 
     async def test_create_basic_completion(self):
         messages = [
