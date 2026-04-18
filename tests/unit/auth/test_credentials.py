@@ -91,7 +91,9 @@ class TestEnsureAuthenticatedWithDeletedKey:
         mock_login.assert_called_once()
         assert api_key == fresh_creds["api_key"]
 
-    def test_saves_new_credentials(self, stored_creds, fresh_creds, tmp_path, monkeypatch):
+    def test_saves_new_credentials(
+        self, stored_creds, fresh_creds, tmp_path, monkeypatch
+    ):
         """After re-login, the new key should be persisted to disk."""
         monkeypatch.setattr(
             "motus.auth.credentials.httpx.get",
