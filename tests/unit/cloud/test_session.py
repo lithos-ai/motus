@@ -88,6 +88,16 @@ def test_session_id_plus_non_empty_initial_state_rejected(fresh_env, new_uuid):
             )
 
 
+def test_session_id_plus_empty_initial_state_rejected(recorder, fresh_env, new_uuid):
+    """Any explicit initial_state (including []) with session_id is invalid."""
+    transport = recorder(lambda req: httpx.Response(200))
+    with Client(base_url="http://x", transport=transport) as c:
+        with pytest.raises(ValueError):
+            c.session(session_id=new_uuid(), initial_state=[])
+    # No HTTP request issued — the guard runs before any network I/O.
+    assert recorder.requests == []
+
+
 def test_chat_after_close_raises(recorder, fresh_env):
     transport = recorder(echo_server())
     with Client(base_url="http://x", transport=transport) as c:

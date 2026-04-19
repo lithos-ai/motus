@@ -339,7 +339,7 @@ class AsyncClient:
         See Client.session() for the custom-ID ownership rules. Creation happens
         on ``__aenter__`` so the caller can ``async with client.session() as s:``.
         """
-        if session_id is not None and initial_state:
+        if session_id is not None and initial_state is not None:
             raise ValueError(
                 "initial_state cannot be passed with an existing session_id"
             )

@@ -385,7 +385,7 @@ class Client:
         from .errors import SessionConflict, SessionNotFound
         from .session import Session
 
-        if session_id is not None and initial_state:
+        if session_id is not None and initial_state is not None:
             raise ValueError(
                 "initial_state cannot be passed with an existing session_id"
             )
