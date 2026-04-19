@@ -324,30 +324,44 @@ class AsyncClient:
         await async_post_message(
             self._http, self._base_url, session_id, body, headers=headers
         )
-        yield SessionEvent(type="running", session_id=session_id, snapshot=None)
-        snapshot = await async_poll_until_terminal(
-            self._http,
-            self._base_url,
-            session_id,
-            turn_timeout=turn_timeout
-            if turn_timeout is not None
-            else self._turn_timeout,
-            server_wait_slice=self._server_wait_slice,
-            read_retry_budget=self._read_retry_budget,
-            headers=headers,
-        )
-        # Delete BEFORE yielding the terminal event so callers that stop
-        # iterating immediately don't leak the ephemeral session.
-        if snapshot.status == SessionStatus.idle and not snapshot.interrupts:
-            try:
-                await self.delete_session(session_id, extra_headers=extra_headers)
-            except MotusClientError as secondary:
-                logger.debug("chat_events cleanup DELETE failed: %r", secondary)
-        yield SessionEvent(
-            type=snapshot.status.value,
-            session_id=session_id,
-            snapshot=snapshot,
-        )
+
+        cleaned_up = False
+        yielded_terminal = False
+        try:
+            yield SessionEvent(type="running", session_id=session_id, snapshot=None)
+            snapshot = await async_poll_until_terminal(
+                self._http,
+                self._base_url,
+                session_id,
+                turn_timeout=turn_timeout
+                if turn_timeout is not None
+                else self._turn_timeout,
+                server_wait_slice=self._server_wait_slice,
+                read_retry_budget=self._read_retry_budget,
+                headers=headers,
+            )
+            if snapshot.status == SessionStatus.idle and not snapshot.interrupts:
+                try:
+                    await self.delete_session(session_id, extra_headers=extra_headers)
+                except MotusClientError as secondary:
+                    logger.debug("chat_events cleanup DELETE failed: %r", secondary)
+                cleaned_up = True
+            yielded_terminal = True
+            yield SessionEvent(
+                type=snapshot.status.value,
+                session_id=session_id,
+                snapshot=snapshot,
+            )
+        except GeneratorExit:
+            # Caller abandoned before a terminal event — best-effort delete.
+            # Sessions that already emitted an interrupted/error terminal are
+            # intentionally left alive for inspection and are not touched.
+            if not cleaned_up and not yielded_terminal:
+                try:
+                    await self.delete_session(session_id, extra_headers=extra_headers)
+                except MotusClientError as secondary:
+                    logger.debug("chat_events abandon cleanup failed: %r", secondary)
+            raise
 
     def session(
         self,

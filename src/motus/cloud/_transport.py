@@ -72,12 +72,15 @@ def build_headers(
     per_call_headers: Mapping[str, str] | None,
 ) -> dict[str, str]:
     headers: dict[str, str] = {"User-Agent": USER_AGENT}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
     if constructor_headers:
         headers.update(constructor_headers)
     if per_call_headers:
         headers.update(per_call_headers)
+    # Resolved credentials (explicit api_key / env / credentials file) take
+    # precedence over any Authorization accidentally forwarded via
+    # extra_headers, so downstream never authenticates as the wrong principal.
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     return headers
 
 

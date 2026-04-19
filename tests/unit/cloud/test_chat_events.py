@@ -140,3 +140,66 @@ async def test_async_chat_events_deletes_before_terminal_yield(fresh_env):
         second = await gen.__anext__()
         assert second.type == "idle"
         assert any(r.method == "DELETE" for r in rec.requests)
+
+
+def test_sync_chat_events_deletes_on_early_abandon(recorder, fresh_env):
+    """Caller consumes only the running event then closes the generator —
+    best-effort DELETE must fire so the ephemeral session doesn't leak."""
+    transport = recorder(echo_server())
+    with Client(base_url="http://x", transport=transport) as c:
+        gen = c.chat_events("hi")
+        first = next(gen)
+        assert first.type == "running"
+        assert all(r.method != "DELETE" for r in recorder.requests)
+        gen.close()  # abandonment
+    assert any(r.method == "DELETE" for r in recorder.requests)
+
+
+def test_sync_chat_events_abandon_after_interrupted_does_not_delete(
+    recorder, fresh_env
+):
+    """An interrupted terminal leaves the session alive on purpose; abandoning
+    iteration AFTER seeing it must not DELETE — the caller may want to resume."""
+    transport = recorder(
+        echo_server(
+            interrupts=[{"interrupt_id": "i1", "type": "tool_approval", "payload": {}}]
+        )
+    )
+    with Client(base_url="http://x", transport=transport) as c:
+        gen = c.chat_events("hi")
+        assert next(gen).type == "running"
+        assert next(gen).type == "interrupted"
+        gen.close()
+    assert all(r.method != "DELETE" for r in recorder.requests)
+
+
+@pytest.mark.asyncio
+async def test_async_chat_events_deletes_on_early_abandon(fresh_env):
+    rec = _AsyncRecorder()
+    async with AsyncClient(base_url="http://x", transport=rec.wrap(echo_server())) as c:
+        gen = c.chat_events("hi")
+        first = await gen.__anext__()
+        assert first.type == "running"
+        assert all(r.method != "DELETE" for r in rec.requests)
+        await gen.aclose()
+    assert any(r.method == "DELETE" for r in rec.requests)
+
+
+@pytest.mark.asyncio
+async def test_async_chat_events_abandon_after_interrupted_does_not_delete(fresh_env):
+    rec = _AsyncRecorder()
+    async with AsyncClient(
+        base_url="http://x",
+        transport=rec.wrap(
+            echo_server(
+                interrupts=[
+                    {"interrupt_id": "i1", "type": "tool_approval", "payload": {}}
+                ]
+            )
+        ),
+    ) as c:
+        gen = c.chat_events("hi")
+        assert (await gen.__anext__()).type == "running"
+        assert (await gen.__anext__()).type == "interrupted"
+        await gen.aclose()
+    assert all(r.method != "DELETE" for r in rec.requests)

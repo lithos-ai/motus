@@ -346,31 +346,49 @@ class Client:
         )
         headers = self._headers(extra_headers)
         sync_post_message(self._http, self._base_url, session_id, body, headers=headers)
-        yield SessionEvent(type="running", session_id=session_id, snapshot=None)
-        snapshot = sync_poll_until_terminal(
-            self._http,
-            self._base_url,
-            session_id,
-            turn_timeout=turn_timeout
-            if turn_timeout is not None
-            else self._turn_timeout,
-            server_wait_slice=self._server_wait_slice,
-            read_retry_budget=self._read_retry_budget,
-            headers=headers,
-        )
-        # Delete BEFORE yielding the terminal event. If we only did it in a
-        # finally, a caller that stops iterating after the terminal event would
-        # leave the session un-deleted until the generator is GC'd.
-        if snapshot.status == SessionStatus.idle and not snapshot.interrupts:
-            try:
-                self.delete_session(session_id, extra_headers=extra_headers)
-            except MotusClientError as secondary:
-                logger.debug("chat_events cleanup DELETE failed: %r", secondary)
-        yield SessionEvent(
-            type=snapshot.status.value,
-            session_id=session_id,
-            snapshot=snapshot,
-        )
+
+        cleaned_up = False
+        yielded_terminal = False
+        try:
+            yield SessionEvent(type="running", session_id=session_id, snapshot=None)
+            snapshot = sync_poll_until_terminal(
+                self._http,
+                self._base_url,
+                session_id,
+                turn_timeout=turn_timeout
+                if turn_timeout is not None
+                else self._turn_timeout,
+                server_wait_slice=self._server_wait_slice,
+                read_retry_budget=self._read_retry_budget,
+                headers=headers,
+            )
+            # Clean-idle terminal: DELETE synchronously before the terminal
+            # yield so callers that stop iterating after it don't leak.
+            if snapshot.status == SessionStatus.idle and not snapshot.interrupts:
+                try:
+                    self.delete_session(session_id, extra_headers=extra_headers)
+                except MotusClientError as secondary:
+                    logger.debug("chat_events cleanup DELETE failed: %r", secondary)
+                cleaned_up = True
+            yielded_terminal = True
+            yield SessionEvent(
+                type=snapshot.status.value,
+                session_id=session_id,
+                snapshot=snapshot,
+            )
+        except GeneratorExit:
+            # Caller abandoned the generator before we yielded a terminal
+            # event (gen.close(), break after "running", GC finalization).
+            # Best-effort DELETE so the ephemeral session does not leak.
+            # If the caller already received a terminal event (interrupted /
+            # error), the session was intentionally left alive for inspection
+            # and must not be deleted here.
+            if not cleaned_up and not yielded_terminal:
+                try:
+                    self.delete_session(session_id, extra_headers=extra_headers)
+                except MotusClientError as secondary:
+                    logger.debug("chat_events abandon cleanup failed: %r", secondary)
+            raise
 
     def session(
         self,
