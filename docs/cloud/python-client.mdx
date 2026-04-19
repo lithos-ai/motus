@@ -1,0 +1,250 @@
+---
+title: "Python Client"
+description: "Call your agent from Python. Typed responses, typed errors, interrupt handling, and credential auto-resolution, with one API that works against both local motus serve and deployed Motus Cloud URLs."
+---
+
+`motus.cloud` ships in the `lithosai-motus` package and gives you a Python client for the same session/message REST protocol that `motus serve` and Motus Cloud expose. You point it at a base URL, and the same code works whether the agent is running on `localhost:8000` under `motus serve start` or behind an HTTPS endpoint on Motus Cloud.
+
+What you get out of the box: pydantic-validated responses, a closed hierarchy of typed exceptions, built-in long-polling with bounded retries, ephemeral session cleanup, interrupt (human-in-the-loop) resume helpers, and a matching `AsyncClient` for asyncio callers.
+
+## Quick start
+
+Start an agent locally and talk to it from a Python REPL:
+
+```bash
+motus serve start myapp:agent --port 8000
+```
+
+```python
+from motus.cloud import Client
+
+with Client(base_url="http://localhost:8000") as c:
+    result = c.chat("hello")
+    print(result.message.content)
+```
+
+Against a deployed agent, pass the HTTPS URL and an API key:
+
+```python
+import os
+from motus.cloud import Client
+
+with Client(
+    base_url="https://my-agent-xxxx.agent.lithosai.cloud",
+    api_key=os.environ["LITHOSAI_API_KEY"],
+) as c:
+    result = c.chat("summarize today's inbox")
+```
+
+The asyncio flavor has the same shape. Use `AsyncClient` as an async context manager and `await` the calls:
+
+```python
+from motus.cloud import AsyncClient
+
+async with AsyncClient(base_url="http://localhost:8000") as c:
+    result = await c.chat("hello")
+```
+
+<Tip>
+  The client is designed to be constructed once and reused. Every method can take `extra_headers=` for per-call overrides, so you rarely need more than one instance per process.
+</Tip>
+
+## Authentication
+
+Credentials resolve in a fixed order, first hit wins:
+
+1. An explicit `api_key=` passed to the constructor.
+2. The `LITHOSAI_API_KEY` environment variable.
+3. `~/.motus/credentials.json`, the file that `motus login` writes.
+
+If no key is found the client sends no `Authorization` header, which is exactly what you want when pointing at a local `motus serve` that has auth disabled. Passing `api_key=""` explicitly also skips auth, useful when you want to defeat a credentials file that happens to be present.
+
+## Two ways to chat
+
+Pick the shape that fits your use case. One-shot `chat()` is the right call for stateless questions; `session()` is the right call when the conversation has turns.
+
+### One-shot calls
+
+`Client.chat(content)` creates a fresh server-side session, sends the message, waits for a terminal state, and deletes the session on a clean exit. You get back a `ChatResult` with the assistant's message, the session's final status, any pending interrupts, and the session id.
+
+```python
+result = c.chat("what's 2+2?")
+assert result.status.value == "idle"
+print(result.message.content)
+```
+
+Turns that end in an interrupt, an agent error, or a client-side timeout intentionally leave the server session alive. That way you keep the option to resume the interrupt, inspect the error, or reconnect to a long-running turn with `client.get_session(result.session_id, wait=True)`.
+
+### Multi-turn sessions
+
+Use `client.session()` when the conversation has state across turns. It returns a `Session` bound to one server-side session, deleted automatically when the context exits.
+
+```python
+with c.session() as s:
+    s.chat("who are you?")
+    s.chat("and what can you do?")
+```
+
+A few knobs on `session()` cover the common variations:
+
+<Tabs>
+  <Tab title="Keep the session alive">
+    `session(keep=True)` leaves the server session in place after `close()`. The client logs the `session_id` so you can reattach later.
+
+    ```python
+    with c.session(keep=True) as s:
+        s.chat("start a long job")
+    # session_id printed to logs; reuse it later
+    ```
+  </Tab>
+  <Tab title="Attach to an existing session">
+    `session(session_id=<id>)` attaches to a session the caller already owns. Because the caller owns it, `close()` never issues `DELETE`, and you keep full responsibility for cleanup.
+
+    ```python
+    with c.session(session_id=prior_id) as s:
+        s.chat("keep going")
+    ```
+  </Tab>
+  <Tab title="Seed the conversation">
+    `session(initial_state=[...])` creates the session with a preloaded message history. It cannot be combined with an explicit `session_id`: the server either creates or attaches, not both.
+
+    ```python
+    from motus.models.base import ChatMessage
+
+    state = [ChatMessage.user_message("background context ...")]
+    with c.session(initial_state=state) as s:
+        s.chat("now continue")
+    ```
+  </Tab>
+</Tabs>
+
+## Interrupts
+
+When the agent raises an interrupt (for example `tool_approval` or `user_input`), the result comes back with `status == "interrupted"` and a list of typed `Interrupt(id, type, payload)` objects. Resume each interrupt with the value it expects:
+
+```python
+result = c.chat("please delete /tmp/test.txt")
+
+if result.status.value == "interrupted":
+    approval = {"approved": True}
+    result = result.resume(approval)
+
+print(result.message.content)
+```
+
+`result.resume(value)` is a convenience for the common case of exactly one pending interrupt. When more than one is pending, address them explicitly:
+
+```python
+result = c.resume(
+    result.session_id,
+    result.interrupts[0].id,
+    {"approved": True},
+)
+```
+
+<Note>
+  `ChatResult.resume()` raises `AmbiguousInterrupt` if zero or multiple interrupts are pending, and raises `SessionClosed` if the result came from a `Session` that has already been closed. Use `client.resume(...)` to disambiguate.
+</Note>
+
+## Timeouts
+
+The client separates two concerns that are easy to conflate in long-polling protocols: how long a single turn is allowed to take, and how long any individual HTTP request is allowed to take. They tune independently.
+
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| `turn_timeout` | `None` (no deadline) | Wall-clock budget for one `chat()` turn, including every poll. Exceeding this raises `SessionTimeout`. |
+| `http_timeout` | `connect=5, read=120, write=10, pool=5` | Underlying `httpx.Timeout` applied to each request. Accepts a full `httpx.Timeout` if you want something custom. |
+| `server_wait_slice` | `90.0` | Largest `?timeout=` passed to a long-poll `GET`. The client breaks a long wait into slices no bigger than this. |
+| `read_retry_budget` | `3` | Consecutive `ReadTimeout` retries on a poll `GET` before the client gives up with `BackendUnavailable`. |
+
+A `SessionTimeout` always carries `session_id`, `elapsed`, and the most recent `SessionResponse` snapshot. That means a turn that runs past its budget is never lost: you can reconnect with `client.get_session(session_id, wait=True)` and either resume interrupts or wait for the turn to finish.
+
+`POST /messages`, `POST /resume`, and `DELETE /sessions/{id}` are not auto-retried. Those calls are not server-side idempotent, so retrying them silently could double-execute a turn. If you want retries at that layer, wrap the client with your own policy.
+
+## Exceptions
+
+Every public method raises a subclass of `MotusClientError`. Raw `httpx` errors never leak out.
+
+| Class | Trigger |
+| --- | --- |
+| `AuthError` | HTTP 401 or 403 |
+| `SessionNotFound` | HTTP 404 on a session path |
+| `InterruptNotFound` | HTTP 404 from `POST /resume` with an unknown `interrupt_id` |
+| `SessionConflict` | HTTP 409 (send-while-running, resume id mismatch, and similar state conflicts) |
+| `ServerBusy` | HTTP 503 when the server is at `max_sessions` |
+| `BadRequest` | Any other 4xx (validation, rate limiting, etc.). Retrying the same request will not help. |
+| `BackendUnavailable` | 5xx responses, connection errors, or poll retries exhausted |
+| `SessionTimeout` | `turn_timeout` exceeded; the server session is intentionally left alive |
+| `AgentError` | HTTP 200 where the snapshot carries `status == "error"` |
+| `ProtocolError` | Malformed or non-JSON response body |
+| `SessionClosed` | Calling `Session.chat` / `Session.resume` after `close()` |
+| `ClientClosed` | Calling a client method after `close()` / `aclose()` |
+| `AmbiguousInterrupt` | `ChatResult.resume(value)` with zero or multiple pending interrupts |
+| `SessionUnsupported` | HTTP 405 on `PUT /sessions/{id}` when the server was started without `--allow-custom-ids` |
+
+Every error also carries an `ErrorContext` with `session_id`, `interrupt_id`, `method`, `url`, and `status_code` populated where applicable. That lets you log or correlate failures in fan-out code without parsing error messages:
+
+```python
+try:
+    c.chat("hi")
+except MotusClientError as exc:
+    log.error(
+        "motus call failed",
+        session=exc.context.session_id,
+        method=exc.context.method,
+        url=exc.context.url,
+        status=exc.context.status_code,
+    )
+```
+
+## Streaming session status
+
+Token-level streaming is not available (the server does not emit per-token events), but `chat_events()` exposes the coarser session status transitions as a generator:
+
+```python
+for event in c.chat_events("please run the pipeline"):
+    print(event.type, event.session_id)
+    if event.type == "interrupted":
+        # event.snapshot.interrupts is populated on the terminal event
+        pending = event.snapshot.interrupts
+```
+
+You receive a `running` event immediately after the POST is accepted, then exactly one terminal event with `type` of `idle`, `interrupted`, or `error` and a full `SessionResponse` snapshot attached.
+
+Cleanup matches `chat()`: the ephemeral session is deleted only on a clean `idle`. Interrupts, errors, and timeouts leave the session alive. `AsyncClient.chat_events()` is the asyncio counterpart; iterate it with `async for`.
+
+## Session state is not durable
+
+`motus serve` keeps session state in memory only. There is no database behind it, and sessions may be swept by the TTL timer if the server was started with `--ttl`. If you need durable conversation history, persist messages on your side as they come back. Treat the server's memory as best-effort.
+
+## Low-level methods
+
+For use cases that do not fit `chat()` or `session()`, the full REST surface is exposed as thin, typed wrappers:
+
+* `client.health()` returns `{status, max_workers, running_workers, total_sessions}`.
+* `client.create_session(session_id=?, initial_state=?)` returns a `SessionResponse`.
+* `client.get_session(session_id, wait=?, timeout=?)` returns a `SessionResponse`, supporting server-side long-polling.
+* `client.list_sessions()` returns the raw list of session dicts.
+* `client.delete_session(session_id)` swallows 404 (the call is idempotent).
+* `client.get_messages(session_id)` returns the session's message list.
+* `client.send_message(session_id, content, role=?, user_params=?, webhook=?, **fields)` posts a message and returns the raw `MessageResponse`.
+* `client.resume(session_id, interrupt_id, value)` resumes an interrupt and returns a `ChatResult`.
+
+Constructor knobs cover custom transports too. Pass `transport=` for an `httpx.MockTransport` in tests, `http_client=` to share a pre-configured `httpx.Client` (proxies, CA bundles, mTLS), or `extra_headers=` for headers that every outgoing request should carry.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Serving overview" icon="server" href="/guides/serving">
+    The `motus serve` side of the protocol: sessions, webhooks, and what the REST endpoints actually do.
+  </Card>
+  <Card title="Motus Cloud" icon="cloud" href="/cloud/overview">
+    Deploy the same agent to a managed HTTPS endpoint, then point this client at it.
+  </Card>
+  <Card title="Human in the loop" icon="hand" href="/guides/human-in-the-loop">
+    How interrupts are raised from inside an agent turn, and when to use them.
+  </Card>
+  <Card title="Tracing" icon="chart-line" href="/guides/tracing">
+    Spans and traces that run alongside each session, viewable in the dashboard.
+  </Card>
+</CardGroup>
