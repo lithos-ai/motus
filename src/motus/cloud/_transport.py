@@ -242,6 +242,17 @@ def sync_poll_until_terminal(
                 timeout=per_call_timeout,
             )
         except httpx.TimeoutException as e:
+            # A stalled poll may have consumed most or all of the turn's
+            # deadline. Re-check before retrying so the caller sees a
+            # SessionTimeout once they hit their budget, not a BackendUnavailable
+            # from retry exhaustion.
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SessionTimeout(
+                    f"turn deadline exceeded (session={session_id})",
+                    session_id=session_id,
+                    elapsed=turn_timeout,
+                    last_snapshot=last_snapshot,
+                ) from e
             consecutive_read_timeouts += 1
             if consecutive_read_timeouts >= read_retry_budget:
                 raise BackendUnavailable(
@@ -398,6 +409,13 @@ async def async_poll_until_terminal(
                 timeout=per_call_timeout,
             )
         except httpx.TimeoutException as e:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SessionTimeout(
+                    f"turn deadline exceeded (session={session_id})",
+                    session_id=session_id,
+                    elapsed=turn_timeout,
+                    last_snapshot=last_snapshot,
+                ) from e
             consecutive_read_timeouts += 1
             if consecutive_read_timeouts >= read_retry_budget:
                 raise BackendUnavailable(
@@ -572,12 +590,16 @@ def wait_http_timeout(
     Used for ``GET /sessions/{id}?wait=true&timeout=N`` when the caller asks the
     server to block longer than the client's default read timeout — otherwise
     the HTTP layer would surface BackendUnavailable before the server-side
-    ``?timeout`` expires.
+    ``?timeout`` expires. If the caller intentionally configured ``read=None``
+    (unbounded), the timeout is returned unchanged so an infinite read budget
+    is never silently shrunk to a finite one.
     """
+    # Unbounded reads are always sufficient — never replace None with a finite value.
+    if http_timeout.read is None:
+        return http_timeout
     margin = 10.0
     needed_read = wait_seconds + margin
-    current_read = http_timeout.read if http_timeout.read is not None else 0.0
-    if needed_read <= current_read:
+    if needed_read <= http_timeout.read:
         return http_timeout
     return httpx.Timeout(
         connect=http_timeout.connect,
