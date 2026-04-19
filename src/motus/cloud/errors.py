@@ -7,12 +7,32 @@ MotusClientError. Raw httpx exceptions never leak to user code.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import httpx
 
     from motus.serve.schemas import SessionResponse
+
+
+@dataclass(frozen=True, slots=True)
+class ErrorContext:
+    """Correlation data attached to every MotusClientError.
+
+    Populated at the transport choke points (map_status_error,
+    map_transport_error) so fan-out callers can correlate failures to
+    the originating session / interrupt / request.
+    """
+
+    session_id: str | None = None
+    interrupt_id: str | None = None
+    method: str | None = None
+    url: str | None = None
+    status_code: int | None = None
+
+
+_EMPTY_CONTEXT = ErrorContext()
 
 
 class MotusClientError(Exception):
@@ -23,9 +43,11 @@ class MotusClientError(Exception):
         message: str = "",
         *,
         response: "httpx.Response | None" = None,
+        context: ErrorContext | None = None,
     ) -> None:
         super().__init__(message)
         self.response = response
+        self.context = context or _EMPTY_CONTEXT
 
 
 class AuthError(MotusClientError):
@@ -76,8 +98,11 @@ class SessionTimeout(MotusClientError):
         session_id: str,
         elapsed: float | None = None,
         last_snapshot: "SessionResponse | None" = None,
+        context: ErrorContext | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__(
+            message, context=context or ErrorContext(session_id=session_id)
+        )
         self.session_id = session_id
         self.elapsed = elapsed
         self.last_snapshot = last_snapshot
@@ -86,8 +111,16 @@ class SessionTimeout(MotusClientError):
 class AgentError(MotusClientError):
     """HTTP 200 response with session.status == 'error' (agent turn failed)."""
 
-    def __init__(self, message: str = "", *, session_id: str | None = None) -> None:
-        super().__init__(message)
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        session_id: str | None = None,
+        context: ErrorContext | None = None,
+    ) -> None:
+        super().__init__(
+            message, context=context or ErrorContext(session_id=session_id)
+        )
         self.session_id = session_id
 
 
@@ -129,6 +162,7 @@ __all__ = [
     "BackendUnavailable",
     "BadRequest",
     "ClientClosed",
+    "ErrorContext",
     "InterruptNotFound",
     "MotusClientError",
     "ProtocolError",

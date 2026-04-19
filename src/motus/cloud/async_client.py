@@ -169,6 +169,7 @@ class AsyncClient:
                 f"{self._base_url}/sessions/{session_id}",
                 headers=self._headers(extra_headers),
                 json=body,
+                session_id=session_id,
             )
         return parse_session_response(r)
 
@@ -198,6 +199,7 @@ class AsyncClient:
             headers=self._headers(extra_headers),
             params=params or None,
             timeout=http_timeout,
+            session_id=session_id,
         )
         return parse_session_response(r)
 
@@ -224,6 +226,7 @@ class AsyncClient:
                 "DELETE",
                 f"{self._base_url}/sessions/{session_id}",
                 headers=self._headers(extra_headers),
+                session_id=session_id,
             )
         except SessionNotFound:
             return
@@ -239,6 +242,7 @@ class AsyncClient:
             "GET",
             f"{self._base_url}/sessions/{session_id}/messages",
             headers=self._headers(extra_headers),
+            session_id=session_id,
         )
         return decode_json_validated(r, _MESSAGES_ADAPTER)
 
@@ -267,6 +271,7 @@ class AsyncClient:
             f"{self._base_url}/sessions/{session_id}/messages",
             headers=self._headers(extra_headers),
             json=body,
+            session_id=session_id,
         )
         return decode_json_validated(r, MessageResponse)
 

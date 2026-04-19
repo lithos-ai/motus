@@ -16,6 +16,7 @@ from .errors import (
     AuthError,
     BackendUnavailable,
     BadRequest,
+    ErrorContext,
     InterruptNotFound,
     MotusClientError,
     ProtocolError,
@@ -95,31 +96,83 @@ def _extract_detail(r: httpx.Response) -> str:
     return r.text
 
 
-def map_status_error(r: httpx.Response, *, is_resume: bool = False) -> MotusClientError:
+def _response_context(
+    r: httpx.Response,
+    *,
+    session_id: str | None,
+    interrupt_id: str | None,
+) -> ErrorContext:
+    return ErrorContext(
+        session_id=session_id,
+        interrupt_id=interrupt_id,
+        method=r.request.method,
+        url=str(r.request.url),
+        status_code=r.status_code,
+    )
+
+
+def _transport_context(
+    exc: Exception,
+    *,
+    session_id: str | None,
+    interrupt_id: str | None,
+) -> ErrorContext:
+    req = getattr(exc, "request", None)
+    return ErrorContext(
+        session_id=session_id,
+        interrupt_id=interrupt_id,
+        method=getattr(req, "method", None),
+        url=str(req.url) if req is not None else None,
+    )
+
+
+def map_status_error(
+    r: httpx.Response,
+    *,
+    is_resume: bool = False,
+    session_id: str | None = None,
+    interrupt_id: str | None = None,
+) -> MotusClientError:
     detail = _extract_detail(r)
     code = r.status_code
+    ctx = _response_context(r, session_id=session_id, interrupt_id=interrupt_id)
     if code in (401, 403):
-        return AuthError(detail or f"HTTP {code}", response=r)
+        return AuthError(detail or f"HTTP {code}", response=r, context=ctx)
     if code == 404:
         if is_resume and "session not found" not in detail.lower():
-            return InterruptNotFound(detail or "interrupt not found", response=r)
-        return SessionNotFound(detail or "session not found", response=r)
+            return InterruptNotFound(
+                detail or "interrupt not found", response=r, context=ctx
+            )
+        return SessionNotFound(detail or "session not found", response=r, context=ctx)
     if code == 405:
-        return SessionUnsupported(detail or "operation not allowed", response=r)
+        return SessionUnsupported(
+            detail or "operation not allowed", response=r, context=ctx
+        )
     if code == 409:
-        return SessionConflict(detail or "session conflict", response=r)
+        return SessionConflict(detail or "session conflict", response=r, context=ctx)
     if code == 503:
-        return ServerBusy(detail or "server busy", response=r)
+        return ServerBusy(detail or "server busy", response=r, context=ctx)
     if 400 <= code < 500:
         # Unmapped 4xx — validation errors (422), rate limits (429), etc.
         # Retrying without changing the request will not help.
-        return BadRequest(detail or f"HTTP {code}", response=r)
-    return BackendUnavailable(detail or f"HTTP {code}", response=r)
+        return BadRequest(detail or f"HTTP {code}", response=r, context=ctx)
+    return BackendUnavailable(detail or f"HTTP {code}", response=r, context=ctx)
 
 
-def map_transport_error(exc: Exception) -> MotusClientError:
-    """Wrap an httpx transport-level exception for non-polling requests."""
-    return BackendUnavailable(str(exc) or type(exc).__name__)
+def map_transport_error(
+    exc: Exception,
+    *,
+    session_id: str | None = None,
+    interrupt_id: str | None = None,
+) -> MotusClientError:
+    """Wrap an httpx transport-level exception (Timeout or Transport) as BackendUnavailable."""
+    ctx = _transport_context(exc, session_id=session_id, interrupt_id=interrupt_id)
+    if isinstance(exc, httpx.TimeoutException):
+        where = f"{ctx.method} {ctx.url}" if ctx.method and ctx.url else "request"
+        message = f"{where} timeout: {exc}"
+    else:
+        message = str(exc) or type(exc).__name__
+    return BackendUnavailable(message, context=ctx)
 
 
 def decode_json(r: httpx.Response) -> Any:
@@ -222,6 +275,7 @@ def sync_poll_until_terminal(
     deadline = _deadline(turn_timeout)
     consecutive_read_timeouts = 0
     last_snapshot: SessionResponse | None = None
+    poll_url = _session_url(base_url, session_id)
 
     while True:
         remaining = _remaining(deadline)
@@ -236,7 +290,7 @@ def sync_poll_until_terminal(
         per_call_timeout = wait_http_timeout(http.timeout, wait)
         try:
             r = http.get(
-                _session_url(base_url, session_id),
+                poll_url,
                 params={"wait": "true", "timeout": wait},
                 headers=headers,
                 timeout=per_call_timeout,
@@ -256,14 +310,17 @@ def sync_poll_until_terminal(
             consecutive_read_timeouts += 1
             if consecutive_read_timeouts >= read_retry_budget:
                 raise BackendUnavailable(
-                    f"poll read timeout retries exhausted ({read_retry_budget})"
+                    f"poll read timeout retries exhausted ({read_retry_budget})",
+                    context=ErrorContext(
+                        session_id=session_id, method="GET", url=poll_url
+                    ),
                 ) from e
             continue
         except httpx.TransportError as e:
-            raise BackendUnavailable(str(e)) from e
+            raise map_transport_error(e, session_id=session_id) from e
 
         if r.is_error:
-            raise map_status_error(r)
+            raise map_status_error(r, session_id=session_id)
 
         consecutive_read_timeouts = 0
         snapshot = parse_session_response(r)
@@ -289,12 +346,10 @@ def sync_post_message(
         r = http.post(
             _messages_url(base_url, session_id), json=dict(body), headers=headers
         )
-    except httpx.TimeoutException as e:
-        raise BackendUnavailable(f"message POST timeout: {e}") from e
     except httpx.TransportError as e:
-        raise map_transport_error(e) from e
+        raise map_transport_error(e, session_id=session_id) from e
     if r.is_error:
-        raise map_status_error(r)
+        raise map_status_error(r, session_id=session_id)
 
 
 def sync_send_and_poll(
@@ -313,12 +368,10 @@ def sync_send_and_poll(
         r = http.post(
             _messages_url(base_url, session_id), json=dict(body), headers=headers
         )
-    except httpx.TimeoutException as e:
-        raise BackendUnavailable(f"message POST timeout: {e}") from e
     except httpx.TransportError as e:
-        raise map_transport_error(e) from e
+        raise map_transport_error(e, session_id=session_id) from e
     if r.is_error:
-        raise map_status_error(r)
+        raise map_status_error(r, session_id=session_id)
     return sync_poll_until_terminal(
         http,
         base_url,
@@ -349,12 +402,14 @@ def sync_resume_and_poll(
             json={"interrupt_id": interrupt_id, "value": value},
             headers=headers,
         )
-    except httpx.TimeoutException as e:
-        raise BackendUnavailable(f"resume POST timeout: {e}") from e
     except httpx.TransportError as e:
-        raise map_transport_error(e) from e
+        raise map_transport_error(
+            e, session_id=session_id, interrupt_id=interrupt_id
+        ) from e
     if r.is_error:
-        raise map_status_error(r, is_resume=True)
+        raise map_status_error(
+            r, is_resume=True, session_id=session_id, interrupt_id=interrupt_id
+        )
     return sync_poll_until_terminal(
         http,
         base_url,
@@ -369,7 +424,11 @@ def sync_resume_and_poll(
 def finalize_snapshot(snapshot: SessionResponse, session_id: str) -> SessionResponse:
     """Raise AgentError for status=error; otherwise return snapshot unchanged."""
     if snapshot.status == SessionStatus.error:
-        raise AgentError(snapshot.error or "agent error", session_id=session_id)
+        raise AgentError(
+            snapshot.error or "agent error",
+            session_id=session_id,
+            context=ErrorContext(session_id=session_id),
+        )
     return snapshot
 
 
@@ -389,6 +448,7 @@ async def async_poll_until_terminal(
     deadline = _deadline(turn_timeout)
     consecutive_read_timeouts = 0
     last_snapshot: SessionResponse | None = None
+    poll_url = _session_url(base_url, session_id)
 
     while True:
         remaining = _remaining(deadline)
@@ -403,7 +463,7 @@ async def async_poll_until_terminal(
         per_call_timeout = wait_http_timeout(http.timeout, wait)
         try:
             r = await http.get(
-                _session_url(base_url, session_id),
+                poll_url,
                 params={"wait": "true", "timeout": wait},
                 headers=headers,
                 timeout=per_call_timeout,
@@ -419,14 +479,17 @@ async def async_poll_until_terminal(
             consecutive_read_timeouts += 1
             if consecutive_read_timeouts >= read_retry_budget:
                 raise BackendUnavailable(
-                    f"poll read timeout retries exhausted ({read_retry_budget})"
+                    f"poll read timeout retries exhausted ({read_retry_budget})",
+                    context=ErrorContext(
+                        session_id=session_id, method="GET", url=poll_url
+                    ),
                 ) from e
             continue
         except httpx.TransportError as e:
-            raise BackendUnavailable(str(e)) from e
+            raise map_transport_error(e, session_id=session_id) from e
 
         if r.is_error:
-            raise map_status_error(r)
+            raise map_status_error(r, session_id=session_id)
 
         consecutive_read_timeouts = 0
         snapshot = parse_session_response(r)
@@ -452,12 +515,10 @@ async def async_post_message(
         r = await http.post(
             _messages_url(base_url, session_id), json=dict(body), headers=headers
         )
-    except httpx.TimeoutException as e:
-        raise BackendUnavailable(f"message POST timeout: {e}") from e
     except httpx.TransportError as e:
-        raise map_transport_error(e) from e
+        raise map_transport_error(e, session_id=session_id) from e
     if r.is_error:
-        raise map_status_error(r)
+        raise map_status_error(r, session_id=session_id)
 
 
 async def async_send_and_poll(
@@ -475,12 +536,10 @@ async def async_send_and_poll(
         r = await http.post(
             _messages_url(base_url, session_id), json=dict(body), headers=headers
         )
-    except httpx.TimeoutException as e:
-        raise BackendUnavailable(f"message POST timeout: {e}") from e
     except httpx.TransportError as e:
-        raise map_transport_error(e) from e
+        raise map_transport_error(e, session_id=session_id) from e
     if r.is_error:
-        raise map_status_error(r)
+        raise map_status_error(r, session_id=session_id)
     return await async_poll_until_terminal(
         http,
         base_url,
@@ -510,12 +569,14 @@ async def async_resume_and_poll(
             json={"interrupt_id": interrupt_id, "value": value},
             headers=headers,
         )
-    except httpx.TimeoutException as e:
-        raise BackendUnavailable(f"resume POST timeout: {e}") from e
     except httpx.TransportError as e:
-        raise map_transport_error(e) from e
+        raise map_transport_error(
+            e, session_id=session_id, interrupt_id=interrupt_id
+        ) from e
     if r.is_error:
-        raise map_status_error(r, is_resume=True)
+        raise map_status_error(
+            r, is_resume=True, session_id=session_id, interrupt_id=interrupt_id
+        )
     return await async_poll_until_terminal(
         http,
         base_url,
@@ -544,17 +605,24 @@ def sync_request(
     params: Mapping[str, Any] | None = None,
     is_resume: bool = False,
     timeout: Any = httpx.USE_CLIENT_DEFAULT,
+    session_id: str | None = None,
+    interrupt_id: str | None = None,
 ) -> httpx.Response:
     try:
         r = http.request(
             method, url, headers=headers, json=json, params=params, timeout=timeout
         )
-    except httpx.TimeoutException as e:
-        raise BackendUnavailable(f"{method} {url} timeout: {e}") from e
     except httpx.TransportError as e:
-        raise map_transport_error(e) from e
+        raise map_transport_error(
+            e, session_id=session_id, interrupt_id=interrupt_id
+        ) from e
     if r.is_error:
-        raise map_status_error(r, is_resume=is_resume)
+        raise map_status_error(
+            r,
+            is_resume=is_resume,
+            session_id=session_id,
+            interrupt_id=interrupt_id,
+        )
     return r
 
 
@@ -568,17 +636,24 @@ async def async_request(
     params: Mapping[str, Any] | None = None,
     is_resume: bool = False,
     timeout: Any = httpx.USE_CLIENT_DEFAULT,
+    session_id: str | None = None,
+    interrupt_id: str | None = None,
 ) -> httpx.Response:
     try:
         r = await http.request(
             method, url, headers=headers, json=json, params=params, timeout=timeout
         )
-    except httpx.TimeoutException as e:
-        raise BackendUnavailable(f"{method} {url} timeout: {e}") from e
     except httpx.TransportError as e:
-        raise map_transport_error(e) from e
+        raise map_transport_error(
+            e, session_id=session_id, interrupt_id=interrupt_id
+        ) from e
     if r.is_error:
-        raise map_status_error(r, is_resume=is_resume)
+        raise map_status_error(
+            r,
+            is_resume=is_resume,
+            session_id=session_id,
+            interrupt_id=interrupt_id,
+        )
     return r
 
 
