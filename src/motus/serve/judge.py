@@ -33,9 +33,10 @@ async def run_llm_judge(
         logger.warning("Judge skipped: OPENAI_API_KEY or OPENAI_BASE_URL not set")
         return None
 
-    filled_prompt = prompt.format(
-        input=user_input[:2000],
-        output=agent_output[:2000],
+    # Simple replace (not .format) so JSON braces in the prompt aren't
+    # interpreted as format placeholders.
+    filled_prompt = prompt.replace("{input}", user_input[:2000]).replace(
+        "{output}", agent_output[:2000]
     )
 
     try:
