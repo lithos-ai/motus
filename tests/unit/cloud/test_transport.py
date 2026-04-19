@@ -8,6 +8,7 @@ import pytest
 from motus.cloud import (
     AuthError,
     BackendUnavailable,
+    BadRequest,
     InterruptNotFound,
     ProtocolError,
     ServerBusy,
@@ -107,6 +108,12 @@ def _resp(code: int, body: dict | str = "") -> httpx.Response:
         (503, ServerBusy),
         (500, BackendUnavailable),
         (502, BackendUnavailable),
+        # Unmapped 4xx codes are request-validation / client-side problems,
+        # not backend outages. They must map to BadRequest — retrying the
+        # exact same request won't help.
+        (400, BadRequest),
+        (422, BadRequest),
+        (429, BadRequest),
     ],
 )
 def test_map_status_error_maps_codes(code, expected):

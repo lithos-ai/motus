@@ -7,8 +7,16 @@ import uuid
 from typing import TYPE_CHECKING, Any, Mapping
 
 import httpx
+from pydantic import TypeAdapter
 
-from motus.serve.schemas import SessionResponse, SessionStatus
+from motus.models import ChatMessage
+from motus.serve.schemas import (
+    HealthResponse,
+    MessageResponse,
+    SessionResponse,
+    SessionStatus,
+    SessionSummary,
+)
 
 from ._models import ChatResult, Interrupt, SessionEvent
 from ._transport import (
@@ -21,12 +29,15 @@ from ._transport import (
     async_resume_and_poll,
     async_send_and_poll,
     build_headers,
-    decode_json,
+    decode_json_validated,
     parse_session_response,
     resolve_api_key,
     validate_base_url,
     wait_http_timeout,
 )
+
+_SESSION_LIST_ADAPTER = TypeAdapter(list[SessionSummary])
+_MESSAGES_ADAPTER = TypeAdapter(list[ChatMessage])
 from .errors import (
     AgentError,
     ClientClosed,
@@ -108,7 +119,7 @@ class AsyncClient:
             f"{self._base_url}/health",
             headers=self._headers(extra_headers),
         )
-        return decode_json(r)
+        return decode_json_validated(r, HealthResponse)
 
     async def create_session(
         self,
@@ -185,7 +196,7 @@ class AsyncClient:
             f"{self._base_url}/sessions",
             headers=self._headers(extra_headers),
         )
-        return decode_json(r)
+        return decode_json_validated(r, _SESSION_LIST_ADAPTER)
 
     async def delete_session(
         self,
@@ -215,7 +226,7 @@ class AsyncClient:
             f"{self._base_url}/sessions/{session_id}/messages",
             headers=self._headers(extra_headers),
         )
-        return decode_json(r)
+        return decode_json_validated(r, _MESSAGES_ADAPTER)
 
     async def send_message(
         self,
@@ -243,7 +254,7 @@ class AsyncClient:
             headers=self._headers(extra_headers),
             json=body,
         )
-        return decode_json(r)
+        return decode_json_validated(r, MessageResponse)
 
     # ------------------------- high-level -------------------------
 

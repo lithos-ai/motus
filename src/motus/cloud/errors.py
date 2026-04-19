@@ -48,6 +48,15 @@ class ServerBusy(MotusClientError):
     """HTTP 503 — server capacity (max_sessions) reached."""
 
 
+class BadRequest(MotusClientError):
+    """HTTP 4xx response that the SDK doesn't map to a more specific error.
+
+    Covers validation errors (422), bad request (400), rate limiting (429),
+    and any other client-side 4xx the server returns. Retrying without
+    changing the request will not help — inspect ``exc.response`` for details.
+    """
+
+
 class BackendUnavailable(MotusClientError):
     """Other 5xx, connect error, or exhausted bounded-retry budget on polling."""
 
@@ -118,6 +127,7 @@ __all__ = [
     "AmbiguousInterrupt",
     "AuthError",
     "BackendUnavailable",
+    "BadRequest",
     "ClientClosed",
     "InterruptNotFound",
     "MotusClientError",

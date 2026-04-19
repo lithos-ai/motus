@@ -15,6 +15,7 @@ from .errors import (
     AgentError,
     AuthError,
     BackendUnavailable,
+    BadRequest,
     InterruptNotFound,
     MotusClientError,
     ProtocolError,
@@ -109,6 +110,10 @@ def map_status_error(r: httpx.Response, *, is_resume: bool = False) -> MotusClie
         return SessionConflict(detail or "session conflict", response=r)
     if code == 503:
         return ServerBusy(detail or "server busy", response=r)
+    if 400 <= code < 500:
+        # Unmapped 4xx — validation errors (422), rate limits (429), etc.
+        # Retrying without changing the request will not help.
+        return BadRequest(detail or f"HTTP {code}", response=r)
     return BackendUnavailable(detail or f"HTTP {code}", response=r)
 
 
@@ -151,6 +156,26 @@ def decode_json_as(r: httpx.Response, schema: Any) -> Any:
             if hasattr(schema, "model_validate")
             else schema.validate_python(data)
         )
+    except Exception as e:
+        raise ProtocolError(f"invalid response body: {e!r}") from e
+
+
+def decode_json_validated(r: httpx.Response, schema: Any) -> Any:
+    """Validate the response body against ``schema`` and return a plain dict/list.
+
+    Raises ``ProtocolError`` when the JSON is missing required fields or has
+    the wrong shape. Accepts any object with ``model_validate``/``model_dump``
+    (pydantic BaseModel) or ``validate_python``/``dump_python`` (TypeAdapter).
+    """
+    data = decode_json(r)
+    try:
+        if hasattr(schema, "model_validate"):
+            obj = schema.model_validate(data)
+            return obj.model_dump(mode="json", exclude_none=True)
+        obj = schema.validate_python(data)
+        return schema.dump_python(obj, mode="json", exclude_none=True)
+    except ProtocolError:
+        raise
     except Exception as e:
         raise ProtocolError(f"invalid response body: {e!r}") from e
 

@@ -111,7 +111,8 @@ All public methods raise subclasses of `MotusClientError`:
 | `InterruptNotFound` | HTTP 404 from `POST /resume` with an unknown `interrupt_id` |
 | `SessionConflict` | HTTP 409 (send-while-running, resume mismatch) |
 | `ServerBusy` | HTTP 503 (max sessions reached) |
-| `BackendUnavailable` | Other 5xx, connect errors, or poll retry budget exhausted |
+| `BadRequest` | Other 4xx (400, 422 validation, 429 rate-limit, ...) — request is invalid; retrying as-is will not help |
+| `BackendUnavailable` | 5xx, connect errors, or poll retry budget exhausted |
 | `SessionTimeout` | `turn_timeout` exceeded while the server session is still running |
 | `AgentError` | HTTP 200 with `session.status == "error"` |
 | `ProtocolError` | Malformed / non-JSON response body |

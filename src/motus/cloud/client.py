@@ -8,8 +8,16 @@ import uuid
 from typing import TYPE_CHECKING, Any, Mapping
 
 import httpx
+from pydantic import TypeAdapter
 
-from motus.serve.schemas import SessionResponse, SessionStatus
+from motus.models import ChatMessage
+from motus.serve.schemas import (
+    HealthResponse,
+    MessageResponse,
+    SessionResponse,
+    SessionStatus,
+    SessionSummary,
+)
 
 from ._models import ChatResult, Interrupt, SessionEvent
 from ._transport import (
@@ -17,7 +25,7 @@ from ._transport import (
     DEFAULT_READ_RETRY_BUDGET,
     DEFAULT_SERVER_WAIT_SLICE,
     build_headers,
-    decode_json,
+    decode_json_validated,
     parse_session_response,
     resolve_api_key,
     sync_poll_until_terminal,
@@ -30,9 +38,10 @@ from ._transport import (
 )
 from .errors import AgentError, ClientClosed, MotusClientError
 
-if TYPE_CHECKING:
-    from motus.models import ChatMessage
+_SESSION_LIST_ADAPTER = TypeAdapter(list[SessionSummary])
+_MESSAGES_ADAPTER = TypeAdapter(list[ChatMessage])
 
+if TYPE_CHECKING:
     from .session import Session
 
 logger = logging.getLogger("motus.cloud")
@@ -116,7 +125,7 @@ class Client:
             f"{self._base_url}/health",
             headers=self._headers(extra_headers),
         )
-        return decode_json(r)
+        return decode_json_validated(r, HealthResponse)
 
     def create_session(
         self,
@@ -191,7 +200,7 @@ class Client:
             f"{self._base_url}/sessions",
             headers=self._headers(extra_headers),
         )
-        return decode_json(r)
+        return decode_json_validated(r, _SESSION_LIST_ADAPTER)
 
     def delete_session(
         self,
@@ -228,7 +237,7 @@ class Client:
             f"{self._base_url}/sessions/{session_id}/messages",
             headers=self._headers(extra_headers),
         )
-        return decode_json(r)
+        return decode_json_validated(r, _MESSAGES_ADAPTER)
 
     def send_message(
         self,
@@ -262,7 +271,7 @@ class Client:
             headers=self._headers(extra_headers),
             json=body,
         )
-        return decode_json(r)
+        return decode_json_validated(r, MessageResponse)
 
     # ------------------------- high-level -------------------------
 

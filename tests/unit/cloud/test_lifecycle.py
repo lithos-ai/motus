@@ -209,6 +209,32 @@ async def test_async_session_context_exit_preserves_body_exception(fresh_env):
                 raise ValueError("primary")
 
 
+def test_422_maps_to_bad_request_not_backend_unavailable(fresh_env):
+    """A 422 validation error is a client-side request problem; it must surface
+    as BadRequest, not BackendUnavailable (which would imply the server was down)."""
+    from motus.cloud import BadRequest
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"detail": "role bogus not allowed"})
+
+    with Client(base_url="http://x", transport=httpx.MockTransport(handler)) as c:
+        with pytest.raises(BadRequest) as ei:
+            c.send_message("s1", "hi", role="bogus")
+        assert ei.value.response is not None
+        assert ei.value.response.status_code == 422
+
+
+def test_500_still_maps_to_backend_unavailable(fresh_env):
+    """5xx responses must still map to BackendUnavailable (server-side fault)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"detail": "boom"})
+
+    with Client(base_url="http://x", transport=httpx.MockTransport(handler)) as c:
+        with pytest.raises(BackendUnavailable):
+            c.health()
+
+
 def test_injected_http_client_timeout_is_honored_for_waits(fresh_env):
     """When http_client=... is injected, get_session(wait=True, timeout=N)
     must derive the per-call override from the injected client's actual
