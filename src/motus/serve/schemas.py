@@ -90,12 +90,16 @@ class HealthResponse(BaseModel):
 
 
 class JudgeRequest(BaseModel):
-    """POST /eval/judge body — platform-triggered post-session eval."""
+    """POST /eval/judge body — platform-triggered post-session eval.
+
+    The developer only supplies the ``criteria``; the judge system prompt
+    and user message template (input/output injection) are platform-owned.
+    """
 
     input: str
     output: str
     model: str = "claude-haiku-4-5"
-    prompt: str
+    criteria: str
 
 
 class JudgeResponse(BaseModel):

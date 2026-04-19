@@ -317,7 +317,7 @@ class AgentServer:
 
             result = await run_llm_judge(
                 model=body.model,
-                prompt=body.prompt,
+                criteria=body.criteria,
                 user_input=body.input,
                 agent_output=body.output,
             )

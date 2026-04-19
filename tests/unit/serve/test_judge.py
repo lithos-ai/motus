@@ -40,7 +40,7 @@ class TestJudgeLogic:
 
         result = await run_llm_judge(
             model="claude-haiku-4-5",
-            prompt="judge: {input} / {output}",
+            criteria="judge: {input} / {output}",
             user_input="hi",
             agent_output="hello",
         )
@@ -52,7 +52,7 @@ class TestJudgeLogic:
 
         result = await run_llm_judge(
             model="claude-haiku-4-5",
-            prompt="judge: {input} / {output}",
+            criteria="judge: {input} / {output}",
             user_input="hi",
             agent_output="hello",
         )
@@ -68,8 +68,11 @@ class TestJudgeLogic:
             assert request.headers["authorization"] == "Bearer lithos_test"
             body = json.loads(request.content)
             assert body["model"] == "claude-haiku-4-5"
-            assert "input-text" in body["messages"][0]["content"]
-            assert "output-text" in body["messages"][0]["content"]
+            assert body["messages"][0]["role"] == "system"
+            assert body["messages"][1]["role"] == "user"
+            assert "input-text" in body["messages"][1]["content"]
+            assert "output-text" in body["messages"][1]["content"]
+            assert body["response_format"] == {"type": "json_object"}
             return Response(
                 200,
                 json={
@@ -93,7 +96,7 @@ class TestJudgeLogic:
         with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
             result = await run_llm_judge(
                 model="claude-haiku-4-5",
-                prompt="input={input} output={output}",
+                criteria="input={input} output={output}",
                 user_input="input-text",
                 agent_output="output-text",
             )
@@ -129,7 +132,7 @@ class TestJudgeLogic:
         with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
             result = await run_llm_judge(
                 model="claude-haiku-4-5",
-                prompt="j",
+                criteria="j",
                 user_input="a",
                 agent_output="b",
             )
@@ -164,7 +167,7 @@ class TestJudgeLogic:
         with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
             result = await run_llm_judge(
                 model="m",
-                prompt="j",
+                criteria="j",
                 user_input="a",
                 agent_output="b",
             )
@@ -187,7 +190,7 @@ class TestJudgeLogic:
         with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
             result = await run_llm_judge(
                 model="m",
-                prompt="j",
+                criteria="j",
                 user_input="a",
                 agent_output="b",
             )
@@ -212,7 +215,7 @@ class TestJudgeLogic:
         with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
             result = await run_llm_judge(
                 model="m",
-                prompt="j",
+                criteria="j",
                 user_input="a",
                 agent_output="b",
             )
@@ -238,7 +241,7 @@ class TestJudgeEndpoint:
                 "input": "question",
                 "output": "answer",
                 "model": "claude-haiku-4-5",
-                "prompt": "prompt",
+                "criteria": "prompt",
             },
         )
         assert r.status_code == 200
@@ -259,7 +262,7 @@ class TestJudgeEndpoint:
                 "input": "q",
                 "output": "a",
                 "model": "m",
-                "prompt": "p",
+                "criteria": "p",
             },
         )
         assert r.status_code == 502
