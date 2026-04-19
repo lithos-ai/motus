@@ -367,17 +367,22 @@ class Client:
         """Create or attach a pinned Session.
 
         - ``session_id=None`` creates a new server-side session via POST; owned = True.
-        - ``session_id=<uuid>`` attempts owned creation via PUT /sessions/{id}:
-          - 201 Created → owned = True.
-          - 409 Conflict (session already exists) → attach; owned = False.
-          - 405 Method Not Allowed (server not started with --allow-custom-ids) →
-            raises SessionUnsupported.
+        - ``session_id=<uuid>`` runs a GET-first flow so attach never requires
+          ``--allow-custom-ids`` on the server:
+
+          1. ``GET /sessions/{id}`` → 200: attach; owned = False.
+          2. 404 → ``PUT /sessions/{id}`` → 201: owned = True (custom-ID creation).
+          3. PUT 405 → raises ``SessionUnsupported``.
+          4. PUT 409 (concurrent create) → attach; owned = False.
 
         ``keep=True`` suppresses DELETE on owned sessions at close; has no effect
         when owned = False (the caller always owns attached sessions).
+
+        ``extra_headers`` is stored on the returned ``Session`` and applied to
+        every lifecycle request (chat, resume, delete) issued through it.
         """
         self._guard_event_loop()
-        from .errors import SessionConflict
+        from .errors import SessionConflict, SessionNotFound
         from .session import Session
 
         if session_id is not None and initial_state:
@@ -389,15 +394,30 @@ class Client:
             sid = self.create_session(
                 initial_state=initial_state, extra_headers=extra_headers
             ).session_id
-            return Session(self, sid, owned=True, keep=keep)
+            return Session(
+                self, sid, owned=True, keep=keep, extra_headers=extra_headers
+            )
+
+        try:
+            self.get_session(session_id, extra_headers=extra_headers)
+        except SessionNotFound:
+            pass
+        else:
+            return Session(
+                self, session_id, owned=False, keep=keep, extra_headers=extra_headers
+            )
 
         try:
             created = self.create_session(
                 session_id=session_id, extra_headers=extra_headers
             )
         except SessionConflict:
-            return Session(self, session_id, owned=False, keep=keep)
-        return Session(self, created.session_id, owned=True, keep=keep)
+            return Session(
+                self, session_id, owned=False, keep=keep, extra_headers=extra_headers
+            )
+        return Session(
+            self, created.session_id, owned=True, keep=keep, extra_headers=extra_headers
+        )
 
     def resume(
         self,

@@ -32,16 +32,16 @@ def test_owned_session_with_keep_does_not_delete(recorder, fresh_env, caplog):
     assert any("kept alive" in rec.getMessage() for rec in caplog.records)
 
 
-def test_session_id_put_409_attaches_as_not_owned(recorder, fresh_env, new_uuid):
-    """Default echo_server returns 409 on PUT — the attach-to-existing path."""
-    transport = recorder(echo_server(custom_id_mode="conflict"))
+def test_session_id_attach_when_session_exists(recorder, fresh_env, new_uuid):
+    """GET-first attach: pre-existing session → owned=False, no PUT needed."""
+    transport = recorder(echo_server(custom_id_mode="attach"))
     existing = new_uuid()
     with Client(base_url="http://x", transport=transport) as c:
         with c.session(session_id=existing) as s:
             assert not s.owned
             s.chat("hi")
-    # No DELETE (caller owns the session).
     assert [r for r in recorder.requests if r.method == "DELETE"] == []
+    assert [r for r in recorder.requests if r.method == "PUT"] == []
 
 
 def test_session_id_put_201_creates_owned_custom_id(recorder, fresh_env, new_uuid):
@@ -66,7 +66,7 @@ def test_session_id_put_405_raises_session_unsupported(recorder, fresh_env, new_
 
 
 def test_attach_with_keep_true_still_does_not_delete(recorder, fresh_env, new_uuid):
-    transport = recorder(echo_server(custom_id_mode="conflict"))
+    transport = recorder(echo_server(custom_id_mode="attach"))
     with Client(base_url="http://x", transport=transport) as c:
         with c.session(session_id=new_uuid(), keep=True) as s:
             assert not s.owned

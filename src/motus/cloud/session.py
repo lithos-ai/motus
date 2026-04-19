@@ -24,6 +24,7 @@ class Session:
     - Created via ``client.session(session_id=<existing>)``: owned = False,
       close() never DELETEs regardless of ``keep``.
     - ``keep=True`` on an owned session suppresses DELETE on close (logs info).
+    - ``extra_headers`` is applied to every request issued through this session.
     """
 
     def __init__(
@@ -33,11 +34,13 @@ class Session:
         *,
         owned: bool,
         keep: bool,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> None:
         self._client = client
         self._session_id = session_id
         self._owned = owned
         self._keep = keep
+        self._session_headers: dict[str, str] = dict(extra_headers or {})
         self._closed = False
 
     @property
@@ -52,15 +55,16 @@ class Session:
     def closed(self) -> bool:
         return self._closed
 
-    # ------------------------- lifecycle -------------------------
-
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         if self._owned and not self._keep:
             try:
-                self._client.delete_session(self._session_id)
+                self._client.delete_session(
+                    self._session_id,
+                    extra_headers=self._session_headers or None,
+                )
             except Exception as e:  # noqa: BLE001 — never mask caller context on close
                 logger.debug("Session.close DELETE failed: %r", e)
         elif self._owned and self._keep:
@@ -72,7 +76,15 @@ class Session:
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
-    # ------------------------- turns -------------------------
+    def _merged_headers(
+        self, per_call: Mapping[str, str] | None
+    ) -> dict[str, str] | None:
+        if not self._session_headers and not per_call:
+            return None
+        merged: dict[str, str] = dict(self._session_headers)
+        if per_call:
+            merged.update(per_call)
+        return merged
 
     def chat(
         self,
@@ -104,7 +116,7 @@ class Session:
             else self._client._turn_timeout,
             server_wait_slice=self._client._server_wait_slice,
             read_retry_budget=self._client._read_retry_budget,
-            headers=self._client._headers(extra_headers),
+            headers=self._client._headers(self._merged_headers(extra_headers)),
         )
         if snapshot.status == SessionStatus.error:
             raise AgentError(
@@ -143,7 +155,7 @@ class Session:
             else self._client._turn_timeout,
             server_wait_slice=self._client._server_wait_slice,
             read_retry_budget=self._client._read_retry_budget,
-            headers=self._client._headers(extra_headers),
+            headers=self._client._headers(self._merged_headers(extra_headers)),
         )
         if snapshot.status == SessionStatus.error:
             raise AgentError(

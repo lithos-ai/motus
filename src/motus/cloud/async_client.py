@@ -407,7 +407,11 @@ class _AsyncResumeAdapter:
 
 
 class AsyncSession:
-    """Pinned session for AsyncClient. Mirrors Session ownership/keep semantics."""
+    """Pinned session for AsyncClient. Mirrors Session ownership/keep semantics.
+
+    ``extra_headers`` is stored and applied to every lifecycle request
+    (chat, resume, delete) issued through this session.
+    """
 
     def __init__(
         self,
@@ -416,11 +420,13 @@ class AsyncSession:
         *,
         owned: bool,
         keep: bool,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> None:
         self._client = client
         self._session_id = session_id
         self._owned = owned
         self._keep = keep
+        self._session_headers: dict[str, str] = dict(extra_headers or {})
         self._closed = False
 
     @property
@@ -435,13 +441,26 @@ class AsyncSession:
     def closed(self) -> bool:
         return self._closed
 
+    def _merged_headers(
+        self, per_call: Mapping[str, str] | None
+    ) -> dict[str, str] | None:
+        if not self._session_headers and not per_call:
+            return None
+        merged: dict[str, str] = dict(self._session_headers)
+        if per_call:
+            merged.update(per_call)
+        return merged
+
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
         if self._owned and not self._keep:
             try:
-                await self._client.delete_session(self._session_id)
+                await self._client.delete_session(
+                    self._session_id,
+                    extra_headers=self._session_headers or None,
+                )
             except Exception as e:  # noqa: BLE001
                 logger.debug("AsyncSession.aclose DELETE failed: %r", e)
         elif self._owned and self._keep:
@@ -476,7 +495,7 @@ class AsyncSession:
             else self._client._turn_timeout,
             server_wait_slice=self._client._server_wait_slice,
             read_retry_budget=self._client._read_retry_budget,
-            headers=self._client._headers(extra_headers),
+            headers=self._client._headers(self._merged_headers(extra_headers)),
         )
         if snapshot.status == SessionStatus.error:
             raise AgentError(
@@ -508,7 +527,7 @@ class AsyncSession:
             interrupt_id,
             value,
             turn_timeout=turn_timeout,
-            extra_headers=extra_headers,
+            extra_headers=self._merged_headers(extra_headers),
         )
 
 
@@ -531,7 +550,7 @@ class _AsyncSessionCtx:
         self._session: AsyncSession | None = None
 
     async def __aenter__(self) -> AsyncSession:
-        from .errors import SessionConflict
+        from .errors import SessionConflict, SessionNotFound
 
         if self._session_id is None:
             created = await self._client.create_session(
@@ -539,7 +558,29 @@ class _AsyncSessionCtx:
                 extra_headers=self._extra_headers,
             )
             self._session = AsyncSession(
-                self._client, created.session_id, owned=True, keep=self._keep
+                self._client,
+                created.session_id,
+                owned=True,
+                keep=self._keep,
+                extra_headers=self._extra_headers,
+            )
+            return self._session
+
+        # GET-first attach (matches sync Client.session); only fall through to PUT
+        # when the session doesn't exist yet.
+        try:
+            await self._client.get_session(
+                self._session_id, extra_headers=self._extra_headers
+            )
+        except SessionNotFound:
+            pass
+        else:
+            self._session = AsyncSession(
+                self._client,
+                self._session_id,
+                owned=False,
+                keep=self._keep,
+                extra_headers=self._extra_headers,
             )
             return self._session
 
@@ -549,11 +590,19 @@ class _AsyncSessionCtx:
             )
         except SessionConflict:
             self._session = AsyncSession(
-                self._client, self._session_id, owned=False, keep=self._keep
+                self._client,
+                self._session_id,
+                owned=False,
+                keep=self._keep,
+                extra_headers=self._extra_headers,
             )
             return self._session
         self._session = AsyncSession(
-            self._client, created.session_id, owned=True, keep=self._keep
+            self._client,
+            created.session_id,
+            owned=True,
+            keep=self._keep,
+            extra_headers=self._extra_headers,
         )
         return self._session
 

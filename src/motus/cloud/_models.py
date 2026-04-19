@@ -37,11 +37,15 @@ class ChatResult:
     snapshot: SessionResponse | None = None
     _client: Any = field(default=None, repr=False, compare=False)
 
-    def resume(self, value: Any) -> "ChatResult":
-        """Resolve the single pending interrupt with ``value`` and return the next ChatResult.
+    def resume(self, value: Any) -> Any:
+        """Resolve the single pending interrupt with ``value``.
 
-        Raises AmbiguousInterrupt if zero or more than one interrupt is pending;
-        use the parent client's ``resume(session_id, interrupt_id, value)`` in that case.
+        When the owning client is a sync ``Client``, this returns the next
+        ``ChatResult`` directly. When the owning client is an ``AsyncClient``,
+        this returns an awaitable that resolves to a ``ChatResult`` — await it.
+        Raises ``AmbiguousInterrupt`` if zero or more than one interrupt is
+        pending; use the owning client's ``resume(session_id, interrupt_id, value)``
+        in that case.
         """
         if len(self.interrupts) != 1:
             raise AmbiguousInterrupt(

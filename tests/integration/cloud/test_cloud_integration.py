@@ -98,17 +98,47 @@ def test_sync_chat_events_against_live_server(echo_server_url):
     assert "echo: stream hi" in (events[-1].snapshot.response.content or "")
 
 
-def test_sync_session_attach_to_existing_is_not_owned(echo_server_url):
-    """Against a server without --allow-custom-ids the echo server returns 405 on PUT,
-    so session(session_id=...) must raise SessionUnsupported. We instead exercise
-    the attach path by pre-creating a session and then attaching to it — which on
-    the real AgentServer is the 405 path, so this test documents that behavior."""
-    from motus.cloud import SessionUnsupported
+def test_sync_session_attach_to_existing_preserves_state(echo_server_url):
+    """GET-first attach: pre-create a session, attach via session(session_id=...),
+    confirm owned=False, add a turn, detach without DELETE, and verify the
+    session is still alive on the server."""
+    with Client(base_url=echo_server_url) as c:
+        pre = c.create_session()
+        sid = pre.session_id
+        try:
+            with c.session(session_id=sid) as attached:
+                assert not attached.owned
+                assert attached.session_id == sid
+                r = attached.chat("hello from attach")
+                assert "echo: hello from attach" in (r.message.content or "")
+            # Session should still exist (caller owns it).
+            probe = c.get_session(sid)
+            assert probe.session_id == sid
+        finally:
+            c.delete_session(sid)
+
+
+def test_cli_chat_with_session_flag_attaches_to_existing_session(echo_server_url):
+    """CLI `motus serve chat --session <id>` routes through client.session(session_id=...)
+    and must work on a stock server (no --allow-custom-ids)."""
+    from types import SimpleNamespace
+
+    from motus.serve import cli as cli_mod
 
     with Client(base_url=echo_server_url) as c:
-        sess = c.create_session()
-        # Live AgentServer lacks --allow-custom-ids by default → PUT returns 405.
-        with pytest.raises(SessionUnsupported):
-            c.session(session_id=sess.session_id)
-        # Cleanup the session we created directly.
-        c.delete_session(sess.session_id)
+        pre = c.create_session()
+        sid = pre.session_id
+        try:
+            args = SimpleNamespace(
+                url=echo_server_url,
+                message="hi via cli",
+                session=sid,
+                keep=False,
+                params=None,
+            )
+            cli_mod.chat_command(args)
+            # CLI owns=False branch must not DELETE our session.
+            probe = c.get_session(sid)
+            assert probe.session_id == sid
+        finally:
+            c.delete_session(sid)

@@ -50,14 +50,20 @@ def echo_server(
     interrupts: list[dict] | None = None,
     error: str | None = None,
     extra_get_responses: list[dict] | None = None,
-    custom_id_mode: str = "conflict",
+    custom_id_mode: str = "attach",
+    pre_existing_session_ids: set[str] | None = None,
 ) -> Callable[[httpx.Request], httpx.Response]:
     """Build a MockTransport handler that mimics the session/message protocol.
 
-    ``custom_id_mode`` shapes how PUT /sessions/{id} behaves:
-        - "conflict" (default): return 409 (session already exists — attach path).
-        - "created":  return 201 (owned custom-ID creation — PUT path).
-        - "unsupported": return 405 (server without --allow-custom-ids).
+    ``custom_id_mode`` shapes attach-vs-create semantics for PUT /sessions/{id}
+    and the non-wait GET /sessions/{id} used by the GET-first attach probe:
+
+        - "attach" (default): GET returns 200 for any id — attach path wins;
+          PUT is unreachable for this fixture.
+        - "created": GET returns 404 for any id (nothing pre-exists); PUT
+          returns 201 — owned custom-ID creation path.
+        - "unsupported": GET returns 404 for any id; PUT returns 405 —
+          server without --allow-custom-ids.
     """
     state: dict[str, Any] = {"sid": str(uuid.uuid4())}
 
@@ -96,8 +102,8 @@ def echo_server(
                 return httpx.Response(
                     405, json={"detail": "Custom session IDs are not enabled"}
                 )
-            # Default: conflict (existing session — caller wanted attach)
-            state["sid"] = sid
+            # "attach" mode: the GET-first probe already found the session, so
+            # PUT is not expected to fire. Treat as a 409 if it does.
             return httpx.Response(409, json={"detail": "Session already exists"})
         if method == "POST" and path.endswith("/messages"):
             return httpx.Response(
@@ -113,6 +119,14 @@ def echo_server(
             and path.startswith("/sessions/")
             and not path.endswith("/messages")
         ):
+            params = dict(req.url.params)
+            if params.get("wait") != "true" and custom_id_mode in (
+                "created",
+                "unsupported",
+            ):
+                # GET-first attach probe against a server that will take the
+                # create path: report 404 so the client proceeds to PUT.
+                return httpx.Response(404, json={"detail": "Session not found"})
             return httpx.Response(200, json=terminal())
         if method == "GET" and path == "/sessions":
             return httpx.Response(200, json=[])
