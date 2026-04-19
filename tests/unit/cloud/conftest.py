@@ -50,11 +50,14 @@ def echo_server(
     interrupts: list[dict] | None = None,
     error: str | None = None,
     extra_get_responses: list[dict] | None = None,
+    custom_id_mode: str = "conflict",
 ) -> Callable[[httpx.Request], httpx.Response]:
     """Build a MockTransport handler that mimics the session/message protocol.
 
-    Flow: POST /sessions -> 201 {session_id}; POST /messages -> 202 running;
-    GET /sessions/{id} -> 200 with the configured terminal snapshot.
+    ``custom_id_mode`` shapes how PUT /sessions/{id} behaves:
+        - "conflict" (default): return 409 (session already exists — attach path).
+        - "created":  return 201 (owned custom-ID creation — PUT path).
+        - "unsupported": return 405 (server without --allow-custom-ids).
     """
     state: dict[str, Any] = {"sid": str(uuid.uuid4())}
 
@@ -86,8 +89,16 @@ def echo_server(
             )
         if method == "PUT" and path.startswith("/sessions/"):
             sid = path.rsplit("/", 1)[-1]
+            if custom_id_mode == "created":
+                state["sid"] = sid
+                return httpx.Response(201, json={"session_id": sid, "status": "idle"})
+            if custom_id_mode == "unsupported":
+                return httpx.Response(
+                    405, json={"detail": "Custom session IDs are not enabled"}
+                )
+            # Default: conflict (existing session — caller wanted attach)
             state["sid"] = sid
-            return httpx.Response(201, json={"session_id": sid, "status": "idle"})
+            return httpx.Response(409, json={"detail": "Session already exists"})
         if method == "POST" and path.endswith("/messages"):
             return httpx.Response(
                 202, json={"session_id": state["sid"], "status": "running"}

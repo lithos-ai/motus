@@ -142,6 +142,27 @@ For power users, the full REST protocol is exposed as thin wrappers:
 
 Every method accepts `extra_headers=` and (on the constructor) `transport=` or `http_client=` for custom `httpx` wiring (mocks, proxies, custom CA bundles, mTLS).
 
+## Coarse session-status events
+
+`chat_events()` is a generator that yields `SessionEvent` objects as the session transitions. It is a **coarse polling helper** — the server does not emit per-token events, so this is not token streaming.
+
+```python
+for event in client.chat_events("please run the pipeline"):
+    print(event.type, event.session_id)
+    if event.type == "interrupted":
+        # event.snapshot.interrupts contains the pending interrupts
+        ...
+```
+
+Sequence emitted:
+
+1. `SessionEvent(type="running", session_id=..., snapshot=None)` immediately after the message is accepted (HTTP 202).
+2. A single terminal event: `type` ∈ `{"idle", "interrupted", "error"}`, with `event.snapshot` set to the final `SessionResponse`.
+
+Cleanup rules match `chat()`: the ephemeral session is deleted only on clean idle; interrupted / error / `SessionTimeout` leave the session alive so you can resume or inspect it.
+
+`AsyncClient.chat_events()` is the async counterpart — iterate it with `async for`.
+
 ## Not yet supported
 
-Token-level streaming is not in this release. The server does not emit per-token events. A coarse session-event iterator (`chat_events()`) is planned for a future version and is intentionally not shipped now to avoid implying token streaming.
+Token-level streaming. The server exposes only session-status transitions; no per-token event stream exists yet.

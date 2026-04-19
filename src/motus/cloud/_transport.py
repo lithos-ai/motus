@@ -114,11 +114,42 @@ def map_transport_error(exc: Exception) -> MotusClientError:
     return BackendUnavailable(str(exc) or type(exc).__name__)
 
 
+def decode_json(r: httpx.Response) -> Any:
+    """Decode ``r`` as JSON, mapping parse failures to ProtocolError."""
+    try:
+        return r.json()
+    except Exception as e:
+        raise ProtocolError(
+            f"non-JSON response from {r.request.method} {r.request.url}: {e!r}"
+        ) from e
+
+
+def parse_session_response(r: httpx.Response) -> SessionResponse:
+    """Decode a response body and validate it as a SessionResponse."""
+    return parse_session(decode_json(r))
+
+
 def parse_session(data: Any) -> SessionResponse:
     try:
         return SessionResponse.model_validate(data)
     except Exception as e:
         raise ProtocolError(f"invalid session response: {e!r}") from e
+
+
+def decode_json_as(r: httpx.Response, schema: Any) -> Any:
+    """Decode ``r`` and validate the body against a pydantic model / adapter.
+
+    Accepts any object exposing ``model_validate`` (pydantic BaseModel or TypeAdapter).
+    """
+    data = decode_json(r)
+    try:
+        return (
+            schema.model_validate(data)
+            if hasattr(schema, "model_validate")
+            else schema.validate_python(data)
+        )
+    except Exception as e:
+        raise ProtocolError(f"invalid response body: {e!r}") from e
 
 
 def _deadline(turn_timeout: float | None) -> float | None:
@@ -194,7 +225,7 @@ def sync_poll_until_terminal(
             raise map_status_error(r)
 
         consecutive_read_timeouts = 0
-        snapshot = parse_session(r.json())
+        snapshot = parse_session_response(r)
         last_snapshot = snapshot
         if snapshot.status in (
             SessionStatus.idle,
@@ -202,6 +233,27 @@ def sync_poll_until_terminal(
             SessionStatus.error,
         ):
             return snapshot
+
+
+def sync_post_message(
+    http: httpx.Client,
+    base_url: str,
+    session_id: str,
+    body: Mapping[str, Any],
+    *,
+    headers: Mapping[str, str],
+) -> None:
+    """POST /messages. Raises MotusClientError on failure; returns None on 202."""
+    try:
+        r = http.post(
+            _messages_url(base_url, session_id), json=dict(body), headers=headers
+        )
+    except httpx.TimeoutException as e:
+        raise BackendUnavailable(f"message POST timeout: {e}") from e
+    except (httpx.ConnectError, httpx.ReadError) as e:
+        raise map_transport_error(e) from e
+    if r.is_error:
+        raise map_status_error(r)
 
 
 def sync_send_and_poll(
@@ -327,7 +379,7 @@ async def async_poll_until_terminal(
             raise map_status_error(r)
 
         consecutive_read_timeouts = 0
-        snapshot = parse_session(r.json())
+        snapshot = parse_session_response(r)
         last_snapshot = snapshot
         if snapshot.status in (
             SessionStatus.idle,
@@ -335,6 +387,27 @@ async def async_poll_until_terminal(
             SessionStatus.error,
         ):
             return snapshot
+
+
+async def async_post_message(
+    http: httpx.AsyncClient,
+    base_url: str,
+    session_id: str,
+    body: Mapping[str, Any],
+    *,
+    headers: Mapping[str, str],
+) -> None:
+    """Async POST /messages."""
+    try:
+        r = await http.post(
+            _messages_url(base_url, session_id), json=dict(body), headers=headers
+        )
+    except httpx.TimeoutException as e:
+        raise BackendUnavailable(f"message POST timeout: {e}") from e
+    except (httpx.ConnectError, httpx.ReadError) as e:
+        raise map_transport_error(e) from e
+    if r.is_error:
+        raise map_status_error(r)
 
 
 async def async_send_and_poll(

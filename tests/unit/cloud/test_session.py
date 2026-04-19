@@ -7,7 +7,7 @@ import logging
 import httpx
 import pytest
 
-from motus.cloud import Client, SessionClosed
+from motus.cloud import Client, SessionClosed, SessionUnsupported
 
 from .conftest import echo_server
 
@@ -32,23 +32,46 @@ def test_owned_session_with_keep_does_not_delete(recorder, fresh_env, caplog):
     assert any("kept alive" in rec.getMessage() for rec in caplog.records)
 
 
-def test_not_owned_session_never_deletes(recorder, fresh_env, new_uuid):
-    transport = recorder(echo_server())
+def test_session_id_put_409_attaches_as_not_owned(recorder, fresh_env, new_uuid):
+    """Default echo_server returns 409 on PUT — the attach-to-existing path."""
+    transport = recorder(echo_server(custom_id_mode="conflict"))
     existing = new_uuid()
     with Client(base_url="http://x", transport=transport) as c:
         with c.session(session_id=existing) as s:
+            assert not s.owned
+            s.chat("hi")
+    # No DELETE (caller owns the session).
+    assert [r for r in recorder.requests if r.method == "DELETE"] == []
+
+
+def test_session_id_put_201_creates_owned_custom_id(recorder, fresh_env, new_uuid):
+    """Server allows custom IDs → PUT 201 → owned=True → DELETE on close."""
+    transport = recorder(echo_server(custom_id_mode="created"))
+    sid = new_uuid()
+    with Client(base_url="http://x", transport=transport) as c:
+        with c.session(session_id=sid) as s:
+            assert s.owned
+            assert s.session_id == sid
             s.chat("hi")
     deletes = [r for r in recorder.requests if r.method == "DELETE"]
-    assert deletes == []
+    assert len(deletes) == 1
 
 
-def test_not_owned_with_keep_true_still_does_not_delete(recorder, fresh_env, new_uuid):
-    transport = recorder(echo_server())
+def test_session_id_put_405_raises_session_unsupported(recorder, fresh_env, new_uuid):
+    """Server without --allow-custom-ids returns 405 — raise SessionUnsupported."""
+    transport = recorder(echo_server(custom_id_mode="unsupported"))
+    with Client(base_url="http://x", transport=transport) as c:
+        with pytest.raises(SessionUnsupported):
+            c.session(session_id=new_uuid())
+
+
+def test_attach_with_keep_true_still_does_not_delete(recorder, fresh_env, new_uuid):
+    transport = recorder(echo_server(custom_id_mode="conflict"))
     with Client(base_url="http://x", transport=transport) as c:
         with c.session(session_id=new_uuid(), keep=True) as s:
+            assert not s.owned
             s.chat("hi")
-    deletes = [r for r in recorder.requests if r.method == "DELETE"]
-    assert deletes == []
+    assert [r for r in recorder.requests if r.method == "DELETE"] == []
 
 
 def test_session_id_plus_non_empty_initial_state_rejected(fresh_env, new_uuid):

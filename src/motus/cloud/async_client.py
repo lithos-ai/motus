@@ -10,16 +10,19 @@ import httpx
 
 from motus.serve.schemas import SessionResponse, SessionStatus
 
-from ._models import ChatResult, Interrupt
+from ._models import ChatResult, Interrupt, SessionEvent
 from ._transport import (
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_READ_RETRY_BUDGET,
     DEFAULT_SERVER_WAIT_SLICE,
+    async_poll_until_terminal,
+    async_post_message,
     async_request,
     async_resume_and_poll,
     async_send_and_poll,
     build_headers,
-    parse_session,
+    decode_json,
+    parse_session_response,
     resolve_api_key,
     validate_base_url,
 )
@@ -89,7 +92,7 @@ class AsyncClient:
             f"{self._base_url}/health",
             headers=self._headers(extra_headers),
         )
-        return r.json()
+        return decode_json(r)
 
     async def create_session(
         self,
@@ -128,7 +131,7 @@ class AsyncClient:
                 headers=self._headers(extra_headers),
                 json=body,
             )
-        return parse_session(r.json())
+        return parse_session_response(r)
 
     async def get_session(
         self,
@@ -150,7 +153,7 @@ class AsyncClient:
             headers=self._headers(extra_headers),
             params=params or None,
         )
-        return parse_session(r.json())
+        return parse_session_response(r)
 
     async def list_sessions(
         self, *, extra_headers: Mapping[str, str] | None = None
@@ -161,7 +164,7 @@ class AsyncClient:
             f"{self._base_url}/sessions",
             headers=self._headers(extra_headers),
         )
-        return r.json()
+        return decode_json(r)
 
     async def delete_session(
         self,
@@ -191,7 +194,7 @@ class AsyncClient:
             f"{self._base_url}/sessions/{session_id}/messages",
             headers=self._headers(extra_headers),
         )
-        return r.json()
+        return decode_json(r)
 
     async def send_message(
         self,
@@ -219,7 +222,7 @@ class AsyncClient:
             headers=self._headers(extra_headers),
             json=body,
         )
-        return r.json()
+        return decode_json(r)
 
     # ------------------------- high-level -------------------------
 
@@ -234,7 +237,7 @@ class AsyncClient:
         extra_headers: Mapping[str, str] | None = None,
         **message_fields: Any,
     ) -> ChatResult:
-        session_id = (await self.create_session()).session_id
+        session_id = (await self.create_session(extra_headers=extra_headers)).session_id
         clean_idle = False
         try:
             body: dict[str, Any] = {"role": role, "content": content}
@@ -263,9 +266,65 @@ class AsyncClient:
         finally:
             if clean_idle:
                 try:
-                    await self.delete_session(session_id)
+                    await self.delete_session(session_id, extra_headers=extra_headers)
                 except MotusClientError as secondary:
                     logger.debug("ephemeral cleanup DELETE failed: %r", secondary)
+
+    async def chat_events(
+        self,
+        content: str,
+        *,
+        turn_timeout: float | None = None,
+        role: str = "user",
+        user_params: Mapping[str, Any] | None = None,
+        webhook: Mapping[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        **message_fields: Any,
+    ):
+        """Async coarse session-status iterator (counterpart of Client.chat_events).
+
+        Yields ``SessionEvent(running)`` then the terminal event. Cleanup rules
+        match ``AsyncClient.chat``. This is not token streaming.
+        """
+        session_id = (await self.create_session(extra_headers=extra_headers)).session_id
+        clean_idle = False
+        try:
+            body: dict[str, Any] = {"role": role, "content": content}
+            if user_params:
+                body["user_params"] = dict(user_params)
+            if webhook:
+                body["webhook"] = dict(webhook)
+            body.update(message_fields)
+            headers = self._headers(extra_headers)
+            await async_post_message(
+                self._http, self._base_url, session_id, body, headers=headers
+            )
+            yield SessionEvent(type="running", session_id=session_id, snapshot=None)
+            snapshot = await async_poll_until_terminal(
+                self._http,
+                self._base_url,
+                session_id,
+                turn_timeout=turn_timeout
+                if turn_timeout is not None
+                else self._turn_timeout,
+                server_wait_slice=self._server_wait_slice,
+                read_retry_budget=self._read_retry_budget,
+                headers=headers,
+            )
+            clean_idle = (
+                snapshot.status == SessionStatus.idle and not snapshot.interrupts
+            )
+            yield SessionEvent(
+                type=snapshot.status.value,
+                session_id=session_id,
+                snapshot=snapshot,
+            )
+        finally:
+            if clean_idle:
+                try:
+                    await self.delete_session(session_id, extra_headers=extra_headers)
+                except MotusClientError as secondary:
+                    logger.debug("chat_events cleanup DELETE failed: %r", secondary)
 
     def session(
         self,
@@ -273,17 +332,18 @@ class AsyncClient:
         session_id: str | None = None,
         keep: bool = False,
         initial_state: list["ChatMessage"] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> "_AsyncSessionCtx":
-        """Return an async context manager yielding an AsyncSession.
+        """Async counterpart of Client.session().
 
-        Server-side session creation happens on __aenter__ so the caller can
-        ``async with client.session() as s:`` without a separate await.
+        See Client.session() for the custom-ID ownership rules. Creation happens
+        on ``__aenter__`` so the caller can ``async with client.session() as s:``.
         """
         if session_id is not None and initial_state:
             raise ValueError(
                 "initial_state cannot be passed with an existing session_id"
             )
-        return _AsyncSessionCtx(self, session_id, keep, initial_state)
+        return _AsyncSessionCtx(self, session_id, keep, initial_state, extra_headers)
 
     async def resume(
         self,
@@ -461,25 +521,40 @@ class _AsyncSessionCtx:
         session_id: str | None,
         keep: bool,
         initial_state: list["ChatMessage"] | None,
+        extra_headers: Mapping[str, str] | None,
     ) -> None:
         self._client = client
         self._session_id = session_id
         self._keep = keep
         self._initial_state = initial_state
+        self._extra_headers = extra_headers
         self._session: AsyncSession | None = None
 
     async def __aenter__(self) -> AsyncSession:
+        from .errors import SessionConflict
+
         if self._session_id is None:
             created = await self._client.create_session(
-                initial_state=self._initial_state
+                initial_state=self._initial_state,
+                extra_headers=self._extra_headers,
             )
             self._session = AsyncSession(
                 self._client, created.session_id, owned=True, keep=self._keep
             )
-        else:
+            return self._session
+
+        try:
+            created = await self._client.create_session(
+                session_id=self._session_id, extra_headers=self._extra_headers
+            )
+        except SessionConflict:
             self._session = AsyncSession(
                 self._client, self._session_id, owned=False, keep=self._keep
             )
+            return self._session
+        self._session = AsyncSession(
+            self._client, created.session_id, owned=True, keep=self._keep
+        )
         return self._session
 
     async def __aexit__(self, *exc: Any) -> None:

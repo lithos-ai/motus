@@ -57,13 +57,13 @@ class ChatResult:
 
 @dataclass(frozen=True)
 class SessionEvent:
-    """Coarse session state event (emitted by the deferred chat_events() iterator).
+    """Coarse session-status event emitted by ``chat_events()``.
 
-    Kept in the public surface so the v1.1 streaming helper can ship without a
-    new public type. ``status`` is always one of the SessionStatus values.
+    Not token streaming — the server only exposes session-state transitions.
+    ``type`` is one of ``"running"``, ``"idle"``, ``"interrupted"``, ``"error"``.
     """
 
-    type: str  # "running" | "idle" | "interrupted" | "error"
+    type: str
     session_id: str
     snapshot: SessionResponse | None = None
 

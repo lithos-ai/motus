@@ -86,3 +86,29 @@ async def test_async_session_multi_turn_pinned(echo_server_url):
             r2 = await s.chat("two")
             assert "echo: one" in (r1.message.content or "")
             assert "echo: two" in (r2.message.content or "")
+
+
+def test_sync_chat_events_against_live_server(echo_server_url):
+    """chat_events yields (running, idle) for a successful turn."""
+    with Client(base_url=echo_server_url) as c:
+        events = list(c.chat_events("stream hi"))
+    types = [e.type for e in events]
+    assert types[0] == "running"
+    assert types[-1] == "idle"
+    assert "echo: stream hi" in (events[-1].snapshot.response.content or "")
+
+
+def test_sync_session_attach_to_existing_is_not_owned(echo_server_url):
+    """Against a server without --allow-custom-ids the echo server returns 405 on PUT,
+    so session(session_id=...) must raise SessionUnsupported. We instead exercise
+    the attach path by pre-creating a session and then attaching to it — which on
+    the real AgentServer is the 405 path, so this test documents that behavior."""
+    from motus.cloud import SessionUnsupported
+
+    with Client(base_url=echo_server_url) as c:
+        sess = c.create_session()
+        # Live AgentServer lacks --allow-custom-ids by default → PUT returns 405.
+        with pytest.raises(SessionUnsupported):
+            c.session(session_id=sess.session_id)
+        # Cleanup the session we created directly.
+        c.delete_session(sess.session_id)

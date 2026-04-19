@@ -11,14 +11,17 @@ import httpx
 
 from motus.serve.schemas import SessionResponse, SessionStatus
 
-from ._models import ChatResult, Interrupt
+from ._models import ChatResult, Interrupt, SessionEvent
 from ._transport import (
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_READ_RETRY_BUDGET,
     DEFAULT_SERVER_WAIT_SLICE,
     build_headers,
-    parse_session,
+    decode_json,
+    parse_session_response,
     resolve_api_key,
+    sync_poll_until_terminal,
+    sync_post_message,
     sync_request,
     sync_resume_and_poll,
     sync_send_and_poll,
@@ -103,7 +106,7 @@ class Client:
             f"{self._base_url}/health",
             headers=self._headers(extra_headers),
         )
-        return r.json()
+        return decode_json(r)
 
     def create_session(
         self,
@@ -138,7 +141,7 @@ class Client:
                 headers=self._headers(extra_headers),
                 json=body,
             )
-        return parse_session(r.json())
+        return parse_session_response(r)
 
     def get_session(
         self,
@@ -161,7 +164,7 @@ class Client:
             headers=self._headers(extra_headers),
             params=params or None,
         )
-        return parse_session(r.json())
+        return parse_session_response(r)
 
     def list_sessions(
         self, *, extra_headers: Mapping[str, str] | None = None
@@ -173,7 +176,7 @@ class Client:
             f"{self._base_url}/sessions",
             headers=self._headers(extra_headers),
         )
-        return r.json()
+        return decode_json(r)
 
     def delete_session(
         self,
@@ -210,7 +213,7 @@ class Client:
             f"{self._base_url}/sessions/{session_id}/messages",
             headers=self._headers(extra_headers),
         )
-        return r.json()
+        return decode_json(r)
 
     def send_message(
         self,
@@ -244,7 +247,7 @@ class Client:
             headers=self._headers(extra_headers),
             json=body,
         )
-        return r.json()
+        return decode_json(r)
 
     # ------------------------- high-level -------------------------
 
@@ -265,7 +268,7 @@ class Client:
         leave the server session alive for resume/inspection.
         """
         self._guard_event_loop()
-        session_id = self.create_session().session_id
+        session_id = self.create_session(extra_headers=extra_headers).session_id
         clean_idle = False
         try:
             body = self._build_message_body(
@@ -291,9 +294,67 @@ class Client:
         finally:
             if clean_idle:
                 try:
-                    self.delete_session(session_id)
+                    self.delete_session(session_id, extra_headers=extra_headers)
                 except MotusClientError as secondary:
                     logger.debug("ephemeral cleanup DELETE failed: %r", secondary)
+
+    def chat_events(
+        self,
+        content: str,
+        *,
+        turn_timeout: float | None = None,
+        role: str = "user",
+        user_params: Mapping[str, Any] | None = None,
+        webhook: Mapping[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        **message_fields: Any,
+    ):
+        """Coarse session-status iterator: yields ``SessionEvent`` objects.
+
+        First emits ``SessionEvent(type="running", ...)`` immediately after the
+        message is accepted, then long-polls and emits the terminal event
+        (``idle`` / ``interrupted`` / ``error``). This is not token streaming —
+        the server emits only status transitions.
+
+        Cleanup rules match ``Client.chat``: DELETE only on clean idle.
+        """
+        self._guard_event_loop()
+        session_id = self.create_session(extra_headers=extra_headers).session_id
+        clean_idle = False
+        try:
+            body = self._build_message_body(
+                content, role, user_params, webhook, message_fields
+            )
+            headers = self._headers(extra_headers)
+            sync_post_message(
+                self._http, self._base_url, session_id, body, headers=headers
+            )
+            yield SessionEvent(type="running", session_id=session_id, snapshot=None)
+            snapshot = sync_poll_until_terminal(
+                self._http,
+                self._base_url,
+                session_id,
+                turn_timeout=turn_timeout
+                if turn_timeout is not None
+                else self._turn_timeout,
+                server_wait_slice=self._server_wait_slice,
+                read_retry_budget=self._read_retry_budget,
+                headers=headers,
+            )
+            clean_idle = (
+                snapshot.status == SessionStatus.idle and not snapshot.interrupts
+            )
+            yield SessionEvent(
+                type=snapshot.status.value,
+                session_id=session_id,
+                snapshot=snapshot,
+            )
+        finally:
+            if clean_idle:
+                try:
+                    self.delete_session(session_id, extra_headers=extra_headers)
+                except MotusClientError as secondary:
+                    logger.debug("chat_events cleanup DELETE failed: %r", secondary)
 
     def session(
         self,
@@ -305,23 +366,38 @@ class Client:
     ) -> "Session":
         """Create or attach a pinned Session.
 
-        ``session_id=None`` creates a new server-side session (owned).
-        Passing ``session_id`` attaches to an existing one (not owned — DELETE never issued).
-        ``keep=True`` suppresses DELETE on owned sessions at close.
+        - ``session_id=None`` creates a new server-side session via POST; owned = True.
+        - ``session_id=<uuid>`` attempts owned creation via PUT /sessions/{id}:
+          - 201 Created → owned = True.
+          - 409 Conflict (session already exists) → attach; owned = False.
+          - 405 Method Not Allowed (server not started with --allow-custom-ids) →
+            raises SessionUnsupported.
+
+        ``keep=True`` suppresses DELETE on owned sessions at close; has no effect
+        when owned = False (the caller always owns attached sessions).
         """
         self._guard_event_loop()
+        from .errors import SessionConflict
         from .session import Session
 
         if session_id is not None and initial_state:
             raise ValueError(
                 "initial_state cannot be passed with an existing session_id"
             )
+
         if session_id is None:
             sid = self.create_session(
                 initial_state=initial_state, extra_headers=extra_headers
             ).session_id
             return Session(self, sid, owned=True, keep=keep)
-        return Session(self, session_id, owned=False, keep=keep)
+
+        try:
+            created = self.create_session(
+                session_id=session_id, extra_headers=extra_headers
+            )
+        except SessionConflict:
+            return Session(self, session_id, owned=False, keep=keep)
+        return Session(self, created.session_id, owned=True, keep=keep)
 
     def resume(
         self,

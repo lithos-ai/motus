@@ -97,10 +97,10 @@ def test_empty_string_api_key_disables_auth(recorder, fresh_env):
         assert "authorization" not in r.headers
 
 
-def test_per_call_extra_headers_apply_to_turn_only(recorder, fresh_env):
-    """Per-call extra_headers merge over constructor headers on the turn path
-    (POST /messages + GET poll). Session bookkeeping (POST /sessions, DELETE)
-    uses constructor headers only — they are not part of the turn."""
+def test_per_call_extra_headers_apply_to_every_request(recorder, fresh_env):
+    """Per-call extra_headers override constructor headers on every outbound
+    request within a chat() call — POST /sessions, POST /messages, GET poll,
+    and the ephemeral-cleanup DELETE all carry the per-call header."""
     transport = recorder(echo_server())
     with Client(
         base_url="http://x",
@@ -109,20 +109,12 @@ def test_per_call_extra_headers_apply_to_turn_only(recorder, fresh_env):
     ) as c:
         c.chat("hi", extra_headers={"X-Req": "p", "X-Trace": "t"})
 
-    turn_requests = [
-        r
-        for r in recorder.requests
-        if r.url.path.endswith("/messages")
-        or (r.method == "GET" and r.url.path.startswith("/sessions/"))
-    ]
-    for r in turn_requests:
+    for r in recorder.requests:
         assert r.headers["x-req"] == "p"
         assert r.headers["x-trace"] == "t"
 
-    bookkeeping = [r for r in recorder.requests if r not in turn_requests]
-    for r in bookkeeping:
-        assert r.headers["x-req"] == "c"
-        assert "x-trace" not in r.headers
+    methods = {r.method for r in recorder.requests}
+    assert {"POST", "GET", "DELETE"} <= methods
 
 
 # ---- chat lifecycle ----
