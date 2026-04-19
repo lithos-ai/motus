@@ -87,3 +87,26 @@ class HealthResponse(BaseModel):
     max_workers: int
     running_workers: int
     total_sessions: int
+
+
+class JudgeRequest(BaseModel):
+    """POST /eval/judge body — platform-triggered post-session eval."""
+
+    input: str
+    output: str
+    model: str = "claude-haiku-4-5-20251001"
+    prompt: str
+
+
+class JudgeResponse(BaseModel):
+    """Response from POST /eval/judge."""
+
+    score: float
+    passed: bool
+    reason: str = ""
+
+
+class JudgeError(BaseModel):
+    """Returned when the judge fails to produce a score."""
+
+    error: str
