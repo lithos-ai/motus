@@ -39,7 +39,7 @@ class TestJudgeLogic:
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
         result = await run_llm_judge(
-            model="claude-haiku-4-5-20251001",
+            model="claude-haiku-4-5",
             prompt="judge: {input} / {output}",
             user_input="hi",
             agent_output="hello",
@@ -51,7 +51,7 @@ class TestJudgeLogic:
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
         result = await run_llm_judge(
-            model="claude-haiku-4-5-20251001",
+            model="claude-haiku-4-5",
             prompt="judge: {input} / {output}",
             user_input="hi",
             agent_output="hello",
@@ -67,7 +67,7 @@ class TestJudgeLogic:
             assert str(request.url) == "http://model-proxy/v1/chat/completions"
             assert request.headers["authorization"] == "Bearer lithos_test"
             body = json.loads(request.content)
-            assert body["model"] == "claude-haiku-4-5-20251001"
+            assert body["model"] == "claude-haiku-4-5"
             assert "input-text" in body["messages"][0]["content"]
             assert "output-text" in body["messages"][0]["content"]
             return Response(
@@ -92,7 +92,7 @@ class TestJudgeLogic:
 
         with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
             result = await run_llm_judge(
-                model="claude-haiku-4-5-20251001",
+                model="claude-haiku-4-5",
                 prompt="input={input} output={output}",
                 user_input="input-text",
                 agent_output="output-text",
@@ -128,7 +128,7 @@ class TestJudgeLogic:
 
         with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
             result = await run_llm_judge(
-                model="claude-haiku-4-5-20251001",
+                model="claude-haiku-4-5",
                 prompt="j",
                 user_input="a",
                 agent_output="b",
@@ -225,7 +225,7 @@ class TestJudgeEndpoint:
 
     async def test_happy_path(self, client, monkeypatch):
         async def fake_judge(**kwargs):
-            assert kwargs["model"] == "claude-haiku-4-5-20251001"
+            assert kwargs["model"] == "claude-haiku-4-5"
             assert kwargs["user_input"] == "question"
             assert kwargs["agent_output"] == "answer"
             return JudgeResponse(score=0.9, passed=True, reason="great")
@@ -237,7 +237,7 @@ class TestJudgeEndpoint:
             json={
                 "input": "question",
                 "output": "answer",
-                "model": "claude-haiku-4-5-20251001",
+                "model": "claude-haiku-4-5",
                 "prompt": "prompt",
             },
         )
