@@ -1,6 +1,7 @@
 """Programmatic Python client for Motus agents (local serve and Motus Cloud)."""
 
 from ._models import ChatResult, Interrupt, SessionEvent
+from .client import Client
 from .errors import (
     AgentError,
     AmbiguousInterrupt,
@@ -16,6 +17,7 @@ from .errors import (
     SessionTimeout,
     SessionUnsupported,
 )
+from .session import Session
 
 __all__ = [
     "AgentError",
@@ -23,6 +25,7 @@ __all__ = [
     "AuthError",
     "BackendUnavailable",
     "ChatResult",
+    "Client",
     "InterruptNotFound",
     "Interrupt",
     "MotusClientError",
@@ -30,6 +33,7 @@ __all__ = [
     "ServerBusy",
     "SessionClosed",
     "SessionConflict",
+    "Session",
     "SessionEvent",
     "SessionNotFound",
     "SessionTimeout",
