@@ -314,44 +314,40 @@ class AsyncClient:
         match ``AsyncClient.chat``. This is not token streaming.
         """
         session_id = (await self.create_session(extra_headers=extra_headers)).session_id
-        clean_idle = False
-        try:
-            body: dict[str, Any] = {"role": role, "content": content}
-            if user_params:
-                body["user_params"] = dict(user_params)
-            if webhook:
-                body["webhook"] = dict(webhook)
-            body.update(message_fields)
-            headers = self._headers(extra_headers)
-            await async_post_message(
-                self._http, self._base_url, session_id, body, headers=headers
-            )
-            yield SessionEvent(type="running", session_id=session_id, snapshot=None)
-            snapshot = await async_poll_until_terminal(
-                self._http,
-                self._base_url,
-                session_id,
-                turn_timeout=turn_timeout
-                if turn_timeout is not None
-                else self._turn_timeout,
-                server_wait_slice=self._server_wait_slice,
-                read_retry_budget=self._read_retry_budget,
-                headers=headers,
-            )
-            clean_idle = (
-                snapshot.status == SessionStatus.idle and not snapshot.interrupts
-            )
-            yield SessionEvent(
-                type=snapshot.status.value,
-                session_id=session_id,
-                snapshot=snapshot,
-            )
-        finally:
-            if clean_idle:
-                try:
-                    await self.delete_session(session_id, extra_headers=extra_headers)
-                except MotusClientError as secondary:
-                    logger.debug("chat_events cleanup DELETE failed: %r", secondary)
+        body: dict[str, Any] = {"role": role, "content": content}
+        if user_params:
+            body["user_params"] = dict(user_params)
+        if webhook:
+            body["webhook"] = dict(webhook)
+        body.update(message_fields)
+        headers = self._headers(extra_headers)
+        await async_post_message(
+            self._http, self._base_url, session_id, body, headers=headers
+        )
+        yield SessionEvent(type="running", session_id=session_id, snapshot=None)
+        snapshot = await async_poll_until_terminal(
+            self._http,
+            self._base_url,
+            session_id,
+            turn_timeout=turn_timeout
+            if turn_timeout is not None
+            else self._turn_timeout,
+            server_wait_slice=self._server_wait_slice,
+            read_retry_budget=self._read_retry_budget,
+            headers=headers,
+        )
+        # Delete BEFORE yielding the terminal event so callers that stop
+        # iterating immediately don't leak the ephemeral session.
+        if snapshot.status == SessionStatus.idle and not snapshot.interrupts:
+            try:
+                await self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug("chat_events cleanup DELETE failed: %r", secondary)
+        yield SessionEvent(
+            type=snapshot.status.value,
+            session_id=session_id,
+            snapshot=snapshot,
+        )
 
     def session(
         self,
@@ -627,6 +623,25 @@ class _AsyncSessionCtx:
         self._extra_headers = extra_headers
         self._session: AsyncSession | None = None
 
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: Any,
+    ) -> None:
+        if self._session is None:
+            return
+        if exc_type is not None:
+            try:
+                await self._session.aclose()
+            except Exception as secondary:  # noqa: BLE001
+                logger.debug(
+                    "AsyncSession cleanup during exception propagation failed: %r",
+                    secondary,
+                )
+        else:
+            await self._session.aclose()
+
     async def __aenter__(self) -> AsyncSession:
         from .errors import SessionConflict, SessionNotFound
 
@@ -699,10 +714,6 @@ class _AsyncSessionCtx:
             extra_headers=self._extra_headers,
         )
         return self._session
-
-    async def __aexit__(self, *exc: Any) -> None:
-        if self._session is not None:
-            await self._session.aclose()
 
 
 __all__ = ["AsyncClient", "AsyncSession"]

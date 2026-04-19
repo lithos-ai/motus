@@ -110,3 +110,33 @@ async def test_async_chat_events_error_leaves_session_alive(fresh_env):
         types = [ev.type async for ev in c.chat_events("hi")]
     assert types == ["running", "error"]
     assert all(r.method != "DELETE" for r in rec.requests)
+
+
+def test_sync_chat_events_deletes_before_terminal_yield(recorder, fresh_env):
+    """Caller stops iterating after the terminal event → DELETE must already
+    have fired by the time the terminal SessionEvent is yielded (not deferred
+    to generator GC)."""
+    transport = recorder(echo_server())
+    with Client(base_url="http://x", transport=transport) as c:
+        gen = c.chat_events("hi")
+        first = next(gen)
+        assert first.type == "running"
+        assert all(r.method != "DELETE" for r in recorder.requests)
+        second = next(gen)
+        assert second.type == "idle"
+        # DELETE was issued synchronously inside the generator BEFORE the
+        # terminal yield, so the caller can observe it now.
+        assert any(r.method == "DELETE" for r in recorder.requests)
+
+
+@pytest.mark.asyncio
+async def test_async_chat_events_deletes_before_terminal_yield(fresh_env):
+    rec = _AsyncRecorder()
+    async with AsyncClient(base_url="http://x", transport=rec.wrap(echo_server())) as c:
+        gen = c.chat_events("hi")
+        first = await gen.__anext__()
+        assert first.type == "running"
+        assert all(r.method != "DELETE" for r in rec.requests)
+        second = await gen.__anext__()
+        assert second.type == "idle"
+        assert any(r.method == "DELETE" for r in rec.requests)

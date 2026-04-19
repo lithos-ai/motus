@@ -341,41 +341,36 @@ class Client:
         """
         self._guard_event_loop()
         session_id = self.create_session(extra_headers=extra_headers).session_id
-        clean_idle = False
-        try:
-            body = self._build_message_body(
-                content, role, user_params, webhook, message_fields
-            )
-            headers = self._headers(extra_headers)
-            sync_post_message(
-                self._http, self._base_url, session_id, body, headers=headers
-            )
-            yield SessionEvent(type="running", session_id=session_id, snapshot=None)
-            snapshot = sync_poll_until_terminal(
-                self._http,
-                self._base_url,
-                session_id,
-                turn_timeout=turn_timeout
-                if turn_timeout is not None
-                else self._turn_timeout,
-                server_wait_slice=self._server_wait_slice,
-                read_retry_budget=self._read_retry_budget,
-                headers=headers,
-            )
-            clean_idle = (
-                snapshot.status == SessionStatus.idle and not snapshot.interrupts
-            )
-            yield SessionEvent(
-                type=snapshot.status.value,
-                session_id=session_id,
-                snapshot=snapshot,
-            )
-        finally:
-            if clean_idle:
-                try:
-                    self.delete_session(session_id, extra_headers=extra_headers)
-                except MotusClientError as secondary:
-                    logger.debug("chat_events cleanup DELETE failed: %r", secondary)
+        body = self._build_message_body(
+            content, role, user_params, webhook, message_fields
+        )
+        headers = self._headers(extra_headers)
+        sync_post_message(self._http, self._base_url, session_id, body, headers=headers)
+        yield SessionEvent(type="running", session_id=session_id, snapshot=None)
+        snapshot = sync_poll_until_terminal(
+            self._http,
+            self._base_url,
+            session_id,
+            turn_timeout=turn_timeout
+            if turn_timeout is not None
+            else self._turn_timeout,
+            server_wait_slice=self._server_wait_slice,
+            read_retry_budget=self._read_retry_budget,
+            headers=headers,
+        )
+        # Delete BEFORE yielding the terminal event. If we only did it in a
+        # finally, a caller that stops iterating after the terminal event would
+        # leave the session un-deleted until the generator is GC'd.
+        if snapshot.status == SessionStatus.idle and not snapshot.interrupts:
+            try:
+                self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug("chat_events cleanup DELETE failed: %r", secondary)
+        yield SessionEvent(
+            type=snapshot.status.value,
+            session_id=session_id,
+            snapshot=snapshot,
+        )
 
     def session(
         self,

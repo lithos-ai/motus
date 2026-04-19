@@ -157,6 +157,58 @@ def test_transport_errors_wrap_as_backend_unavailable(exc_factory, fresh_env):
             c.health()
 
 
+def test_sync_session_context_exit_preserves_body_exception(fresh_env):
+    """If the ``with`` body raises and DELETE fails, the original exception
+    must still reach the caller; the cleanup failure is only logged."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.url.path == "/sessions":
+            return httpx.Response(201, json={"session_id": "s1", "status": "idle"})
+        if req.method == "DELETE":
+            return httpx.Response(503, json={"detail": "busy"})
+        return httpx.Response(404)
+
+    with Client(base_url="http://x", transport=httpx.MockTransport(handler)) as c:
+        with pytest.raises(ValueError, match="primary"):
+            with c.session():
+                raise ValueError("primary")
+
+
+def test_sync_session_explicit_close_still_propagates(fresh_env):
+    """Outside a context manager, explicit close() continues to propagate
+    the cleanup failure (unchanged R7 contract)."""
+    from motus.cloud import ServerBusy
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.url.path == "/sessions":
+            return httpx.Response(201, json={"session_id": "s1", "status": "idle"})
+        if req.method == "DELETE":
+            return httpx.Response(503, json={"detail": "busy"})
+        return httpx.Response(404)
+
+    with Client(base_url="http://x", transport=httpx.MockTransport(handler)) as c:
+        sess = c.session()
+        with pytest.raises(ServerBusy):
+            sess.close()
+
+
+@pytest.mark.asyncio
+async def test_async_session_context_exit_preserves_body_exception(fresh_env):
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.url.path == "/sessions":
+            return httpx.Response(201, json={"session_id": "s1", "status": "idle"})
+        if req.method == "DELETE":
+            return httpx.Response(503, json={"detail": "busy"})
+        return httpx.Response(404)
+
+    async with AsyncClient(
+        base_url="http://x", transport=httpx.MockTransport(handler)
+    ) as c:
+        with pytest.raises(ValueError, match="primary"):
+            async with c.session():
+                raise ValueError("primary")
+
+
 def test_injected_http_client_timeout_is_honored_for_waits(fresh_env):
     """When http_client=... is injected, get_session(wait=True, timeout=N)
     must derive the per-call override from the injected client's actual

@@ -82,8 +82,27 @@ class Session:
     def __enter__(self) -> "Session":
         return self
 
-    def __exit__(self, *exc: Any) -> None:
-        self.close()
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: Any,
+    ) -> None:
+        # If the body already raised, do best-effort cleanup and never mask the
+        # original exception with a secondary cleanup failure. Explicit
+        # ``session.close()`` still propagates — only the context-manager exit
+        # path swallows cleanup errors when there is already an exception in
+        # flight.
+        if exc_type is not None:
+            try:
+                self.close()
+            except Exception as secondary:  # noqa: BLE001
+                logger.debug(
+                    "Session cleanup during exception propagation failed: %r",
+                    secondary,
+                )
+        else:
+            self.close()
 
     def _merged_headers(
         self, per_call: Mapping[str, str] | None
