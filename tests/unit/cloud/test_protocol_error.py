@@ -56,10 +56,40 @@ def test_sync_send_message_rejects_non_json(fresh_env):
 
 
 def test_sync_health_rejects_schema_violation(fresh_env):
-    transport = _always(httpx.Response(200, json={}))  # missing required fields
+    transport = _always(httpx.Response(200, json={}))  # missing required `status`
     with Client(base_url="http://x", transport=transport) as c:
         with pytest.raises(ProtocolError):
             c.health()
+
+
+def test_sync_health_accepts_cloud_minimal_shape(fresh_env):
+    """Motus Cloud only guarantees `status`; worker counters are local-only."""
+    transport = _always(httpx.Response(200, json={"status": "ok"}))
+    with Client(base_url="http://x", transport=transport) as c:
+        h = c.health()
+    assert h == {"status": "ok"}
+
+
+def test_sync_health_accepts_local_full_shape(fresh_env):
+    transport = _always(
+        httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "max_workers": 4,
+                "running_workers": 1,
+                "total_sessions": 2,
+            },
+        )
+    )
+    with Client(base_url="http://x", transport=transport) as c:
+        h = c.health()
+    assert h == {
+        "status": "ok",
+        "max_workers": 4,
+        "running_workers": 1,
+        "total_sessions": 2,
+    }
 
 
 def test_sync_list_sessions_rejects_schema_violation(fresh_env):

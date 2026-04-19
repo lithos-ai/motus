@@ -11,7 +11,6 @@ from pydantic import TypeAdapter
 
 from motus.models import ChatMessage
 from motus.serve.schemas import (
-    HealthResponse,
     MessageResponse,
     SessionResponse,
     SessionStatus,
@@ -23,6 +22,7 @@ from ._transport import (
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_READ_RETRY_BUDGET,
     DEFAULT_SERVER_WAIT_SLICE,
+    CloudHealthResponse,
     async_poll_until_terminal,
     async_post_message,
     async_request,
@@ -127,7 +127,7 @@ class AsyncClient:
             f"{self._base_url}/health",
             headers=self._headers(extra_headers),
         )
-        return decode_json_validated(r, HealthResponse)
+        return decode_json_validated(r, CloudHealthResponse)
 
     async def create_session(
         self,

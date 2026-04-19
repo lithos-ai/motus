@@ -221,7 +221,7 @@ Cleanup matches `chat()`: the ephemeral session is deleted only on a clean `idle
 
 For use cases that do not fit `chat()` or `session()`, the full REST surface is exposed as thin, typed wrappers:
 
-* `client.health()` returns `{status, max_workers, running_workers, total_sessions}`.
+* `client.health()` returns the health payload. `status` is always present. The worker counters (`max_workers`, `running_workers`, `total_sessions`) are included by local `motus serve` and omitted by Motus Cloud, which abstracts workers away.
 * `client.create_session(session_id=?, initial_state=?)` returns a `SessionResponse`.
 * `client.get_session(session_id, wait=?, timeout=?)` returns a `SessionResponse`, supporting server-side long-polling.
 * `client.list_sessions()` returns the raw list of session dicts.

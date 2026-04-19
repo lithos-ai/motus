@@ -7,9 +7,23 @@ import time
 from typing import Any, Awaitable, Callable, Mapping
 
 import httpx
+from pydantic import BaseModel
 
 from motus.auth.credentials import get_api_key
 from motus.serve.schemas import SessionResponse, SessionStatus
+
+
+class CloudHealthResponse(BaseModel):
+    """Health payload as returned by both local motus serve and Motus Cloud.
+
+    Only `status` is guaranteed across environments. Local `motus serve` fills in
+    the worker counters; Motus Cloud abstracts workers away and returns just status.
+    """
+
+    status: str
+    max_workers: int | None = None
+    running_workers: int | None = None
+    total_sessions: int | None = None
 
 from .errors import (
     AgentError,
