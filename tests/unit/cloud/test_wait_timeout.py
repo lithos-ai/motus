@@ -60,3 +60,77 @@ async def test_async_get_session_wait_overrides_read_timeout(fresh_env):
     t = captured["timeout"]
     assert t is not None
     assert t["read"] >= 300.0
+
+
+def test_sync_poll_loop_uses_override_for_long_wait_slices(fresh_env):
+    """server_wait_slice larger than http_timeout.read must NOT trip the
+    client — each poll GET has its read deadline raised to cover the wait."""
+    poll_timeouts: list[float] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.url.path == "/sessions":
+            return httpx.Response(201, json={"session_id": "s1", "status": "idle"})
+        if req.method == "POST" and req.url.path.endswith("/messages"):
+            return httpx.Response(202, json={"session_id": "s1", "status": "running"})
+        if req.method == "GET" and req.url.path.startswith("/sessions/"):
+            t = req.extensions.get("timeout") or {}
+            poll_timeouts.append(float(t.get("read") or 0.0))
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "s1",
+                    "status": "idle",
+                    "response": {"role": "assistant", "content": "ok"},
+                },
+            )
+        if req.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    with Client(
+        base_url="http://x",
+        transport=httpx.MockTransport(handler),
+        http_timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+        server_wait_slice=200.0,  # deliberately larger than the 30s read
+    ) as c:
+        c.chat("hi")
+
+    assert poll_timeouts, "poll GET was never invoked"
+    # Every poll GET should have a read timeout at least as large as the wait slice.
+    assert all(rt >= 200.0 for rt in poll_timeouts), poll_timeouts
+
+
+@pytest.mark.asyncio
+async def test_async_poll_loop_uses_override_for_long_wait_slices(fresh_env):
+    poll_timeouts: list[float] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.url.path == "/sessions":
+            return httpx.Response(201, json={"session_id": "s1", "status": "idle"})
+        if req.method == "POST" and req.url.path.endswith("/messages"):
+            return httpx.Response(202, json={"session_id": "s1", "status": "running"})
+        if req.method == "GET" and req.url.path.startswith("/sessions/"):
+            t = req.extensions.get("timeout") or {}
+            poll_timeouts.append(float(t.get("read") or 0.0))
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "s1",
+                    "status": "idle",
+                    "response": {"role": "assistant", "content": "ok"},
+                },
+            )
+        if req.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    async with AsyncClient(
+        base_url="http://x",
+        transport=httpx.MockTransport(handler),
+        http_timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+        server_wait_slice=200.0,
+    ) as c:
+        await c.chat("hi")
+
+    assert poll_timeouts
+    assert all(rt >= 200.0 for rt in poll_timeouts), poll_timeouts

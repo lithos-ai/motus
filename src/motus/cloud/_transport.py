@@ -205,11 +205,13 @@ def sync_poll_until_terminal(
                 last_snapshot=last_snapshot,
             )
         wait = _wait_for(deadline, server_wait_slice)
+        per_call_timeout = wait_http_timeout(http.timeout, wait)
         try:
             r = http.get(
                 _session_url(base_url, session_id),
                 params={"wait": "true", "timeout": wait},
                 headers=headers,
+                timeout=per_call_timeout,
             )
         except httpx.TimeoutException as e:
             consecutive_read_timeouts += 1
@@ -359,11 +361,13 @@ async def async_poll_until_terminal(
                 last_snapshot=last_snapshot,
             )
         wait = _wait_for(deadline, server_wait_slice)
+        per_call_timeout = wait_http_timeout(http.timeout, wait)
         try:
             r = await http.get(
                 _session_url(base_url, session_id),
                 params={"wait": "true", "timeout": wait},
                 headers=headers,
+                timeout=per_call_timeout,
             )
         except httpx.TimeoutException as e:
             consecutive_read_timeouts += 1

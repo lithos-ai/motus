@@ -295,7 +295,11 @@ class Client:
             interrupts = _interrupts_of(snapshot)
             clean_idle = snapshot.status == SessionStatus.idle and not interrupts
             return self._result(
-                snapshot, session_id, interrupts, extra_headers=extra_headers
+                snapshot,
+                session_id,
+                interrupts,
+                extra_headers=extra_headers,
+                ephemeral=True,
             )
         finally:
             if clean_idle:
@@ -488,16 +492,19 @@ class Client:
         interrupts: list[Interrupt],
         *,
         extra_headers: Mapping[str, str] | None = None,
+        ephemeral: bool = False,
     ) -> ChatResult:
         def _resumer(value: Any) -> ChatResult:
-            return self.resume(
-                session_id,
-                interrupts[0].id if interrupts else "",
-                value,
-                extra_headers=extra_headers,
-            )
+            iid = interrupts[0].id
+            if ephemeral:
+                sub = self._resume_ephemeral(
+                    session_id, iid, value, extra_headers=extra_headers
+                )
+            else:
+                sub = self.resume(session_id, iid, value, extra_headers=extra_headers)
+            return sub
 
-        result = ChatResult(
+        return ChatResult(
             message=snapshot.response,
             interrupts=interrupts,
             session_id=session_id,
@@ -505,6 +512,40 @@ class Client:
             snapshot=snapshot,
             _resumer=_resumer if interrupts else None,
         )
+
+    def _resume_ephemeral(
+        self,
+        session_id: str,
+        interrupt_id: str,
+        value: Any,
+        *,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> ChatResult:
+        """Resume an interrupted ephemeral chat, deleting on clean idle.
+
+        Propagates the ``ephemeral`` flag through the returned ChatResult's
+        resumer so long chains of interrupts still clean up on final idle.
+        """
+        result = self.resume(
+            session_id, interrupt_id, value, extra_headers=extra_headers
+        )
+        clean_idle = result.status == SessionStatus.idle and not result.interrupts
+        if clean_idle:
+            try:
+                self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug("ephemeral cleanup DELETE failed: %r", secondary)
+            return result
+
+        # Rebuild with an ephemeral-aware resumer so the next hop still deletes.
+        if result.interrupts:
+            return self._result(
+                result.snapshot,
+                session_id,
+                list(result.interrupts),
+                extra_headers=extra_headers,
+                ephemeral=True,
+            )
         return result
 
 

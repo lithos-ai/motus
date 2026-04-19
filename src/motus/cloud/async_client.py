@@ -267,7 +267,11 @@ class AsyncClient:
             interrupts = [Interrupt.from_info(i) for i in (snapshot.interrupts or [])]
             clean_idle = snapshot.status == SessionStatus.idle and not interrupts
             return self._result(
-                snapshot, session_id, interrupts, extra_headers=extra_headers
+                snapshot,
+                session_id,
+                interrupts,
+                extra_headers=extra_headers,
+                ephemeral=True,
             )
         finally:
             if clean_idle:
@@ -391,13 +395,16 @@ class AsyncClient:
         interrupts: list[Interrupt],
         *,
         extra_headers: Mapping[str, str] | None = None,
+        ephemeral: bool = False,
     ) -> ChatResult:
-        def _resumer(value: Any):
-            return self.resume(
-                session_id,
-                interrupts[0].id if interrupts else "",
-                value,
-                extra_headers=extra_headers,
+        async def _resumer(value: Any):
+            iid = interrupts[0].id
+            if ephemeral:
+                return await self._resume_ephemeral(
+                    session_id, iid, value, extra_headers=extra_headers
+                )
+            return await self.resume(
+                session_id, iid, value, extra_headers=extra_headers
             )
 
         return ChatResult(
@@ -408,6 +415,34 @@ class AsyncClient:
             snapshot=snapshot,
             _resumer=_resumer if interrupts else None,
         )
+
+    async def _resume_ephemeral(
+        self,
+        session_id: str,
+        interrupt_id: str,
+        value: Any,
+        *,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> ChatResult:
+        result = await self.resume(
+            session_id, interrupt_id, value, extra_headers=extra_headers
+        )
+        clean_idle = result.status == SessionStatus.idle and not result.interrupts
+        if clean_idle:
+            try:
+                await self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug("ephemeral cleanup DELETE failed: %r", secondary)
+            return result
+        if result.interrupts:
+            return self._result(
+                result.snapshot,
+                session_id,
+                list(result.interrupts),
+                extra_headers=extra_headers,
+                ephemeral=True,
+            )
+        return result
 
 
 class AsyncSession:
