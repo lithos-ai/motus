@@ -718,7 +718,7 @@ class TestCompactionMemoryRestore(unittest.IsolatedAsyncioTestCase):
 
     async def test_restore_basic(self):
         """Restored memory should have the same messages."""
-        original = await self._create_session_with_messages()
+        await self._create_session_with_messages()
 
         restored = CompactionMemory.restore_from_log(
             session_id="restore-test",
