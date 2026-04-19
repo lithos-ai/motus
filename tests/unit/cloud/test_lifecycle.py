@@ -136,3 +136,52 @@ def test_backend_unavailable_still_raised_for_network_failure_on_close(
         with pytest.raises(BackendUnavailable):
             sess.close()
         assert not sess.closed
+
+
+@pytest.mark.parametrize(
+    "exc_factory",
+    [
+        lambda req: httpx.WriteError("write boom", request=req),
+        lambda req: httpx.RemoteProtocolError("proto boom", request=req),
+        lambda req: httpx.ProxyError("proxy boom", request=req),
+    ],
+)
+def test_transport_errors_wrap_as_backend_unavailable(exc_factory, fresh_env):
+    """Any httpx TransportError subclass must become MotusClientError (no leak)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise exc_factory(req)
+
+    with Client(base_url="http://x", transport=httpx.MockTransport(handler)) as c:
+        with pytest.raises(BackendUnavailable):
+            c.health()
+
+
+def test_injected_http_client_timeout_is_honored_for_waits(fresh_env):
+    """When http_client=... is injected, get_session(wait=True, timeout=N)
+    must derive the per-call override from the injected client's actual
+    timeout — not from the SDK's default."""
+    captured: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["timeout"] = req.extensions.get("timeout")
+        return httpx.Response(200, json={"session_id": "s1", "status": "idle"})
+
+    # Injected client configured with read=5s (below the SDK default of 120).
+    injected = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        timeout=httpx.Timeout(connect=3.0, read=5.0, write=3.0, pool=3.0),
+    )
+    with Client(base_url="http://x", http_client=injected) as c:
+        c.get_session("s1", wait=True, timeout=300.0)
+
+    t = captured["timeout"]
+    assert t is not None
+    # Per-call override must respect the INJECTED read floor, not the SDK default.
+    # We only verify the upper bound: connect/write/pool come from the injected
+    # client (3.0), NOT from the SDK default (5.0 / 10.0 / 5.0).
+    assert t["connect"] == 3.0
+    assert t["write"] == 3.0
+    assert t["pool"] == 3.0
+    # And the read was extended to cover the 300s wait.
+    assert t["read"] >= 300.0

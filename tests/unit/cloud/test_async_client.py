@@ -105,22 +105,41 @@ async def test_async_401_maps_to_auth_error(fresh_env):
             await c.health()
 
 
-async def test_async_session_id_plus_empty_initial_state_rejected(fresh_env):
-    """Any explicit initial_state (including []) with session_id raises before I/O."""
+async def test_async_session_id_with_initial_state_routes_to_put(fresh_env):
+    """Async counterpart: passing initial_state with session_id goes direct to PUT."""
     import uuid
+
+    from motus.models import ChatMessage
 
     seen: list[httpx.Request] = []
 
-    def handler(req):
+    def handler(req: httpx.Request) -> httpx.Response:
         seen.append(req)
-        return httpx.Response(200)
+        if req.method == "PUT":
+            return httpx.Response(
+                201,
+                json={
+                    "session_id": req.url.path.rsplit("/", 1)[-1],
+                    "status": "idle",
+                },
+            )
+        if req.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(404)
 
+    sid = str(uuid.uuid4())
     async with AsyncClient(
         base_url="http://x", transport=httpx.MockTransport(handler)
     ) as c:
-        with pytest.raises(ValueError):
-            c.session(session_id=str(uuid.uuid4()), initial_state=[])
-    assert seen == []
+        async with c.session(
+            session_id=sid, initial_state=[ChatMessage.user_message("seed")]
+        ) as s:
+            assert s.owned
+            assert s.session_id == sid
+
+    methods = {(r.method, r.url.path) for r in seen}
+    assert ("PUT", f"/sessions/{sid}") in methods
+    assert not any(r.method == "GET" and r.url.path == f"/sessions/{sid}" for r in seen)
 
 
 async def test_asyncio_gather_runs_ten_chats_independently(fresh_env):

@@ -220,7 +220,7 @@ def sync_poll_until_terminal(
                     f"poll read timeout retries exhausted ({read_retry_budget})"
                 ) from e
             continue
-        except (httpx.ConnectError, httpx.ReadError) as e:
+        except httpx.TransportError as e:
             raise BackendUnavailable(str(e)) from e
 
         if r.is_error:
@@ -252,7 +252,7 @@ def sync_post_message(
         )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"message POST timeout: {e}") from e
-    except (httpx.ConnectError, httpx.ReadError) as e:
+    except httpx.TransportError as e:
         raise map_transport_error(e) from e
     if r.is_error:
         raise map_status_error(r)
@@ -276,7 +276,7 @@ def sync_send_and_poll(
         )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"message POST timeout: {e}") from e
-    except (httpx.ConnectError, httpx.ReadError) as e:
+    except httpx.TransportError as e:
         raise map_transport_error(e) from e
     if r.is_error:
         raise map_status_error(r)
@@ -312,7 +312,7 @@ def sync_resume_and_poll(
         )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"resume POST timeout: {e}") from e
-    except (httpx.ConnectError, httpx.ReadError) as e:
+    except httpx.TransportError as e:
         raise map_transport_error(e) from e
     if r.is_error:
         raise map_status_error(r, is_resume=True)
@@ -376,7 +376,7 @@ async def async_poll_until_terminal(
                     f"poll read timeout retries exhausted ({read_retry_budget})"
                 ) from e
             continue
-        except (httpx.ConnectError, httpx.ReadError) as e:
+        except httpx.TransportError as e:
             raise BackendUnavailable(str(e)) from e
 
         if r.is_error:
@@ -408,7 +408,7 @@ async def async_post_message(
         )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"message POST timeout: {e}") from e
-    except (httpx.ConnectError, httpx.ReadError) as e:
+    except httpx.TransportError as e:
         raise map_transport_error(e) from e
     if r.is_error:
         raise map_status_error(r)
@@ -431,7 +431,7 @@ async def async_send_and_poll(
         )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"message POST timeout: {e}") from e
-    except (httpx.ConnectError, httpx.ReadError) as e:
+    except httpx.TransportError as e:
         raise map_transport_error(e) from e
     if r.is_error:
         raise map_status_error(r)
@@ -466,7 +466,7 @@ async def async_resume_and_poll(
         )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"resume POST timeout: {e}") from e
-    except (httpx.ConnectError, httpx.ReadError) as e:
+    except httpx.TransportError as e:
         raise map_transport_error(e) from e
     if r.is_error:
         raise map_status_error(r, is_resume=True)
@@ -505,7 +505,7 @@ def sync_request(
         )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"{method} {url} timeout: {e}") from e
-    except (httpx.ConnectError, httpx.ReadError) as e:
+    except httpx.TransportError as e:
         raise map_transport_error(e) from e
     if r.is_error:
         raise map_status_error(r, is_resume=is_resume)
@@ -529,7 +529,7 @@ async def async_request(
         )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"{method} {url} timeout: {e}") from e
-    except (httpx.ConnectError, httpx.ReadError) as e:
+    except httpx.TransportError as e:
         raise map_transport_error(e) from e
     if r.is_error:
         raise map_status_error(r, is_resume=is_resume)

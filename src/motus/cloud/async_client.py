@@ -163,7 +163,9 @@ class AsyncClient:
             params["wait"] = "true"
             if timeout is not None:
                 params["timeout"] = str(timeout)
-                http_timeout = wait_http_timeout(self._http_timeout, timeout)
+                # Use the live client's effective timeout so caller-injected
+                # http_client settings are honored.
+                http_timeout = wait_http_timeout(self._http.timeout, timeout)
         r = await async_request(
             self._http,
             "GET",
@@ -364,10 +366,6 @@ class AsyncClient:
         See Client.session() for the custom-ID ownership rules. Creation happens
         on ``__aenter__`` so the caller can ``async with client.session() as s:``.
         """
-        if session_id is not None and initial_state is not None:
-            raise ValueError(
-                "initial_state cannot be passed with an existing session_id"
-            )
         return _AsyncSessionCtx(self, session_id, keep, initial_state, extra_headers)
 
     async def resume(
@@ -634,6 +632,22 @@ class _AsyncSessionCtx:
 
         if self._session_id is None:
             created = await self._client.create_session(
+                initial_state=self._initial_state,
+                extra_headers=self._extra_headers,
+            )
+            self._session = AsyncSession(
+                self._client,
+                created.session_id,
+                owned=True,
+                keep=self._keep,
+                extra_headers=self._extra_headers,
+            )
+            return self._session
+
+        # Explicit create-with-seed: skip GET-first, go direct to PUT.
+        if self._initial_state is not None:
+            created = await self._client.create_session(
+                session_id=self._session_id,
                 initial_state=self._initial_state,
                 extra_headers=self._extra_headers,
             )

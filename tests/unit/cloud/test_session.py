@@ -74,28 +74,49 @@ def test_attach_with_keep_true_still_does_not_delete(recorder, fresh_env, new_uu
     assert [r for r in recorder.requests if r.method == "DELETE"] == []
 
 
-def test_session_id_plus_non_empty_initial_state_rejected(fresh_env, new_uuid):
+def test_session_id_with_initial_state_routes_to_put_create(
+    recorder, fresh_env, new_uuid
+):
+    """Passing both session_id and initial_state signals create-with-seed,
+    so the client skips GET-first attach and goes directly to PUT."""
     from motus.models import ChatMessage
 
-    with Client(
-        base_url="http://x",
-        transport=httpx.MockTransport(lambda r: httpx.Response(200)),
-    ) as c:
-        with pytest.raises(ValueError):
+    transport = recorder(echo_server(custom_id_mode="created"))
+    sid = new_uuid()
+    with Client(base_url="http://x", transport=transport) as c:
+        with c.session(
+            session_id=sid, initial_state=[ChatMessage.user_message("seed")]
+        ) as s:
+            assert s.owned
+            assert s.session_id == sid
+
+    # No attach GET was issued; a PUT was.
+    methods = {(r.method, r.url.path) for r in recorder.requests}
+    assert ("PUT", f"/sessions/{sid}") in methods
+    assert not any(
+        r.method == "GET" and r.url.path == f"/sessions/{sid}"
+        for r in recorder.requests
+    )
+
+
+def test_session_id_with_initial_state_conflict_raises(recorder, fresh_env, new_uuid):
+    """If the server already has that session_id, PUT returns 409 and we
+    surface SessionConflict — the seed cannot be applied."""
+    from motus.cloud import SessionConflict
+    from motus.models import ChatMessage
+
+    def handler(req):
+        if req.method == "PUT":
+            return httpx.Response(409, json={"detail": "Session already exists"})
+        return httpx.Response(404)
+
+    transport = recorder(handler)
+    with Client(base_url="http://x", transport=transport) as c:
+        with pytest.raises(SessionConflict):
             c.session(
                 session_id=new_uuid(),
                 initial_state=[ChatMessage.user_message("seed")],
             )
-
-
-def test_session_id_plus_empty_initial_state_rejected(recorder, fresh_env, new_uuid):
-    """Any explicit initial_state (including []) with session_id is invalid."""
-    transport = recorder(lambda req: httpx.Response(200))
-    with Client(base_url="http://x", transport=transport) as c:
-        with pytest.raises(ValueError):
-            c.session(session_id=new_uuid(), initial_state=[])
-    # No HTTP request issued — the guard runs before any network I/O.
-    assert recorder.requests == []
 
 
 def test_chat_after_close_raises(recorder, fresh_env):

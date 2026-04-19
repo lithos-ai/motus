@@ -168,7 +168,9 @@ class Client:
             params["wait"] = "true"
             if timeout is not None:
                 params["timeout"] = str(timeout)
-                http_timeout = wait_http_timeout(self._http_timeout, timeout)
+                # Use the live client's effective timeout so caller-injected
+                # http_client settings are honored.
+                http_timeout = wait_http_timeout(self._http.timeout, timeout)
         r = sync_request(
             self._http,
             "GET",
@@ -404,17 +406,29 @@ class Client:
         from .errors import SessionConflict, SessionNotFound
         from .session import Session
 
-        if session_id is not None and initial_state is not None:
-            raise ValueError(
-                "initial_state cannot be passed with an existing session_id"
-            )
-
         if session_id is None:
             sid = self.create_session(
                 initial_state=initial_state, extra_headers=extra_headers
             ).session_id
             return Session(
                 self, sid, owned=True, keep=keep, extra_headers=extra_headers
+            )
+
+        # Explicit create-with-seed: skip GET-first, go direct to PUT.
+        # A pre-existing session bubbles up as SessionConflict so the caller
+        # knows their seed could not be applied.
+        if initial_state is not None:
+            created = self.create_session(
+                session_id=session_id,
+                initial_state=initial_state,
+                extra_headers=extra_headers,
+            )
+            return Session(
+                self,
+                created.session_id,
+                owned=True,
+                keep=keep,
+                extra_headers=extra_headers,
             )
 
         try:
