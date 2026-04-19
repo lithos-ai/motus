@@ -197,9 +197,9 @@ except MotusClientError as exc:
     )
 ```
 
-## Streaming session status
+## Session status events
 
-Token-level streaming is not available (the server does not emit per-token events), but `chat_events()` exposes the coarser session status transitions as a generator:
+`chat_events()` exposes session status transitions as a generator, so you can react to each phase of a turn without blocking on the full result:
 
 ```python
 for event in c.chat_events("please run the pipeline"):
