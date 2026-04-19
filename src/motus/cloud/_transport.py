@@ -12,19 +12,6 @@ from pydantic import BaseModel
 from motus.auth.credentials import get_api_key
 from motus.serve.schemas import SessionResponse, SessionStatus
 
-
-class CloudHealthResponse(BaseModel):
-    """Health payload as returned by both local motus serve and Motus Cloud.
-
-    Only `status` is guaranteed across environments. Local `motus serve` fills in
-    the worker counters; Motus Cloud abstracts workers away and returns just status.
-    """
-
-    status: str
-    max_workers: int | None = None
-    running_workers: int | None = None
-    total_sessions: int | None = None
-
 from .errors import (
     AgentError,
     AuthError,
@@ -40,6 +27,20 @@ from .errors import (
     SessionTimeout,
     SessionUnsupported,
 )
+
+
+class CloudHealthResponse(BaseModel):
+    """Health payload as returned by both local motus serve and Motus Cloud.
+
+    Only `status` is guaranteed across environments. Local `motus serve` fills in
+    the worker counters; Motus Cloud abstracts workers away and returns just status.
+    """
+
+    status: str
+    max_workers: int | None = None
+    running_workers: int | None = None
+    total_sessions: int | None = None
+
 
 USER_AGENT_PREFIX = "motus-client"
 DEFAULT_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)
