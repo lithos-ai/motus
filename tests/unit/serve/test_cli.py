@@ -221,3 +221,34 @@ def test_send_and_wait_helper_removed():
     assert not hasattr(cli_mod, "_send_and_wait")
     assert not hasattr(cli_mod, "_auth_headers")
     assert not hasattr(cli_mod, "_api_call")
+
+
+def test_chat_session_flag_rejects_missing_session(auto_transport, capsys):
+    """`motus serve chat --session <typo>` must surface 'session not found', not
+    silently create a new one or raise 'custom IDs not enabled'."""
+    import uuid
+
+    seen_methods: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen_methods.append(req.method)
+        if req.method == "GET" and req.url.path.startswith("/sessions/"):
+            return httpx.Response(404, json={"detail": "Session not found"})
+        # No other endpoint should be hit for a missing --session.
+        return httpx.Response(500, json={"detail": "unexpected"})
+
+    auto_transport["set"](handler)
+    args = SimpleNamespace(
+        url="http://x",
+        message="hi",
+        session=str(uuid.uuid4()),
+        keep=False,
+        params=None,
+    )
+    with pytest.raises(SystemExit) as ei:
+        cli_mod.chat_command(args)
+    assert ei.value.code == 1
+    out = capsys.readouterr().out
+    assert "not found" in out
+    # No POST/PUT/DELETE should have been issued.
+    assert set(seen_methods) <= {"GET"}

@@ -180,16 +180,30 @@ def _run_turn(session, content: str, params: dict | None) -> None:
 
 def chat_command(args) -> None:
     """Chat with the agent via the sessions API (delegates to motus.cloud)."""
-    from motus.cloud import MotusClientError
+    from motus.cloud import MotusClientError, Session, SessionNotFound
 
     params = _parse_params(args.params)
     client = _make_client(args.url)
     try:
         try:
-            session = client.session(
-                session_id=args.session,
-                keep=bool(args.keep),
-            )
+            if args.session:
+                # --session means "resume an existing conversation". Verify the
+                # session actually exists before attaching so a typo surfaces
+                # as "session not found" instead of silently creating a new
+                # session or raising a misleading custom-ID error.
+                try:
+                    client.get_session(args.session)
+                except SessionNotFound:
+                    print(f"Error: session {args.session} not found")
+                    sys.exit(1)
+                session = Session(
+                    client,
+                    args.session,
+                    owned=False,
+                    keep=bool(args.keep),
+                )
+            else:
+                session = client.session(keep=bool(args.keep))
         except MotusClientError as e:
             _handle_client_error("Error creating session", e)
             return  # for type-checkers; _handle_client_error exits

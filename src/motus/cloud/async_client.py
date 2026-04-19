@@ -25,6 +25,7 @@ from ._transport import (
     parse_session_response,
     resolve_api_key,
     validate_base_url,
+    wait_http_timeout,
 )
 from .errors import AgentError, MotusClientError, SessionClosed, SessionNotFound
 
@@ -142,16 +143,19 @@ class AsyncClient:
         extra_headers: Mapping[str, str] | None = None,
     ) -> SessionResponse:
         params: dict[str, Any] = {}
+        http_timeout: Any = httpx.USE_CLIENT_DEFAULT
         if wait:
             params["wait"] = "true"
-        if timeout is not None:
-            params["timeout"] = str(timeout)
+            if timeout is not None:
+                params["timeout"] = str(timeout)
+                http_timeout = wait_http_timeout(self._http_timeout, timeout)
         r = await async_request(
             self._http,
             "GET",
             f"{self._base_url}/sessions/{session_id}",
             headers=self._headers(extra_headers),
             params=params or None,
+            timeout=http_timeout,
         )
         return parse_session_response(r)
 
@@ -262,7 +266,9 @@ class AsyncClient:
                 raise AgentError(snapshot.error or "agent error", session_id=session_id)
             interrupts = [Interrupt.from_info(i) for i in (snapshot.interrupts or [])]
             clean_idle = snapshot.status == SessionStatus.idle and not interrupts
-            return self._result(snapshot, session_id, interrupts)
+            return self._result(
+                snapshot, session_id, interrupts, extra_headers=extra_headers
+            )
         finally:
             if clean_idle:
                 try:
@@ -373,6 +379,7 @@ class AsyncClient:
             snapshot,
             session_id,
             [Interrupt.from_info(i) for i in (snapshot.interrupts or [])],
+            extra_headers=extra_headers,
         )
 
     # ------------------------- helpers -------------------------
@@ -382,28 +389,25 @@ class AsyncClient:
         snapshot: SessionResponse,
         session_id: str,
         interrupts: list[Interrupt],
+        *,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> ChatResult:
-        result = ChatResult(
+        def _resumer(value: Any):
+            return self.resume(
+                session_id,
+                interrupts[0].id if interrupts else "",
+                value,
+                extra_headers=extra_headers,
+            )
+
+        return ChatResult(
             message=snapshot.response,
             interrupts=interrupts,
             session_id=session_id,
             status=snapshot.status,
             snapshot=snapshot,
+            _resumer=_resumer if interrupts else None,
         )
-        # Use the sync-facing convenience only when resume() is sync.
-        # For async, callers should prefer ``await client.resume(...)``.
-        result._client = _AsyncResumeAdapter(self)
-        return result
-
-
-class _AsyncResumeAdapter:
-    """Adapter so ChatResult.resume(value) returns an awaitable for AsyncClient."""
-
-    def __init__(self, client: AsyncClient) -> None:
-        self._client = client
-
-    def resume(self, session_id: str, interrupt_id: str, value: Any):
-        return self._client.resume(session_id, interrupt_id, value)
 
 
 class AsyncSession:
@@ -502,15 +506,7 @@ class AsyncSession:
                 snapshot.error or "agent error", session_id=self._session_id
             )
         interrupts = [Interrupt.from_info(i) for i in (snapshot.interrupts or [])]
-        result = ChatResult(
-            message=snapshot.response,
-            interrupts=interrupts,
-            session_id=self._session_id,
-            status=snapshot.status,
-            snapshot=snapshot,
-        )
-        result._client = _AsyncResumeAdapter(self._client)
-        return result
+        return self._make_result(snapshot, interrupts, per_call_headers=extra_headers)
 
     async def resume(
         self,
@@ -522,12 +518,39 @@ class AsyncSession:
     ) -> ChatResult:
         if self._closed:
             raise SessionClosed(f"session {self._session_id} is closed")
-        return await self._client.resume(
+        # self._client.resume already returns a ChatResult whose _resumer uses
+        # client-scoped headers; we rebuild it here so session-scoped headers
+        # survive into any subsequent result.resume().
+        result = await self._client.resume(
             self._session_id,
             interrupt_id,
             value,
             turn_timeout=turn_timeout,
             extra_headers=self._merged_headers(extra_headers),
+        )
+        return self._make_result(
+            result.snapshot, list(result.interrupts), per_call_headers=extra_headers
+        )
+
+    def _make_result(
+        self,
+        snapshot,
+        interrupts: list[Interrupt],
+        *,
+        per_call_headers: Mapping[str, str] | None,
+    ):
+        async def _resumer(value: Any):
+            return await self.resume(
+                interrupts[0].id, value, extra_headers=per_call_headers
+            )
+
+        return ChatResult(
+            message=snapshot.response if snapshot is not None else None,
+            interrupts=interrupts,
+            session_id=self._session_id,
+            status=snapshot.status if snapshot is not None else SessionStatus.idle,
+            snapshot=snapshot,
+            _resumer=_resumer if interrupts else None,
         )
 
 

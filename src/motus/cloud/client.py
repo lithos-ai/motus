@@ -26,6 +26,7 @@ from ._transport import (
     sync_resume_and_poll,
     sync_send_and_poll,
     validate_base_url,
+    wait_http_timeout,
 )
 from .errors import AgentError, MotusClientError
 
@@ -153,16 +154,19 @@ class Client:
     ) -> SessionResponse:
         self._guard_event_loop()
         params: dict[str, Any] = {}
+        http_timeout: Any = httpx.USE_CLIENT_DEFAULT
         if wait:
             params["wait"] = "true"
-        if timeout is not None:
-            params["timeout"] = str(timeout)
+            if timeout is not None:
+                params["timeout"] = str(timeout)
+                http_timeout = wait_http_timeout(self._http_timeout, timeout)
         r = sync_request(
             self._http,
             "GET",
             f"{self._base_url}/sessions/{session_id}",
             headers=self._headers(extra_headers),
             params=params or None,
+            timeout=http_timeout,
         )
         return parse_session_response(r)
 
@@ -290,7 +294,9 @@ class Client:
                 raise AgentError(snapshot.error or "agent error", session_id=session_id)
             interrupts = _interrupts_of(snapshot)
             clean_idle = snapshot.status == SessionStatus.idle and not interrupts
-            return self._result(snapshot, session_id, interrupts)
+            return self._result(
+                snapshot, session_id, interrupts, extra_headers=extra_headers
+            )
         finally:
             if clean_idle:
                 try:
@@ -444,7 +450,9 @@ class Client:
         )
         if snapshot.status == SessionStatus.error:
             raise AgentError(snapshot.error or "agent error", session_id=session_id)
-        return self._result(snapshot, session_id, _interrupts_of(snapshot))
+        return self._result(
+            snapshot, session_id, _interrupts_of(snapshot), extra_headers=extra_headers
+        )
 
     # ------------------------- helpers -------------------------
 
@@ -478,15 +486,25 @@ class Client:
         snapshot: SessionResponse,
         session_id: str,
         interrupts: list[Interrupt],
+        *,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> ChatResult:
+        def _resumer(value: Any) -> ChatResult:
+            return self.resume(
+                session_id,
+                interrupts[0].id if interrupts else "",
+                value,
+                extra_headers=extra_headers,
+            )
+
         result = ChatResult(
             message=snapshot.response,
             interrupts=interrupts,
             session_id=session_id,
             status=snapshot.status,
             snapshot=snapshot,
+            _resumer=_resumer if interrupts else None,
         )
-        result._client = self
         return result
 
 

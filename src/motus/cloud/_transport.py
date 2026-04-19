@@ -493,9 +493,12 @@ def sync_request(
     json: Any = None,
     params: Mapping[str, Any] | None = None,
     is_resume: bool = False,
+    timeout: Any = httpx.USE_CLIENT_DEFAULT,
 ) -> httpx.Response:
     try:
-        r = http.request(method, url, headers=headers, json=json, params=params)
+        r = http.request(
+            method, url, headers=headers, json=json, params=params, timeout=timeout
+        )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"{method} {url} timeout: {e}") from e
     except (httpx.ConnectError, httpx.ReadError) as e:
@@ -514,9 +517,12 @@ async def async_request(
     json: Any = None,
     params: Mapping[str, Any] | None = None,
     is_resume: bool = False,
+    timeout: Any = httpx.USE_CLIENT_DEFAULT,
 ) -> httpx.Response:
     try:
-        r = await http.request(method, url, headers=headers, json=json, params=params)
+        r = await http.request(
+            method, url, headers=headers, json=json, params=params, timeout=timeout
+        )
     except httpx.TimeoutException as e:
         raise BackendUnavailable(f"{method} {url} timeout: {e}") from e
     except (httpx.ConnectError, httpx.ReadError) as e:
@@ -524,3 +530,26 @@ async def async_request(
     if r.is_error:
         raise map_status_error(r, is_resume=is_resume)
     return r
+
+
+def wait_http_timeout(
+    http_timeout: httpx.Timeout, wait_seconds: float
+) -> httpx.Timeout:
+    """Derive a one-off httpx.Timeout whose read deadline can absorb ``wait_seconds``.
+
+    Used for ``GET /sessions/{id}?wait=true&timeout=N`` when the caller asks the
+    server to block longer than the client's default read timeout — otherwise
+    the HTTP layer would surface BackendUnavailable before the server-side
+    ``?timeout`` expires.
+    """
+    margin = 10.0
+    needed_read = wait_seconds + margin
+    current_read = http_timeout.read if http_timeout.read is not None else 0.0
+    if needed_read <= current_read:
+        return http_timeout
+    return httpx.Timeout(
+        connect=http_timeout.connect,
+        read=needed_read,
+        write=http_timeout.write,
+        pool=http_timeout.pool,
+    )

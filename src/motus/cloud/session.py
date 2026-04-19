@@ -123,15 +123,7 @@ class Session:
                 snapshot.error or "agent error", session_id=self._session_id
             )
         interrupts = [Interrupt.from_info(i) for i in (snapshot.interrupts or [])]
-        result = ChatResult(
-            message=snapshot.response,
-            interrupts=interrupts,
-            session_id=self._session_id,
-            status=snapshot.status,
-            snapshot=snapshot,
-        )
-        result._client = self._client
-        return result
+        return self._make_result(snapshot, interrupts, per_call_headers=extra_headers)
 
     def resume(
         self,
@@ -162,15 +154,28 @@ class Session:
                 snapshot.error or "agent error", session_id=self._session_id
             )
         interrupts = [Interrupt.from_info(i) for i in (snapshot.interrupts or [])]
-        result = ChatResult(
+        return self._make_result(snapshot, interrupts, per_call_headers=extra_headers)
+
+    def _make_result(
+        self,
+        snapshot,
+        interrupts: list[Interrupt],
+        *,
+        per_call_headers: Mapping[str, str] | None,
+    ) -> ChatResult:
+        # Route resume through Session.resume(extra_headers=per_call_headers) so
+        # both session-scoped and per-call headers survive to the /resume POST.
+        def _resumer(value: Any) -> ChatResult:
+            return self.resume(interrupts[0].id, value, extra_headers=per_call_headers)
+
+        return ChatResult(
             message=snapshot.response,
             interrupts=interrupts,
             session_id=self._session_id,
             status=snapshot.status,
             snapshot=snapshot,
+            _resumer=_resumer if interrupts else None,
         )
-        result._client = self._client
-        return result
 
 
 __all__ = ["Session"]

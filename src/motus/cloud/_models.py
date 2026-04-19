@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from motus.serve.schemas import InterruptInfo, SessionResponse, SessionStatus
 
@@ -35,7 +35,9 @@ class ChatResult:
     session_id: str = ""
     status: SessionStatus = SessionStatus.idle
     snapshot: SessionResponse | None = None
-    _client: Any = field(default=None, repr=False, compare=False)
+    _resumer: Callable[[Any], Any] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def resume(self, value: Any) -> Any:
         """Resolve the single pending interrupt with ``value``.
@@ -46,17 +48,22 @@ class ChatResult:
         Raises ``AmbiguousInterrupt`` if zero or more than one interrupt is
         pending; use the owning client's ``resume(session_id, interrupt_id, value)``
         in that case.
+
+        The resume preserves the same ``extra_headers`` scope (per-call and
+        session-scoped) that produced this ChatResult, so tenant-routed or
+        header-authenticated deployments do not lose their header context when
+        the interrupt is resolved.
         """
         if len(self.interrupts) != 1:
             raise AmbiguousInterrupt(
                 f"result.resume(value) requires exactly 1 pending interrupt, "
                 f"got {len(self.interrupts)}"
             )
-        if self._client is None:
+        if self._resumer is None:
             raise AmbiguousInterrupt(
                 "ChatResult is detached from its client; use client.resume(...) directly"
             )
-        return self._client.resume(self.session_id, self.interrupts[0].id, value)
+        return self._resumer(value)
 
 
 @dataclass(frozen=True)

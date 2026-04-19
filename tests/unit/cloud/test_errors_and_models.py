@@ -95,20 +95,19 @@ def test_chat_result_resume_without_client_raises():
         r.resume("v")
 
 
-def test_chat_result_resume_delegates_to_client():
+def test_chat_result_resume_delegates_to_resumer():
     calls = []
 
-    class Stub:
-        def resume(self, sid, iid, val):
-            calls.append((sid, iid, val))
-            return "delegated"
+    def resumer(value):
+        calls.append(value)
+        return "delegated"
 
     r = ChatResult(
         message=None,
         interrupts=[Interrupt("iid-1", "tool_approval", {})],
         session_id="sid-1",
         status=SessionStatus.interrupted,
+        _resumer=resumer,
     )
-    r._client = Stub()
     assert r.resume("blue") == "delegated"
-    assert calls == [("sid-1", "iid-1", "blue")]
+    assert calls == ["blue"]
