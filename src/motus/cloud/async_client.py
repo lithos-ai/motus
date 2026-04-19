@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import Any, Mapping
 
 import httpx
 from pydantic import TypeAdapter
@@ -35,6 +35,13 @@ from ._transport import (
     validate_base_url,
     wait_http_timeout,
 )
+from .errors import (
+    AgentError,
+    ClientClosed,
+    MotusClientError,
+    SessionClosed,
+    SessionNotFound,
+)
 
 _SESSION_LIST_ADAPTER = TypeAdapter(list[SessionSummary])
 _MESSAGES_ADAPTER = TypeAdapter(list[ChatMessage])
@@ -49,17 +56,6 @@ def _unbounded_read_timeout(current: httpx.Timeout) -> httpx.Timeout:
         pool=current.pool,
     )
 
-
-from .errors import (
-    AgentError,
-    ClientClosed,
-    MotusClientError,
-    SessionClosed,
-    SessionNotFound,
-)
-
-if TYPE_CHECKING:
-    from motus.models import ChatMessage
 
 logger = logging.getLogger("motus.cloud")
 

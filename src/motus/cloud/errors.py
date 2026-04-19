@@ -8,12 +8,10 @@ MotusClientError. Raw httpx exceptions never leak to user code.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    import httpx
+import httpx
 
-    from motus.serve.schemas import SessionResponse
+from motus.serve.schemas import SessionResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +40,7 @@ class MotusClientError(Exception):
         self,
         message: str = "",
         *,
-        response: "httpx.Response | None" = None,
+        response: httpx.Response | None = None,
         context: ErrorContext | None = None,
     ) -> None:
         super().__init__(message)
@@ -63,11 +61,11 @@ class InterruptNotFound(MotusClientError):
 
 
 class SessionConflict(MotusClientError):
-    """HTTP 409 — send-while-running, resume mismatch, or other session-state conflict."""
+    """HTTP 409: send-while-running, resume mismatch, or other session-state conflict."""
 
 
 class ServerBusy(MotusClientError):
-    """HTTP 503 — server capacity (max_sessions) reached."""
+    """HTTP 503: server capacity (max_sessions) reached."""
 
 
 class BadRequest(MotusClientError):
@@ -75,7 +73,7 @@ class BadRequest(MotusClientError):
 
     Covers validation errors (422), bad request (400), rate limiting (429),
     and any other client-side 4xx the server returns. Retrying without
-    changing the request will not help — inspect ``exc.response`` for details.
+    changing the request will not help; inspect ``exc.response`` for details.
     """
 
 
@@ -86,7 +84,7 @@ class BackendUnavailable(MotusClientError):
 class SessionTimeout(MotusClientError):
     """Client-side turn deadline exceeded while the server session is still running.
 
-    The server session is intentionally NOT deleted when this is raised — the caller
+    The server session is intentionally NOT deleted when this is raised; the caller
     can reconnect via ``client.get_session(session_id, wait=True)`` using the fields
     attached to this exception.
     """
@@ -97,7 +95,7 @@ class SessionTimeout(MotusClientError):
         *,
         session_id: str,
         elapsed: float | None = None,
-        last_snapshot: "SessionResponse | None" = None,
+        last_snapshot: SessionResponse | None = None,
         context: ErrorContext | None = None,
     ) -> None:
         super().__init__(
@@ -140,19 +138,11 @@ class AmbiguousInterrupt(MotusClientError):
 
 
 class SessionUnsupported(MotusClientError):
-    """HTTP 405 on PUT /sessions/{id} — server was not started with --allow-custom-ids."""
+    """HTTP 405 on PUT /sessions/{id}: server was not started with --allow-custom-ids."""
 
 
 class ClientClosed(MotusClientError):
     """Client-side: a public method was called after ``close()`` / ``aclose()``."""
-
-
-def attach_response(
-    exc: MotusClientError, response: "httpx.Response"
-) -> MotusClientError:
-    """Return ``exc`` with the originating response attached (for debugging)."""
-    exc.response = response
-    return exc
 
 
 __all__ = [
@@ -172,10 +162,4 @@ __all__ = [
     "SessionNotFound",
     "SessionTimeout",
     "SessionUnsupported",
-    "attach_response",
 ]
-
-
-# Silence unused-import warning for Any when not used in runtime;
-# kept for future public API additions that need typed attributes.
-_ = Any

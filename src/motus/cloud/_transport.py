@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping
 
 import httpx
 
@@ -26,9 +26,6 @@ from .errors import (
     SessionTimeout,
     SessionUnsupported,
 )
-
-if TYPE_CHECKING:
-    pass
 
 USER_AGENT_PREFIX = "motus-client"
 DEFAULT_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)
