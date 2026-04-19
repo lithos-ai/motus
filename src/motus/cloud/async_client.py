@@ -27,7 +27,13 @@ from ._transport import (
     validate_base_url,
     wait_http_timeout,
 )
-from .errors import AgentError, MotusClientError, SessionClosed, SessionNotFound
+from .errors import (
+    AgentError,
+    ClientClosed,
+    MotusClientError,
+    SessionClosed,
+    SessionNotFound,
+)
 
 if TYPE_CHECKING:
     from motus.models import ChatMessage
@@ -68,8 +74,12 @@ class AsyncClient:
                 timeout=self._http_timeout, transport=transport
             )
             self._owns_http = True
+        self._closed = False
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         if self._owns_http:
             await self._http.aclose()
 
@@ -81,7 +91,12 @@ class AsyncClient:
 
     # ------------------------- internals -------------------------
 
+    def _guard_open(self) -> None:
+        if self._closed:
+            raise ClientClosed("motus.cloud.AsyncClient has been closed")
+
     def _headers(self, per_call: Mapping[str, str] | None = None) -> dict[str, str]:
+        self._guard_open()
         return build_headers(self._api_key, self._extra_headers, per_call)
 
     # ------------------------- low-level -------------------------
@@ -491,19 +506,26 @@ class AsyncSession:
         return merged
 
     async def aclose(self) -> None:
+        """Close the session.
+
+        For owned sessions without ``keep=True``, issues a DELETE. 404 is treated
+        as success; other errors propagate as ``MotusClientError`` and leave the
+        handle re-closable (``closed`` stays False).
+        """
         if self._closed:
             return
-        self._closed = True
         if self._owned and not self._keep:
-            try:
-                await self._client.delete_session(
-                    self._session_id,
-                    extra_headers=self._session_headers or None,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug("AsyncSession.aclose DELETE failed: %r", e)
+            await self._client.delete_session(
+                self._session_id,
+                extra_headers=self._session_headers or None,
+            )
         elif self._owned and self._keep:
             logger.info("Session kept alive: session_id=%s", self._session_id)
+        self._closed = True
+
+    def keep_alive(self) -> None:
+        """Switch the session into keep mode so ``aclose()`` does not DELETE."""
+        self._keep = True
 
     async def chat(
         self,

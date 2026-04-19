@@ -56,19 +56,28 @@ class Session:
         return self._closed
 
     def close(self) -> None:
+        """Close the session.
+
+        For owned sessions without ``keep=True``, issues a DELETE. A 404 response
+        is treated as success (the session is already gone). Other errors — 5xx,
+        connection failures, auth failures — propagate as ``MotusClientError``
+        and leave ``closed`` False so the caller can retry.
+        """
         if self._closed:
             return
-        self._closed = True
         if self._owned and not self._keep:
-            try:
-                self._client.delete_session(
-                    self._session_id,
-                    extra_headers=self._session_headers or None,
-                )
-            except Exception as e:  # noqa: BLE001 — never mask caller context on close
-                logger.debug("Session.close DELETE failed: %r", e)
+            # delete_session already silences 404; everything else propagates.
+            self._client.delete_session(
+                self._session_id,
+                extra_headers=self._session_headers or None,
+            )
         elif self._owned and self._keep:
             logger.info("Session kept alive: session_id=%s", self._session_id)
+        self._closed = True
+
+    def keep_alive(self) -> None:
+        """Switch the session into keep mode so ``close()`` does not DELETE."""
+        self._keep = True
 
     def __enter__(self) -> "Session":
         return self

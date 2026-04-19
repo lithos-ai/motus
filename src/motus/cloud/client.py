@@ -28,7 +28,7 @@ from ._transport import (
     validate_base_url,
     wait_http_timeout,
 )
-from .errors import AgentError, MotusClientError
+from .errors import AgentError, ClientClosed, MotusClientError
 
 if TYPE_CHECKING:
     from motus.models import ChatMessage
@@ -69,10 +69,14 @@ class Client:
         else:
             self._http = httpx.Client(timeout=self._http_timeout, transport=transport)
             self._owns_http = True
+        self._closed = False
 
     # ------------------------- lifecycle -------------------------
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         if self._owns_http and self._http is not None:
             self._http.close()
 
@@ -94,7 +98,12 @@ class Client:
             "use motus.cloud.AsyncClient instead"
         )
 
+    def _guard_open(self) -> None:
+        if self._closed:
+            raise ClientClosed("motus.cloud.Client has been closed")
+
     def _headers(self, per_call: Mapping[str, str] | None = None) -> dict[str, str]:
+        self._guard_open()
         return build_headers(self._api_key, self._extra_headers, per_call)
 
     # ------------------------- low-level -------------------------

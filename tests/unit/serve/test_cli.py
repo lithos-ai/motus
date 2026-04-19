@@ -223,6 +223,50 @@ def test_send_and_wait_helper_removed():
     assert not hasattr(cli_mod, "_api_call")
 
 
+def test_chat_unknown_interrupt_type_preserves_session(auto_transport, capsys):
+    """CLI must NOT DELETE a session when it can't resolve the interrupt type."""
+    observed: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        observed.append(f"{req.method} {req.url.path}")
+        m, p = req.method, req.url.path
+        if m == "POST" and p == "/sessions":
+            return httpx.Response(201, json={"session_id": "s1", "status": "idle"})
+        if m == "POST" and p.endswith("/messages"):
+            return httpx.Response(202, json={"session_id": "s1", "status": "running"})
+        if m == "GET" and p.startswith("/sessions/"):
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "s1",
+                    "status": "interrupted",
+                    "interrupts": [
+                        {
+                            "interrupt_id": "i1",
+                            "type": "some_future_type",
+                            "payload": {"foo": "bar"},
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    auto_transport["set"](handler)
+    args = SimpleNamespace(
+        url="http://x",
+        message="run unknown",
+        session=None,
+        keep=False,
+        params=None,
+    )
+    cli_mod.chat_command(args)
+    out = capsys.readouterr().out
+    assert "some_future_type" in out
+    assert "kept alive" in out.lower()
+    # No DELETE was issued — the session is preserved for manual resume.
+    assert all(not line.startswith("DELETE") for line in observed)
+
+
 def test_chat_session_flag_rejects_missing_session(auto_transport, capsys):
     """`motus serve chat --session <typo>` must surface 'session not found', not
     silently create a new one or raise 'custom IDs not enabled'."""

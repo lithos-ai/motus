@@ -101,6 +101,10 @@ class SessionUnsupported(MotusClientError):
     """HTTP 405 on PUT /sessions/{id} — server was not started with --allow-custom-ids."""
 
 
+class ClientClosed(MotusClientError):
+    """Client-side: a public method was called after ``close()`` / ``aclose()``."""
+
+
 def attach_response(
     exc: MotusClientError, response: "httpx.Response"
 ) -> MotusClientError:
@@ -114,6 +118,7 @@ __all__ = [
     "AmbiguousInterrupt",
     "AuthError",
     "BackendUnavailable",
+    "ClientClosed",
     "InterruptNotFound",
     "MotusClientError",
     "ProtocolError",

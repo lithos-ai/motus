@@ -156,18 +156,34 @@ def _prompt_interrupt(intr) -> Any:
                 answers[qtext] = choice
         return {"answers": answers}
 
-    print(f"[warn] unknown interrupt type: {intr_type}, returning no-op")
     return None
 
 
-def _run_turn(session, content: str, params: dict | None) -> None:
-    """Run one turn on ``session`` with interrupt loop; print assistant content on idle."""
+def _print_unknown_interrupt_guidance(
+    url: str, session_id: str, intr_type: str
+) -> None:
+    print(
+        f"[warn] Session has a pending '{intr_type}' interrupt this CLI cannot resolve."
+    )
+    print(f"       Session {session_id} kept alive for inspection/reconnection.")
+    print(f"       Try: motus serve get {url} {session_id}")
+    print(f"       Or:  motus serve chat {url} --session {session_id}")
+
+
+def _run_turn(session, url: str, content: str, params: dict | None) -> str | None:
+    """Run one turn on ``session`` with interrupt loop.
+
+    Returns ``"keep"`` if an unknown interrupt type was encountered and the
+    session must not be deleted on exit; otherwise ``None``. Prints assistant
+    content on idle and the server-side error on error.
+    """
     result = session.chat(content, user_params=params or None)
     while result.status.value == "interrupted":
         for intr in result.interrupts:
             value = _prompt_interrupt(intr)
             if value is None:
-                return
+                _print_unknown_interrupt_guidance(url, session.session_id, intr.type)
+                return "keep"
             result = session.resume(intr.id, value)
             if result.status.value != "interrupted":
                 break
@@ -176,6 +192,7 @@ def _run_turn(session, content: str, params: dict | None) -> None:
     elif result.status.value == "error":
         snap = result.snapshot
         print(f"Error: {snap.error if snap else 'unknown'}")
+    return None
 
 
 def chat_command(args) -> None:
@@ -214,7 +231,8 @@ def chat_command(args) -> None:
         try:
             with session:
                 if args.message:
-                    _run_turn(session, args.message, params)
+                    if _run_turn(session, args.url, args.message, params) == "keep":
+                        session.keep_alive()
                 else:
                     print("Chat session started (Ctrl+C to quit)")
                     print()
@@ -226,7 +244,9 @@ def chat_command(args) -> None:
                             break
                         if not user_input.strip():
                             continue
-                        _run_turn(session, user_input, params)
+                        if _run_turn(session, args.url, user_input, params) == "keep":
+                            session.keep_alive()
+                            break
         except MotusClientError as e:
             _handle_client_error("Error", e)
     finally:
