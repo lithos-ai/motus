@@ -10,10 +10,16 @@ import pytest
 
 
 @pytest.fixture
-def fresh_env(monkeypatch):
-    """Clear auth-related env so credential tests are deterministic."""
+def fresh_env(monkeypatch, tmp_path):
+    """Clear auth-related env and isolate the credentials file so credential
+    tests are deterministic regardless of whether the developer has run
+    ``motus login`` on their machine."""
     monkeypatch.delenv("LITHOSAI_API_KEY", raising=False)
     monkeypatch.delenv("LITHOSAI_API_URL", raising=False)
+    monkeypatch.setattr(
+        "motus.auth.credentials.CREDENTIALS_FILE",
+        tmp_path / "credentials.json",
+    )
     yield monkeypatch
 
 
