@@ -278,6 +278,57 @@ def test_create_session_rejects_non_uuid(fresh_env):
 # ---- resume ----
 
 
+def test_chat_post_failure_deletes_ephemeral_session(recorder, fresh_env):
+    """If the initial POST /messages fails, the orphaned session must be
+    DELETE'd best-effort before the exception propagates, so the caller
+    doesn't end up with a leaked session they have no session_id for."""
+    from motus.cloud import BadRequest
+
+    state = {"created_sid": None}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.url.path == "/sessions":
+            sid = "orphan-sid"
+            state["created_sid"] = sid
+            return httpx.Response(201, json={"session_id": sid, "status": "idle"})
+        if req.method == "POST" and req.url.path.endswith("/messages"):
+            return httpx.Response(422, json={"detail": "bad role"})
+        if req.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    transport = recorder(handler)
+    with Client(base_url="http://x", transport=transport) as c:
+        with pytest.raises(BadRequest):
+            c.chat("hi", role="bogus")
+    deletes = [r for r in recorder.requests if r.method == "DELETE"]
+    assert len(deletes) == 1
+    assert deletes[0].url.path == f"/sessions/{state['created_sid']}"
+
+
+def test_chat_events_post_failure_deletes_ephemeral_session(recorder, fresh_env):
+    """Same cleanup guarantee for chat_events — a failing initial POST
+    must not strand the ephemeral session."""
+    from motus.cloud import BadRequest
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.url.path == "/sessions":
+            return httpx.Response(201, json={"session_id": "s1", "status": "idle"})
+        if req.method == "POST" and req.url.path.endswith("/messages"):
+            return httpx.Response(422, json={"detail": "bad role"})
+        if req.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    transport = recorder(handler)
+    with Client(base_url="http://x", transport=transport) as c:
+        with pytest.raises(BadRequest):
+            # Iterator is cold; consuming it triggers the setup POST which fails.
+            list(c.chat_events("hi", role="bogus"))
+    deletes = [r for r in recorder.requests if r.method == "DELETE"]
+    assert len(deletes) == 1
+
+
 def test_resume_delegates_back_to_client(recorder, fresh_env):
     state = {"resumed": False}
 

@@ -38,6 +38,18 @@ from ._transport import (
 
 _SESSION_LIST_ADAPTER = TypeAdapter(list[SessionSummary])
 _MESSAGES_ADAPTER = TypeAdapter(list[ChatMessage])
+
+
+def _unbounded_read_timeout(current: httpx.Timeout) -> httpx.Timeout:
+    """Return a Timeout that keeps connect/write/pool but disables the read deadline."""
+    return httpx.Timeout(
+        connect=current.connect,
+        read=None,
+        write=current.write,
+        pool=current.pool,
+    )
+
+
 from .errors import (
     AgentError,
     ClientClosed,
@@ -177,6 +189,8 @@ class AsyncClient:
                 # Use the live client's effective timeout so caller-injected
                 # http_client settings are honored.
                 http_timeout = wait_http_timeout(self._http.timeout, timeout)
+            else:
+                http_timeout = _unbounded_read_timeout(self._http.timeout)
         r = await async_request(
             self._http,
             "GET",
@@ -270,25 +284,40 @@ class AsyncClient:
         **message_fields: Any,
     ) -> ChatResult:
         session_id = (await self.create_session(extra_headers=extra_headers)).session_id
+        body: dict[str, Any] = {"role": role, "content": content}
+        if user_params:
+            body["user_params"] = dict(user_params)
+        if webhook:
+            body["webhook"] = dict(webhook)
+        body.update(message_fields)
+        headers = self._headers(extra_headers)
+
+        # Clean up the orphaned session if the initial POST fails.
+        try:
+            await async_post_message(
+                self._http, self._base_url, session_id, body, headers=headers
+            )
+        except MotusClientError:
+            try:
+                await self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug(
+                    "ephemeral cleanup after send failure failed: %r", secondary
+                )
+            raise
+
         clean_idle = False
         try:
-            body: dict[str, Any] = {"role": role, "content": content}
-            if user_params:
-                body["user_params"] = dict(user_params)
-            if webhook:
-                body["webhook"] = dict(webhook)
-            body.update(message_fields)
-            snapshot = await async_send_and_poll(
+            snapshot = await async_poll_until_terminal(
                 self._http,
                 self._base_url,
                 session_id,
-                body,
                 turn_timeout=turn_timeout
                 if turn_timeout is not None
                 else self._turn_timeout,
                 server_wait_slice=self._server_wait_slice,
                 read_retry_budget=self._read_retry_budget,
-                headers=self._headers(extra_headers),
+                headers=headers,
             )
             if snapshot.status == SessionStatus.error:
                 raise AgentError(snapshot.error or "agent error", session_id=session_id)
@@ -332,9 +361,16 @@ class AsyncClient:
             body["webhook"] = dict(webhook)
         body.update(message_fields)
         headers = self._headers(extra_headers)
-        await async_post_message(
-            self._http, self._base_url, session_id, body, headers=headers
-        )
+        try:
+            await async_post_message(
+                self._http, self._base_url, session_id, body, headers=headers
+            )
+        except MotusClientError:
+            try:
+                await self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug("chat_events setup cleanup failed: %r", secondary)
+            raise
 
         cleaned_up = False
         yielded_terminal = False

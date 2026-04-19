@@ -32,7 +32,6 @@ from ._transport import (
     sync_post_message,
     sync_request,
     sync_resume_and_poll,
-    sync_send_and_poll,
     validate_base_url,
     wait_http_timeout,
 )
@@ -40,6 +39,17 @@ from .errors import AgentError, ClientClosed, MotusClientError
 
 _SESSION_LIST_ADAPTER = TypeAdapter(list[SessionSummary])
 _MESSAGES_ADAPTER = TypeAdapter(list[ChatMessage])
+
+
+def _unbounded_read_timeout(current: httpx.Timeout) -> httpx.Timeout:
+    """Return a Timeout that keeps connect/write/pool but disables the read deadline."""
+    return httpx.Timeout(
+        connect=current.connect,
+        read=None,
+        write=current.write,
+        pool=current.pool,
+    )
+
 
 if TYPE_CHECKING:
     from .session import Session
@@ -180,6 +190,10 @@ class Client:
                 # Use the live client's effective timeout so caller-injected
                 # http_client settings are honored.
                 http_timeout = wait_http_timeout(self._http.timeout, timeout)
+            else:
+                # Server-side wait has no upper bound; disable the read
+                # deadline so long-running turns don't hit the 120s default.
+                http_timeout = _unbounded_read_timeout(self._http.timeout)
         r = sync_request(
             self._http,
             "GET",
@@ -293,22 +307,39 @@ class Client:
         """
         self._guard_event_loop()
         session_id = self.create_session(extra_headers=extra_headers).session_id
+        body = self._build_message_body(
+            content, role, user_params, webhook, message_fields
+        )
+        headers = self._headers(extra_headers)
+
+        # If the initial POST fails, the session is empty and orphaned.
+        # Delete it best-effort before re-raising so the caller isn't left
+        # with a leaked server-side session they have no session_id for.
+        try:
+            sync_post_message(
+                self._http, self._base_url, session_id, body, headers=headers
+            )
+        except MotusClientError:
+            try:
+                self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug(
+                    "ephemeral cleanup after send failure failed: %r", secondary
+                )
+            raise
+
         clean_idle = False
         try:
-            body = self._build_message_body(
-                content, role, user_params, webhook, message_fields
-            )
-            snapshot = sync_send_and_poll(
+            snapshot = sync_poll_until_terminal(
                 self._http,
                 self._base_url,
                 session_id,
-                body,
                 turn_timeout=turn_timeout
                 if turn_timeout is not None
                 else self._turn_timeout,
                 server_wait_slice=self._server_wait_slice,
                 read_retry_budget=self._read_retry_budget,
-                headers=self._headers(extra_headers),
+                headers=headers,
             )
             if snapshot.status == SessionStatus.error:
                 raise AgentError(snapshot.error or "agent error", session_id=session_id)
@@ -354,7 +385,18 @@ class Client:
             content, role, user_params, webhook, message_fields
         )
         headers = self._headers(extra_headers)
-        sync_post_message(self._http, self._base_url, session_id, body, headers=headers)
+        # If the initial POST fails, the session is empty and orphaned.
+        # Delete it best-effort before re-raising.
+        try:
+            sync_post_message(
+                self._http, self._base_url, session_id, body, headers=headers
+            )
+        except MotusClientError:
+            try:
+                self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug("chat_events setup cleanup failed: %r", secondary)
+            raise
 
         cleaned_up = False
         yielded_terminal = False

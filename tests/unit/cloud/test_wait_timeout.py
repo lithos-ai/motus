@@ -62,6 +62,33 @@ async def test_async_get_session_wait_overrides_read_timeout(fresh_env):
     assert t["read"] >= 300.0
 
 
+def test_sync_get_session_wait_without_timeout_disables_read_deadline(fresh_env):
+    """`wait=True, timeout=None` should NOT keep the default 120s read cap —
+    the server-side wait has no upper bound, so the httpx read deadline must
+    be disabled (None) for that single call."""
+    captured: dict = {}
+    transport = httpx.MockTransport(_capture_timeout(captured))
+    with Client(base_url="http://x", transport=transport) as c:
+        c.get_session("s1", wait=True)
+    t = captured["timeout"]
+    assert t is not None
+    # read=None means "no deadline" in httpx.
+    assert t["read"] is None
+
+
+@pytest.mark.asyncio
+async def test_async_get_session_wait_without_timeout_disables_read_deadline(
+    fresh_env,
+):
+    captured: dict = {}
+    transport = httpx.MockTransport(_capture_timeout(captured))
+    async with AsyncClient(base_url="http://x", transport=transport) as c:
+        await c.get_session("s1", wait=True)
+    t = captured["timeout"]
+    assert t is not None
+    assert t["read"] is None
+
+
 def test_sync_poll_loop_uses_override_for_long_wait_slices(fresh_env):
     """server_wait_slice larger than http_timeout.read must NOT trip the
     client — each poll GET has its read deadline raised to cover the wait."""

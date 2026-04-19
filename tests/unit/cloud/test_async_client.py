@@ -142,6 +142,30 @@ async def test_async_session_id_with_initial_state_routes_to_put(fresh_env):
     assert not any(r.method == "GET" and r.url.path == f"/sessions/{sid}" for r in seen)
 
 
+async def test_async_chat_post_failure_deletes_ephemeral_session(fresh_env):
+    from motus.cloud import BadRequest
+
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        if req.method == "POST" and req.url.path == "/sessions":
+            return httpx.Response(201, json={"session_id": "s1", "status": "idle"})
+        if req.method == "POST" and req.url.path.endswith("/messages"):
+            return httpx.Response(422, json={"detail": "bad role"})
+        if req.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    async with AsyncClient(
+        base_url="http://x", transport=httpx.MockTransport(handler)
+    ) as c:
+        with pytest.raises(BadRequest):
+            await c.chat("hi", role="bogus")
+    deletes = [r for r in seen if r.method == "DELETE"]
+    assert len(deletes) == 1
+
+
 async def test_asyncio_gather_runs_ten_chats_independently(fresh_env):
     """Ten concurrent chat() calls complete with 10 distinct session IDs."""
     created: list[str] = []
