@@ -45,7 +45,8 @@
             "group": "Motus Cloud",
             "pages": [
               "cloud/overview",
-              "cloud/sandbox"
+              "cloud/sandbox",
+              "cloud/python-client"
             ]
           },
           {

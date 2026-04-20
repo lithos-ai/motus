@@ -14,14 +14,17 @@ Usage (via unified CLI):
     motus serve send http://localhost:8000 <session-id> "hello" --wait
 """
 
+from __future__ import annotations
+
 import importlib
 import os
 import sys
+from typing import Any
 
 
-def _parse_params(items):
+def _parse_params(items: list[str] | None) -> dict:
     """Parse KEY=VALUE param strings, coercing numeric values."""
-    params = {}
+    params: dict = {}
     for item in items or []:
         if "=" not in item:
             print(f"Invalid --param format '{item}'. Expected KEY=VALUE.")
@@ -37,52 +40,33 @@ def _parse_params(items):
     return params
 
 
-def _auth_headers() -> dict:
-    """Return Authorization headers from login credentials or env vars, if available."""
-    from motus.auth.credentials import get_api_key
+def _make_client(base_url: str):
+    """Build a motus.cloud.Client bound to ``base_url``."""
+    from motus.cloud import Client
 
-    api_key = get_api_key()
-    if api_key:
-        return {"Authorization": f"Bearer {api_key}"}
-    return {}
+    return Client(base_url=base_url.rstrip("/"))
 
 
-def _api_call(method, url, *, json_body=None, params=None, timeout=30):
-    """Make an API call, return parsed JSON (or None for 204)."""
-    import httpx
-
-    with httpx.Client(timeout=timeout, headers=_auth_headers()) as client:
-        kwargs = {}
-        if json_body is not None:
-            kwargs["json"] = json_body
-        if params:
-            kwargs["params"] = params
-        try:
-            r = getattr(client, method)(url, **kwargs)
-        except httpx.ConnectError:
-            print(f"Error: Could not connect to {url}")
-            sys.exit(1)
-        if r.status_code >= 400:
-            print(f"Error: {r.status_code} - {r.text}")
-            sys.exit(1)
-        if r.status_code == 204:
-            return None
-        return r.json()
-
-
-def _print_json(model_or_adapter, data):
-    """Validate data against a Pydantic model/adapter and print as JSON."""
-    from pydantic import TypeAdapter
-
-    if isinstance(model_or_adapter, TypeAdapter):
-        obj = model_or_adapter.validate_python(data)
-        print(model_or_adapter.dump_json(obj, indent=2, exclude_none=True).decode())
-    else:
-        obj = model_or_adapter.model_validate(data)
+def _print_json_model(obj) -> None:
+    if hasattr(obj, "model_dump_json"):
         print(obj.model_dump_json(indent=2, exclude_none=True))
+    else:
+        import json
+
+        print(json.dumps(obj, indent=2, default=str))
 
 
-def start_server(args):
+def _handle_client_error(prefix: str, exc: Exception) -> None:
+    from motus.cloud import MotusClientError
+
+    if isinstance(exc, MotusClientError):
+        print(f"{prefix}: {exc}")
+    else:
+        print(f"{prefix}: {type(exc).__name__}: {exc}")
+    sys.exit(1)
+
+
+def start_server(args) -> None:
     """Start a serve server from an agent import path or directory."""
     import_path = args.agent
     host = args.host
@@ -135,11 +119,13 @@ def start_server(args):
     server.run(host=host, port=port, log_level=log_level)
 
 
-def _prompt_user_for_interrupt(client, base_url, session_id, intr):
-    """Prompt the user for a single interrupt and POST the resume."""
-    interrupt_id = intr["interrupt_id"]
-    intr_type = intr["type"]
-    payload = intr.get("payload", {})
+# ---------- Interrupt prompting (CLI-only: TTY I/O) ----------
+
+
+def _prompt_interrupt(intr) -> Any:
+    """Prompt the user for a single interrupt; returns the resume value."""
+    intr_type = intr.type
+    payload = intr.payload
 
     if intr_type == "tool_approval":
         tool_name = payload.get("tool_name", "<unknown tool>")
@@ -147,16 +133,11 @@ def _prompt_user_for_interrupt(client, base_url, session_id, intr):
         print(f"\n[approval] Agent wants to call: {tool_name}")
         print(f"           Args: {tool_args}")
         answer = input("           Approve? [y/N]: ").strip().lower()
-        approved = answer == "y"
-        client.post(
-            f"{base_url}/sessions/{session_id}/resume",
-            json={"interrupt_id": interrupt_id, "value": {"approved": approved}},
-            timeout=10.0,
-        ).raise_for_status()
+        return {"approved": answer == "y"}
 
-    elif intr_type == "user_input":
+    if intr_type == "user_input":
         questions = payload.get("questions", [])
-        answers = {}
+        answers: dict = {}
         for q in questions:
             qtext = q.get("question", "")
             options = q.get("options", [])
@@ -173,94 +154,85 @@ def _prompt_user_for_interrupt(client, base_url, session_id, intr):
                     answers[qtext] = input("  Your answer: ").strip()
             except ValueError:
                 answers[qtext] = choice
-        client.post(
-            f"{base_url}/sessions/{session_id}/resume",
-            json={
-                "interrupt_id": interrupt_id,
-                "value": {"answers": answers},
-            },
-            timeout=10.0,
-        ).raise_for_status()
+        return {"answers": answers}
 
-    else:
-        print(f"[warn] unknown interrupt type: {intr_type}, ignoring")
+    return None
 
 
-def _send_and_wait(client, base_url, session_id, message, params=None):
-    """Send a message and wait for the result, handling interrupts."""
-    import httpx
-
-    body = {"content": message}
-    if params:
-        body["user_params"] = params
-    try:
-        r = client.post(
-            f"{base_url}/sessions/{session_id}/messages",
-            json=body,
-        )
-        r.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        print(f"Error: {e.response.status_code} - {e.response.text}")
-        return
-
-    while True:
-        r = client.get(f"{base_url}/sessions/{session_id}", params={"wait": "true"})
-        r.raise_for_status()
-        data = r.json()
-        status = data["status"]
-
-        if status == "error":
-            print(f"Error: {data['error']}")
-            return
-        elif status == "interrupted":
-            for intr in data.get("interrupts", []):
-                _prompt_user_for_interrupt(client, base_url, session_id, intr)
-            # continue polling — worker is still running, waiting for resume
-        elif status == "idle":
-            if data.get("response"):
-                print(data["response"]["content"])
-            return
-        else:
-            # running or unknown — keep polling
-            pass
+def _print_unknown_interrupt_guidance(
+    url: str, session_id: str, intr_type: str
+) -> None:
+    print(
+        f"[warn] Session has a pending '{intr_type}' interrupt this CLI cannot resolve."
+    )
+    print(f"       Session {session_id} kept alive for inspection/reconnection.")
+    print(f"       Try: motus serve get {url} {session_id}")
+    print(f"       Or:  motus serve chat {url} --session {session_id}")
 
 
-def chat_command(args):
-    """Chat with the agent via the sessions API.
+def _run_turn(session, url: str, content: str, params: dict | None) -> str | None:
+    """Run one turn on ``session`` with interrupt loop.
 
-    If a message is provided, sends a single request.
-    Otherwise enters interactive multi-turn mode.
+    Returns ``"keep"`` if an unknown interrupt type was encountered and the
+    session must not be deleted on exit; otherwise ``None``. Prints assistant
+    content on idle and the server-side error on error.
     """
-    import httpx
+    result = session.chat(content, user_params=params or None)
+    while result.status.value == "interrupted":
+        for intr in result.interrupts:
+            value = _prompt_interrupt(intr)
+            if value is None:
+                _print_unknown_interrupt_guidance(url, session.session_id, intr.type)
+                return "keep"
+            result = session.resume(intr.id, value)
+            if result.status.value != "interrupted":
+                break
+    if result.status.value == "idle" and result.message is not None:
+        print(result.message.content or "")
+    elif result.status.value == "error":
+        snap = result.snapshot
+        print(f"Error: {snap.error if snap else 'unknown'}")
+    return None
 
-    base_url = args.url.rstrip("/")
-    message = args.message
-    owned_session = args.session is None
+
+def chat_command(args) -> None:
+    """Chat with the agent via the sessions API (delegates to motus.cloud)."""
+    from motus.cloud import MotusClientError, Session, SessionNotFound
 
     params = _parse_params(args.params)
-
+    client = _make_client(args.url)
     try:
-        with httpx.Client(timeout=600, headers=_auth_headers()) as client:
+        try:
             if args.session:
-                session_id = args.session
-            else:
+                # --session means "resume an existing conversation". Verify the
+                # session actually exists before attaching so a typo surfaces
+                # as "session not found" instead of silently creating a new
+                # session or raising a misleading custom-ID error.
                 try:
-                    r = client.post(f"{base_url}/sessions")
-                    r.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    print(
-                        f"Error creating session: {e.response.status_code} - {e.response.text}"
-                    )
+                    client.get_session(args.session)
+                except SessionNotFound:
+                    print(f"Error: session {args.session} not found")
                     sys.exit(1)
-                session_id = r.json()["session_id"]
-                if args.keep:
-                    print(f"Session: {session_id} (use --session to resume)")
+                session = Session(
+                    client,
+                    args.session,
+                    owned=False,
+                    keep=bool(args.keep),
+                )
+            else:
+                session = client.session(keep=bool(args.keep))
+        except MotusClientError as e:
+            _handle_client_error("Error creating session", e)
+            return  # for type-checkers; _handle_client_error exits
 
-            try:
-                if message:
-                    _send_and_wait(
-                        client, base_url, session_id, message, params=params or None
-                    )
+        if session.owned and args.keep:
+            print(f"Session: {session.session_id} (use --session to resume)")
+
+        try:
+            with session:
+                if args.message:
+                    if _run_turn(session, args.url, args.message, params) == "keep":
+                        session.keep_alive()
                 else:
                     print("Chat session started (Ctrl+C to quit)")
                     print()
@@ -272,132 +244,140 @@ def chat_command(args):
                             break
                         if not user_input.strip():
                             continue
-                        _send_and_wait(
-                            client,
-                            base_url,
-                            session_id,
-                            user_input,
-                            params=params or None,
-                        )
-            finally:
-                if owned_session and not args.keep:
-                    client.delete(f"{base_url}/sessions/{session_id}")
-    except httpx.ConnectError:
-        print(f"Error: Could not connect to {base_url}")
-        sys.exit(1)
+                        if _run_turn(session, args.url, user_input, params) == "keep":
+                            session.keep_alive()
+                            break
+        except MotusClientError as e:
+            _handle_client_error("Error", e)
+    finally:
+        client.close()
 
 
-def health_check(args):
+def health_check(args) -> None:
     """Check server health."""
-    import httpx
+    from motus.cloud import MotusClientError
 
-    base_url = args.url.rstrip("/")
-
-    with httpx.Client(timeout=10) as client:
-        try:
-            r = client.get(f"{base_url}/health")
-            r.raise_for_status()
-        except httpx.ConnectError:
-            print(f"Error: Could not connect to {base_url}")
-            sys.exit(1)
-        except httpx.HTTPStatusError as e:
-            print(f"Error: {e.response.status_code} - {e.response.text}")
-            sys.exit(1)
-
-        data = r.json()
+    client = _make_client(args.url)
+    try:
+        data = client.health()
         print(f"Status: {data['status']}")
         if "max_workers" in data:
             print(f"Workers: {data['running_workers']}/{data['max_workers']}")
         if "total_sessions" in data:
             print(f"Total sessions: {data['total_sessions']}")
+    except MotusClientError as e:
+        _handle_client_error("Error", e)
+    finally:
+        client.close()
 
 
-def create_session(args):
+def create_session(args) -> None:
     """Create a new session."""
-    from .schemas import SessionResponse
+    from motus.cloud import MotusClientError
 
-    base_url = args.url.rstrip("/")
-    data = _api_call("post", f"{base_url}/sessions")
-    _print_json(SessionResponse, data)
+    client = _make_client(args.url)
+    try:
+        _print_json_model(client.create_session())
+    except MotusClientError as e:
+        _handle_client_error("Error", e)
+    finally:
+        client.close()
 
 
-def list_sessions(args):
+def list_sessions(args) -> None:
     """List all sessions."""
-    from pydantic import TypeAdapter
+    from motus.cloud import MotusClientError
 
-    from .schemas import SessionSummary
+    client = _make_client(args.url)
+    try:
+        _print_json_model(client.list_sessions())
+    except MotusClientError as e:
+        _handle_client_error("Error", e)
+    finally:
+        client.close()
 
-    base_url = args.url.rstrip("/")
-    data = _api_call("get", f"{base_url}/sessions")
-    _print_json(TypeAdapter(list[SessionSummary]), data)
 
-
-def get_session(args):
+def get_session(args) -> None:
     """Get session details."""
-    from .schemas import SessionResponse
+    from motus.cloud import MotusClientError
 
-    base_url = args.url.rstrip("/")
-    params = {}
-    if args.wait:
-        params["wait"] = "true"
-    if args.timeout is not None:
-        params["timeout"] = str(args.timeout)
-    timeout = max(30, (args.timeout or 0) + 10)
-    data = _api_call(
-        "get", f"{base_url}/sessions/{args.id}", params=params, timeout=timeout
-    )
-    _print_json(SessionResponse, data)
+    client = _make_client(args.url)
+    try:
+        snap = client.get_session(args.id, wait=args.wait, timeout=args.timeout)
+        _print_json_model(snap)
+    except MotusClientError as e:
+        _handle_client_error("Error", e)
+    finally:
+        client.close()
 
 
-def delete_session(args):
+def delete_session(args) -> None:
     """Delete a session."""
-    base_url = args.url.rstrip("/")
-    _api_call("delete", f"{base_url}/sessions/{args.id}")
-    print(f"Deleted session {args.id}")
+    from motus.cloud import MotusClientError
+
+    client = _make_client(args.url)
+    try:
+        client.delete_session(args.id)
+        print(f"Deleted session {args.id}")
+    except MotusClientError as e:
+        _handle_client_error("Error", e)
+    finally:
+        client.close()
 
 
-def get_messages(args):
+def get_messages(args) -> None:
     """Get messages for a session."""
-    from pydantic import TypeAdapter
+    from motus.cloud import MotusClientError
 
-    from ..models.base import ChatMessage
+    client = _make_client(args.url)
+    try:
+        _print_json_model(client.get_messages(args.id))
+    except MotusClientError as e:
+        _handle_client_error("Error", e)
+    finally:
+        client.close()
 
-    base_url = args.url.rstrip("/")
-    data = _api_call("get", f"{base_url}/sessions/{args.id}/messages")
-    _print_json(TypeAdapter(list[ChatMessage]), data)
 
-
-def send_message(args):
+def send_message(args) -> None:
     """Send a message to a session."""
-    from .schemas import MessageResponse, SessionResponse
+    from motus.cloud import MotusClientError
 
-    base_url = args.url.rstrip("/")
-    body: dict = {"role": args.role, "content": args.message}
-    params = _parse_params(args.params)
-    if params:
-        body["user_params"] = params
-    if args.webhook_url:
-        webhook = {"url": args.webhook_url}
-        if args.webhook_token:
-            webhook["token"] = args.webhook_token
-        if args.webhook_include_messages:
-            webhook["include_messages"] = True
-        body["webhook"] = webhook
-    data = _api_call("post", f"{base_url}/sessions/{args.id}/messages", json_body=body)
-    if args.wait:
-        params = {"wait": "true"}
-        if args.timeout is not None:
-            params["timeout"] = str(args.timeout)
-        timeout = max(30, (args.timeout or 0) + 10)
-        data = _api_call(
-            "get", f"{base_url}/sessions/{args.id}", params=params, timeout=timeout
-        )
-        _print_json(SessionResponse, data)
-    else:
-        _print_json(MessageResponse, data)
+    client = _make_client(args.url)
+    try:
+        params = _parse_params(args.params)
+        webhook: dict[str, Any] | None = None
+        if args.webhook_url:
+            webhook = {"url": args.webhook_url}
+            if args.webhook_token:
+                webhook["token"] = args.webhook_token
+            if args.webhook_include_messages:
+                webhook["include_messages"] = True
+        if args.wait:
+            client.send_message(
+                args.id,
+                content=args.message,
+                role=args.role,
+                user_params=params or None,
+                webhook=webhook,
+            )
+            snap = client.get_session(args.id, wait=True, timeout=args.timeout)
+            _print_json_model(snap)
+        else:
+            resp = client.send_message(
+                args.id,
+                content=args.message,
+                role=args.role,
+                user_params=params or None,
+                webhook=webhook,
+            )
+            _print_json_model(resp)
+    except MotusClientError as e:
+        _handle_client_error("Error", e)
+    finally:
+        client.close()
 
 
-def register_cli(subparsers):
+def register_cli(subparsers) -> None:
     """Register the 'serve' command group with the top-level CLI."""
     from motus.cli import _Formatter
 
@@ -428,10 +408,7 @@ def register_cli(subparsers):
         help="worker processes (default: CPU count)",
     )
     start_parser.add_argument(
-        "--ttl",
-        type=float,
-        default=0,
-        help="idle session TTL in seconds (0 disables)",
+        "--ttl", type=float, default=0, help="idle session TTL in seconds (0 disables)"
     )
     start_parser.add_argument(
         "--timeout",
@@ -479,14 +456,10 @@ def register_cli(subparsers):
         help="message to send (omit for interactive mode)",
     )
     chat_parser.add_argument(
-        "--session",
-        default=None,
-        help="existing session ID to resume",
+        "--session", default=None, help="existing session ID to resume"
     )
     chat_parser.add_argument(
-        "--keep",
-        action="store_true",
-        help="keep session alive after exit",
+        "--keep", action="store_true", help="keep session alive after exit"
     )
     chat_parser.add_argument(
         "--param",
@@ -518,10 +491,7 @@ def register_cli(subparsers):
     get_parser.add_argument("id", help="session ID")
     get_parser.add_argument("--wait", action="store_true", help="block until complete")
     get_parser.add_argument(
-        "--timeout",
-        type=float,
-        default=None,
-        help="wait timeout in seconds",
+        "--timeout", type=float, default=None, help="wait timeout in seconds"
     )
     get_parser.set_defaults(func=get_session)
 
@@ -547,10 +517,7 @@ def register_cli(subparsers):
     )
     send_parser.add_argument("--wait", action="store_true", help="block until complete")
     send_parser.add_argument(
-        "--timeout",
-        type=float,
-        default=None,
-        help="wait timeout in seconds",
+        "--timeout", type=float, default=None, help="wait timeout in seconds"
     )
     send_parser.add_argument(
         "--webhook-url", default=None, help="completion webhook URL"

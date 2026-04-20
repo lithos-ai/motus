@@ -1,0 +1,165 @@
+"""Typed exception hierarchy for motus.cloud.
+
+Every public method on Client / AsyncClient / Session / AsyncSession
+translates transport and protocol failures into subclasses of
+MotusClientError. Raw httpx exceptions never leak to user code.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import httpx
+
+from motus.serve.schemas import SessionResponse
+
+
+@dataclass(frozen=True, slots=True)
+class ErrorContext:
+    """Correlation data attached to every MotusClientError.
+
+    Populated at the transport choke points (map_status_error,
+    map_transport_error) so fan-out callers can correlate failures to
+    the originating session / interrupt / request.
+    """
+
+    session_id: str | None = None
+    interrupt_id: str | None = None
+    method: str | None = None
+    url: str | None = None
+    status_code: int | None = None
+
+
+_EMPTY_CONTEXT = ErrorContext()
+
+
+class MotusClientError(Exception):
+    """Base class for all motus.cloud errors."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        response: httpx.Response | None = None,
+        context: ErrorContext | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.response = response
+        self.context = context or _EMPTY_CONTEXT
+
+
+class AuthError(MotusClientError):
+    """HTTP 401 / 403."""
+
+
+class SessionNotFound(MotusClientError):
+    """HTTP 404 on a session-addressed path."""
+
+
+class InterruptNotFound(MotusClientError):
+    """HTTP 404 returned by POST /sessions/{id}/resume for an unknown interrupt_id."""
+
+
+class SessionConflict(MotusClientError):
+    """HTTP 409: send-while-running, resume mismatch, or other session-state conflict."""
+
+
+class ServerBusy(MotusClientError):
+    """HTTP 503: server capacity (max_sessions) reached."""
+
+
+class BadRequest(MotusClientError):
+    """HTTP 4xx response that the SDK doesn't map to a more specific error.
+
+    Covers validation errors (422), bad request (400), rate limiting (429),
+    and any other client-side 4xx the server returns. Retrying without
+    changing the request will not help; inspect ``exc.response`` for details.
+    """
+
+
+class BackendUnavailable(MotusClientError):
+    """Other 5xx, connect error, or exhausted bounded-retry budget on polling."""
+
+
+class SessionTimeout(MotusClientError):
+    """Client-side turn deadline exceeded while the server session is still running.
+
+    The server session is intentionally NOT deleted when this is raised; the caller
+    can reconnect via ``client.get_session(session_id, wait=True)`` using the fields
+    attached to this exception.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        session_id: str,
+        elapsed: float | None = None,
+        last_snapshot: SessionResponse | None = None,
+        context: ErrorContext | None = None,
+    ) -> None:
+        super().__init__(
+            message, context=context or ErrorContext(session_id=session_id)
+        )
+        self.session_id = session_id
+        self.elapsed = elapsed
+        self.last_snapshot = last_snapshot
+
+
+class AgentError(MotusClientError):
+    """HTTP 200 response with session.status == 'error' (agent turn failed)."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        session_id: str | None = None,
+        context: ErrorContext | None = None,
+    ) -> None:
+        super().__init__(
+            message, context=context or ErrorContext(session_id=session_id)
+        )
+        self.session_id = session_id
+
+
+class ProtocolError(MotusClientError):
+    """Malformed / non-JSON response body, or valid JSON missing required schema fields."""
+
+
+class SessionClosed(MotusClientError):
+    """Client-side: Session.chat / resume called after close() or context-exit."""
+
+
+class AmbiguousInterrupt(MotusClientError):
+    """ChatResult.resume(value) called when zero or multiple interrupts are pending.
+
+    Use ``client.resume(session_id, interrupt_id, value)`` to disambiguate.
+    """
+
+
+class SessionUnsupported(MotusClientError):
+    """HTTP 405 on PUT /sessions/{id}: server was not started with --allow-custom-ids."""
+
+
+class ClientClosed(MotusClientError):
+    """Client-side: a public method was called after ``close()`` / ``aclose()``."""
+
+
+__all__ = [
+    "AgentError",
+    "AmbiguousInterrupt",
+    "AuthError",
+    "BackendUnavailable",
+    "BadRequest",
+    "ClientClosed",
+    "ErrorContext",
+    "InterruptNotFound",
+    "MotusClientError",
+    "ProtocolError",
+    "ServerBusy",
+    "SessionClosed",
+    "SessionConflict",
+    "SessionNotFound",
+    "SessionTimeout",
+    "SessionUnsupported",
+]
