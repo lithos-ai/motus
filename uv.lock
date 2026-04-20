@@ -1769,6 +1769,9 @@ google-adk = [
 openai-agents = [
     { name = "openai-agents" },
 ]
+volcengine = [
+    { name = "volcengine-python-sdk", extra = ["ark"] },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1803,8 +1806,9 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "tomli-w", specifier = ">=1.0.0" },
     { name = "uvicorn", specifier = ">=0.40.0" },
+    { name = "volcengine-python-sdk", extras = ["ark"], marker = "extra == 'volcengine'", specifier = ">=5.0.23" },
 ]
-provides-extras = ["openai-agents", "google-adk"]
+provides-extras = ["openai-agents", "google-adk", "volcengine"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3593,6 +3597,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/aa/92/58199fe10049f9703c2666e809c4f686c54ef0a68b0f6afccf518c0b1eb9/virtualenv-21.2.0.tar.gz", hash = "sha256:1720dc3a62ef5b443092e3f499228599045d7fea4c79199770499df8becf9098", size = 5840618, upload-time = "2026-03-09T17:24:38.013Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c6/59/7d02447a55b2e55755011a647479041bc92a82e143f96a8195cb33bd0a1c/virtualenv-21.2.0-py3-none-any.whl", hash = "sha256:1bd755b504931164a5a496d217c014d098426cddc79363ad66ac78125f9d908f", size = 5825084, upload-time = "2026-03-09T17:24:35.378Z" },
+]
+
+[[package]]
+name = "volcengine-python-sdk"
+version = "5.0.23"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "python-dateutil" },
+    { name = "six" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/03/50/5701562fe1d2076f059c6cc82d55bbc1f23749394d2092f5d517d65e9926/volcengine_python_sdk-5.0.23.tar.gz", hash = "sha256:5d92fe6d8f23ef99820591f76d4f2bff12fca7bdaf36b7775e496e368e9f57eb", size = 8398586, upload-time = "2026-04-09T12:06:12.124Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/e9/a207bd5d01280fb630ec4c14559fe8e50083b9e33fa78a7795678b742b17/volcengine_python_sdk-5.0.23-py2.py3-none-any.whl", hash = "sha256:e3cce496766bc47f5aacfc676797e3d02833af13875eec5b6518c9b679d59708", size = 33014862, upload-time = "2026-04-09T12:06:06.388Z" },
+]
+
+[package.optional-dependencies]
+ark = [
+    { name = "anyio" },
+    { name = "cryptography" },
+    { name = "httpx" },
+    { name = "pydantic" },
 ]
 
 [[package]]
