@@ -8,12 +8,12 @@ itself on success.
 Run against a local ``motus serve`` instance:
 
     motus serve start tests.unit.serve.mock_agent:echo_agent --port 8000
-    uv run python examples/cloud_client/quickstart.py
+    uv run python examples/cloud_client.py
 
 Run against a deployed Motus Cloud agent:
 
     export LITHOSAI_API_KEY=...   # or: motus login
-    uv run python examples/cloud_client/quickstart.py https://<agent>.agent.lithosai.cloud
+    uv run python examples/cloud_client.py https://<agent>.agent.lithosai.cloud
 
 API key resolution mirrors the SDK: constructor argument > ``LITHOSAI_API_KEY``
 env > ``~/.motus/credentials.json`` > no auth. No key is fine against a local

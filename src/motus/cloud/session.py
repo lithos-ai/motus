@@ -18,13 +18,19 @@ logger = logging.getLogger("motus.cloud")
 
 
 class Session:
-    """Pinned session. Ownership determines whether close() issues DELETE.
+    """Pinned handle to one server-side session, either created here or attached to.
 
-    - Created via ``client.session()`` with no ``session_id``: owned = True.
-    - Created via ``client.session(session_id=<existing>)``: owned = False,
-      close() never DELETEs regardless of ``keep``.
-    - ``keep=True`` on an owned session suppresses DELETE on close (logs info).
-    - ``extra_headers`` is applied to every request issued through this session.
+    Ownership determines whether ``close()`` issues ``DELETE``:
+
+    - ``client.session()`` creates a new session; ``owned=True``, ``close()`` deletes.
+    - ``client.session(session_id=<existing>)`` attaches to a caller-owned session;
+      ``owned=False``, ``close()`` never deletes regardless of ``keep``.
+    - ``keep=True`` on an owned session suppresses ``DELETE`` at close.
+    - ``extra_headers`` applies to every request issued through this session.
+
+    Attach mode is for external session ownership: the caller persists the
+    ``session_id`` outside the SDK (DB, cache, another service) and later
+    attaches from a different process to continue the conversation.
     """
 
     def __init__(
