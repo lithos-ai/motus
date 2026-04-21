@@ -1,11 +1,10 @@
 """Tests for the /eval/judge endpoint and judge logic."""
 
-import json
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
-import httpx
 import pytest
-from httpx import ASGITransport, AsyncClient, Request, Response
+from httpx import ASGITransport, AsyncClient
 
 from motus.models import ChatMessage
 from motus.serve import AgentServer
@@ -31,6 +30,31 @@ async def client(server):
         yield c
 
 
+def _mock_openai_client(parsed=None, raise_exc=None):
+    """Build a mock AsyncOpenAI that returns a completion with the given parsed result.
+
+    parsed: JudgeResponse instance to return (or None for no parsed object)
+    raise_exc: exception to raise from .parse() instead of returning
+    """
+    parse = AsyncMock()
+    if raise_exc is not None:
+        parse.side_effect = raise_exc
+    else:
+        message = SimpleNamespace(parsed=parsed)
+        choice = SimpleNamespace(message=message)
+        completion = SimpleNamespace(choices=[choice])
+        parse.return_value = completion
+
+    client = SimpleNamespace(
+        beta=SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(parse=parse),
+            ),
+        ),
+    )
+    return client, parse
+
+
 class TestJudgeLogic:
     """Direct tests of run_llm_judge (the judge function in motus)."""
 
@@ -40,7 +64,7 @@ class TestJudgeLogic:
 
         result = await run_llm_judge(
             model="claude-haiku-4-5",
-            criteria="judge: {input} / {output}",
+            criteria="test",
             user_input="hi",
             agent_output="hello",
         )
@@ -52,51 +76,23 @@ class TestJudgeLogic:
 
         result = await run_llm_judge(
             model="claude-haiku-4-5",
-            criteria="judge: {input} / {output}",
+            criteria="test",
             user_input="hi",
             agent_output="hello",
         )
         assert result is None
 
-    async def test_parses_score_passed_reason(self, monkeypatch):
+    async def test_returns_parsed_judge_response(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "lithos_test")
         monkeypatch.setenv("OPENAI_BASE_URL", "http://model-proxy/v1")
 
-        def handler(request: Request) -> Response:
-            # Verify we hit /chat/completions on the configured proxy
-            assert str(request.url) == "http://model-proxy/v1/chat/completions"
-            assert request.headers["authorization"] == "Bearer lithos_test"
-            body = json.loads(request.content)
-            assert body["model"] == "claude-haiku-4-5"
-            assert body["messages"][0]["role"] == "system"
-            assert body["messages"][1]["role"] == "user"
-            assert "input-text" in body["messages"][1]["content"]
-            assert "output-text" in body["messages"][1]["content"]
-            assert body["response_format"] == {"type": "json_object"}
-            return Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "content": json.dumps(
-                                    {"score": 0.8, "passed": True, "reason": "good"}
-                                )
-                            }
-                        }
-                    ]
-                },
-            )
+        parsed = JudgeResponse(score=0.8, passed=True, reason="good")
+        fake_client, parse = _mock_openai_client(parsed=parsed)
 
-        RealAsyncClient = httpx.AsyncClient
-
-        def fake_client(*a, **k):
-            return RealAsyncClient(transport=httpx.MockTransport(handler))
-
-        with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
+        with patch("motus.serve.judge.AsyncOpenAI", return_value=fake_client):
             result = await run_llm_judge(
                 model="claude-haiku-4-5",
-                criteria="input={input} output={output}",
+                criteria="rubric",
                 user_input="input-text",
                 agent_output="output-text",
             )
@@ -106,118 +102,56 @@ class TestJudgeLogic:
         assert result.passed is True
         assert result.reason == "good"
 
-    async def test_handles_markdown_code_fences(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "lithos_test")
-        monkeypatch.setenv("OPENAI_BASE_URL", "http://model-proxy/v1")
-
-        def handler(request: Request) -> Response:
-            return Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "content": '```json\n{"score": 1.0, "passed": true, "reason": "ok"}\n```'
-                            }
-                        }
-                    ]
-                },
-            )
-
-        RealAsyncClient = httpx.AsyncClient
-
-        def fake_client(*a, **k):
-            return RealAsyncClient(transport=httpx.MockTransport(handler))
-
-        with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
-            result = await run_llm_judge(
-                model="claude-haiku-4-5",
-                criteria="j",
-                user_input="a",
-                agent_output="b",
-            )
-
-        assert result is not None
-        assert result.score == 1.0
-        assert result.passed is True
+        # Verify the request shape
+        parse.assert_awaited_once()
+        kwargs = parse.call_args.kwargs
+        assert kwargs["model"] == "claude-haiku-4-5"
+        assert kwargs["response_format"] is JudgeResponse
+        assert kwargs["max_tokens"] == 512
+        assert kwargs["messages"][0]["role"] == "system"
+        assert kwargs["messages"][1]["role"] == "user"
+        assert "input-text" in kwargs["messages"][1]["content"]
+        assert "output-text" in kwargs["messages"][1]["content"]
+        assert "rubric" in kwargs["messages"][1]["content"]
 
     async def test_clamps_score_to_0_1(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "lithos_test")
         monkeypatch.setenv("OPENAI_BASE_URL", "http://model-proxy/v1")
 
-        def handler(request: Request) -> Response:
-            return Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "content": '{"score": 1.7, "passed": true, "reason": ""}'
-                            }
-                        }
-                    ]
-                },
-            )
+        # Bypass Pydantic validation to simulate a model drifting outside [0,1].
+        parsed = JudgeResponse.model_construct(score=1.7, passed=True, reason="")
+        fake_client, _ = _mock_openai_client(parsed=parsed)
 
-        RealAsyncClient = httpx.AsyncClient
-
-        def fake_client(*a, **k):
-            return RealAsyncClient(transport=httpx.MockTransport(handler))
-
-        with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
+        with patch("motus.serve.judge.AsyncOpenAI", return_value=fake_client):
             result = await run_llm_judge(
-                model="m",
-                criteria="j",
-                user_input="a",
-                agent_output="b",
+                model="m", criteria="c", user_input="a", agent_output="b"
             )
 
         assert result is not None
         assert result.score == 1.0
 
-    async def test_http_error_returns_none(self, monkeypatch):
+    async def test_no_parsed_result_returns_none(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "lithos_test")
         monkeypatch.setenv("OPENAI_BASE_URL", "http://model-proxy/v1")
 
-        def handler(request: Request) -> Response:
-            return Response(500, text="internal error")
+        fake_client, _ = _mock_openai_client(parsed=None)
 
-        RealAsyncClient = httpx.AsyncClient
-
-        def fake_client(*a, **k):
-            return RealAsyncClient(transport=httpx.MockTransport(handler))
-
-        with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
+        with patch("motus.serve.judge.AsyncOpenAI", return_value=fake_client):
             result = await run_llm_judge(
-                model="m",
-                criteria="j",
-                user_input="a",
-                agent_output="b",
+                model="m", criteria="c", user_input="a", agent_output="b"
             )
 
         assert result is None
 
-    async def test_invalid_json_returns_none(self, monkeypatch):
+    async def test_exception_returns_none(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "lithos_test")
         monkeypatch.setenv("OPENAI_BASE_URL", "http://model-proxy/v1")
 
-        def handler(request: Request) -> Response:
-            return Response(
-                200,
-                json={"choices": [{"message": {"content": "not json at all"}}]},
-            )
+        fake_client, _ = _mock_openai_client(raise_exc=RuntimeError("upstream"))
 
-        RealAsyncClient = httpx.AsyncClient
-
-        def fake_client(*a, **k):
-            return RealAsyncClient(transport=httpx.MockTransport(handler))
-
-        with patch("motus.serve.judge.httpx.AsyncClient", side_effect=fake_client):
+        with patch("motus.serve.judge.AsyncOpenAI", return_value=fake_client):
             result = await run_llm_judge(
-                model="m",
-                criteria="j",
-                user_input="a",
-                agent_output="b",
+                model="m", criteria="c", user_input="a", agent_output="b"
             )
 
         assert result is None
@@ -241,7 +175,7 @@ class TestJudgeEndpoint:
                 "input": "question",
                 "output": "answer",
                 "model": "claude-haiku-4-5",
-                "criteria": "prompt",
+                "criteria": "rubric",
             },
         )
         assert r.status_code == 200
@@ -258,16 +192,10 @@ class TestJudgeEndpoint:
 
         r = await client.post(
             "/eval/judge",
-            json={
-                "input": "q",
-                "output": "a",
-                "model": "m",
-                "criteria": "p",
-            },
+            json={"input": "q", "output": "a", "model": "m", "criteria": "c"},
         )
         assert r.status_code == 502
 
     async def test_request_validation(self, client):
-        # Missing required fields
         r = await client.post("/eval/judge", json={"input": "q"})
         assert r.status_code == 422

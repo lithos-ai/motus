@@ -6,18 +6,19 @@ the project's tenant via the existing API key auth flow.
 
 The judge prompt structure is platform-owned:
 
-  System prompt  (fixed)  — defines the judge role + output format.
+  System prompt  (fixed)  — defines the judge role.
   User prompt    (built)  — injects input/output and appends developer criteria.
 
-Developers only supply the ``criteria`` text; everything else is handled
-here so scoring is consistent across applications.
+Developers only supply the ``criteria`` text. Structured output is enforced
+by passing the ``JudgeResponse`` Pydantic model as ``response_format``, so
+the model proxy returns a validated JSON object matching the schema — no
+manual parsing, no markdown stripping.
 """
 
-import json
 import logging
 import os
 
-import httpx
+from openai import AsyncOpenAI
 
 from .schemas import JudgeResponse
 
@@ -25,15 +26,11 @@ logger = logging.getLogger("motus.serve.judge")
 
 
 # Fixed system prompt. Developers cannot change this — it guarantees a
-# consistent judge role + output contract across applications.
+# consistent judge role across applications. The response format is
+# enforced via ``response_format=JudgeResponse`` below.
 _SYSTEM_PROMPT = (
     "You are an evaluator that judges whether an AI agent's response to a "
-    "user's request meets the developer-supplied criteria.\n\n"
-    "Respond with a single JSON object with exactly these fields:\n"
-    '- "score": a number between 0.0 and 1.0\n'
-    '- "passed": a boolean\n'
-    '- "reason": a brief explanation string\n'
-    "Do not include any other text."
+    "user's request meets the developer-supplied criteria."
 )
 
 
@@ -41,8 +38,8 @@ def _build_user_message(user_input: str, agent_output: str, criteria: str) -> st
     """User message template. Input/output injection is platform-owned;
     only ``criteria`` is developer-configurable."""
     return (
-        f"User input:\n{user_input[:2000]}\n\n"
-        f"Agent output:\n{agent_output[:2000]}\n\n"
+        f"User input:\n{user_input}\n\n"
+        f"Agent output:\n{agent_output}\n\n"
         f"Criteria:\n{criteria.strip()}"
     )
 
@@ -67,35 +64,26 @@ async def run_llm_judge(
     user_content = _build_user_message(user_input, agent_output, criteria)
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{base_url.rstrip('/')}/chat/completions",
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": _SYSTEM_PROMPT},
-                        {"role": "user", "content": user_content},
-                    ],
-                    "max_tokens": 256,
-                    "response_format": {"type": "json_object"},
-                },
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            resp.raise_for_status()
-
-        content = resp.json()["choices"][0]["message"]["content"]
-
-        # Some providers wrap JSON in markdown despite response_format.
-        text = content.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-        result = json.loads(text)
-        return JudgeResponse(
-            score=max(0.0, min(1.0, float(result.get("score", 0)))),
-            passed=bool(result.get("passed", False)),
-            reason=str(result.get("reason", "")),
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
+        completion = await client.beta.chat.completions.parse(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            response_format=JudgeResponse,
+            max_tokens=512,
         )
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as e:
+        parsed = completion.choices[0].message.parsed
+        if parsed is None:
+            logger.warning("Judge returned no parsed object")
+            return None
+        # Clamp score into [0, 1] in case the model drifts slightly.
+        return JudgeResponse(
+            score=max(0.0, min(1.0, parsed.score)),
+            passed=parsed.passed,
+            reason=parsed.reason,
+        )
+    except Exception as e:
         logger.warning("Judge failed: %s", e)
         return None
