@@ -70,19 +70,9 @@ where = ["src"]
 [tool.setuptools.package-data]
 motus = ["runtime/tracing/templates/*"]
 
-[tool.uv.sources]
-motus-deep-research = { workspace = true }
-
-[tool.uv.workspace]
-members = [
-    ".",
-    "examples/deep_research",
-]
-
 [dependency-groups]
 dev = [
     "ipykernel>=7.1.0",
-    "motus-deep-research",
     "pip>=25.3",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
