@@ -87,3 +87,30 @@ class HealthResponse(BaseModel):
     max_workers: int
     running_workers: int
     total_sessions: int
+
+
+class JudgeRequest(BaseModel):
+    """POST /eval/judge body — platform-triggered post-session eval.
+
+    The developer only supplies the ``criteria``; the judge system prompt
+    and user message template (input/output injection) are platform-owned.
+    """
+
+    input: str
+    output: str
+    model: str = "claude-haiku-4-5"
+    criteria: str
+
+
+class JudgeResponse(BaseModel):
+    """Response from POST /eval/judge."""
+
+    score: float
+    passed: bool
+    reason: str = ""
+
+
+class JudgeError(BaseModel):
+    """Returned when the judge fails to produce a score."""
+
+    error: str

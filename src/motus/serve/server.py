@@ -16,6 +16,8 @@ from .schemas import (
     CreateSessionRequest,
     HealthResponse,
     InterruptInfo,
+    JudgeRequest,
+    JudgeResponse,
     MessageRequest,
     MessageResponse,
     ResumeRequest,
@@ -301,6 +303,27 @@ class AgentServer:
             except ValueError as e:
                 raise HTTPException(status_code=404, detail=str(e))
             return {"session_id": session_id, "status": session.status.value}
+
+        @app.post("/eval/judge", response_model=JudgeResponse)
+        async def run_judge(body: JudgeRequest) -> JudgeResponse:
+            """Run the LLM judge on a completed session's input/output.
+
+            Triggered by the platform after a session turn completes. Uses
+            the container's existing OPENAI_API_KEY and OPENAI_BASE_URL env
+            vars (set by the platform at deploy time) to call the model
+            proxy. Billing is attributed to the project via the API key.
+            """
+            from .judge import run_llm_judge
+
+            result = await run_llm_judge(
+                model=body.model,
+                criteria=body.criteria,
+                user_input=body.input,
+                agent_output=body.output,
+            )
+            if result is None:
+                raise HTTPException(status_code=502, detail="Judge call failed")
+            return result
 
         return app
 
