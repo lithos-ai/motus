@@ -514,18 +514,18 @@ class TestGoogleADKParallelTools:
     async def test_resolve(self):
         from motus.serve.worker import _resolve_import_path
 
-        obj = _resolve_import_path("examples.google_adk.parallel_tools:root_agent")
+        obj = _resolve_import_path("examples.google_adk.parallel_functions:root_agent")
         assert hasattr(obj, "run_turn") and callable(obj.run_turn)
 
     @pytest.mark.integration
     async def test_has_four_tools(self):
-        from examples.google_adk.parallel_tools import root_agent
+        from examples.google_adk.parallel_functions import root_agent
 
         assert len(root_agent.tools) == 4
 
     @pytest.mark.integration
     async def test_run_turn(self, mock_gemini_weather):
-        from examples.google_adk.parallel_tools import root_agent
+        from examples.google_adk.parallel_functions import root_agent
 
         msg = ChatMessage.user_message("Tell me about Tokyo")
         response, state = await root_agent.run_turn(msg, [])
@@ -587,12 +587,12 @@ class TestGoogleADKPydanticTools:
     async def test_resolve(self):
         from motus.serve.worker import _resolve_import_path
 
-        obj = _resolve_import_path("examples.google_adk.pydantic_tools:root_agent")
+        obj = _resolve_import_path("examples.google_adk.pydantic_argument:root_agent")
         assert hasattr(obj, "run_turn") and callable(obj.run_turn)
 
     @pytest.mark.integration
     async def test_run_turn(self, mock_gemini_text_only):
-        from examples.google_adk.pydantic_tools import root_agent
+        from examples.google_adk.pydantic_argument import root_agent
 
         msg = ChatMessage.user_message("Register user Alice, alice@test.com")
         response, state = await root_agent.run_turn(msg, [])

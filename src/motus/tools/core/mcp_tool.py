@@ -13,6 +13,8 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
+from motus.secrets.httpx import AUTH
+
 from .sandbox import Sandbox
 from .tool import Tool
 
@@ -105,10 +107,11 @@ class MCPSession:
                 "headers and http_client only apply to HTTP (url=) connections"
             )
         self._url = url
-        # headers is a convenience shortcut — build an httpx client if needed.
-        self._owns_http_client = http_client is None and bool(headers)
-        if self._owns_http_client:
-            http_client = httpx.AsyncClient(headers=headers)
+        # When the user doesn't supply a client, build one carrying motus AUTH
+        # (ConsoleAuth / DaprAuth). User-supplied clients are used as-is.
+        self._owns_http_client = http_client is None
+        if self._owns_http_client and url is not None:
+            http_client = httpx.AsyncClient(headers=headers, auth=AUTH)
         self._http_client = http_client
         self._http_kwargs = kwargs if url else {}
         self._server_params = (
