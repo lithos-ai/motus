@@ -19,12 +19,15 @@ def make_memory_tools(root: Path):
     All file_path arguments are relative to root. Absolute paths that fall
     outside root are rejected.
     """
+    # Resolve once so symlinked temp dirs (e.g. macOS /var → /private/var) and
+    # every relative_to() comparison downstream use the same canonical form.
+    root = root.resolve()
 
     def _resolve(rel_path: str) -> Path:
         """Resolve a relative path and ensure it stays within root."""
         resolved = (root / rel_path).resolve()
         try:
-            resolved.relative_to(root.resolve())
+            resolved.relative_to(root)
         except ValueError:
             raise ValueError(f"Path {rel_path!r} is outside the memory root")
         return resolved
