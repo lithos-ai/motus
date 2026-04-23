@@ -251,6 +251,13 @@ class TraceManager:
         extra_meta = extractor.extract_end_meta(result)
         self.task_meta[task_id_int].update(extra_meta)
 
+        # Enrich model_output_meta.usage with cost so downstream consumers
+        # (cloud TracesTable.total_cost_usd, OTel exporter, this tracer's own
+        # get_turn_metrics) all see the same cost value sourced once here.
+        # calculate_cost prefers gateway-provided cost (response.usage.cost)
+        # and falls back to the local pricing table for direct-SDK paths.
+        self._enrich_usage_with_cost(self.task_meta[task_id_int])
+
         # Pop from stack (conditional: deferred task_end may fire in a
         # different async context where this task is not on the stack)
         stack = self.current_task_stack.get()
@@ -268,6 +275,24 @@ class TraceManager:
 
         # Push updated span via SSE + cloud
         self._push_span_if_needed(task_id_int, self.task_meta[task_id_int])
+
+    def _enrich_usage_with_cost(self, meta: dict) -> None:
+        """Inject computed cost into model_output_meta.usage.cost in-place."""
+        output = meta.get("model_output_meta")
+        if not isinstance(output, dict):
+            return
+        usage = output.get("usage")
+        if not isinstance(usage, dict):
+            return
+        # Already populated (gateway-provided) — leave it.
+        if usage.get("cost"):
+            return
+        from motus.models.pricing import calculate_cost
+
+        model_name = output.get("model") or meta.get("model_name", "")
+        cost = calculate_cost(model_name, usage)
+        if cost is not None:
+            usage["cost"] = cost
 
     def error_task(self, task_id: AgentTaskId, error: Exception) -> None:
         """Record a task that ended with an error.
