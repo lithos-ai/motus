@@ -448,9 +448,7 @@ class TestBackgroundMemoryCompaction(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(mem._update_task)
         await mem._do_compact()
         self.assertIsNotNone(mem._update_task)
-        self.assertTrue(
-            mem._update_task.get_name().startswith("memory-update-")
-        )
+        self.assertTrue(mem._update_task.get_name().startswith("memory-update-"))
         await mem._update_task  # drain
 
     @patch("motus.memory.background_memory.MemoryUpdateAgent")
@@ -562,9 +560,7 @@ class TestBackgroundMemoryLifecycle(unittest.IsolatedAsyncioTestCase):
     @patch("motus.memory.background_memory.MemoryUpdateAgent")
     async def test_on_agent_complete_swallows_exceptions(self, MockUpdateAgent):
         """Errors in the update task must not propagate out of on_agent_complete."""
-        MockUpdateAgent.return_value.run = AsyncMock(
-            side_effect=RuntimeError("boom")
-        )
+        MockUpdateAgent.return_value.run = AsyncMock(side_effect=RuntimeError("boom"))
 
         mem = _make_memory(root=self.root, compact_fn=lambda m, s: "summary")
         await mem.add_message(ChatMessage.user_message("hi"))
