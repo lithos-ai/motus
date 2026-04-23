@@ -47,6 +47,7 @@ Each defines a module-level `Agent` instance deployable via serve.
 | [llm_as_a_judge.py](llm_as_a_judge.py) | Evaluation feedback loop | `story_outline_generator` | Yes | Yes | -- |
 | [output_guardrails.py](output_guardrails.py) | Output guardrail tripwires | `agent` | Yes | Yes | Guardrail refusal returned as message, not exception |
 | [message_filter.py](message_filter.py) | Handoff with message filtering | `first_agent` | Yes | Yes | -- |
+| [mcp.py](mcp.py) | MCP tools over HTTP via `MCPServerStreamableHttp` with motus `create_auth` | `agent` | Yes | Yes | Set `MCP_SERVER_URL`; import `MCPServerStreamableHttp` from `agents.mcp` (submodule not re-exported by motus) |
 
 ## How it works
 

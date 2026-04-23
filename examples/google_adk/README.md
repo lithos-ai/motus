@@ -44,13 +44,14 @@ vanilla `google.adk` agents.
 | [callbacks.py](callbacks.py) | All 6 callback hooks (before/after agent, model, tool) | Yes | Yes | -- |
 | [multi_agent.py](multi_agent.py) | Root triage agent delegates to math and writing sub-agents | Yes | Yes | -- |
 | [structured_output.py](structured_output.py) | Pydantic `output_schema` with tool-gathered data | Yes | Yes | Response is a JSON string |
-| [parallel_tools.py](parallel_tools.py) | Multiple async tools called concurrently | Yes | Yes | -- |
+| [parallel_functions.py](parallel_functions.py) | Multiple async tools called concurrently | Yes | Yes | -- |
 | [fields_output_schema.py](fields_output_schema.py) | List-typed Pydantic output with `output_key` | Yes | Yes | Response is a JSON string |
-| [pydantic_tools.py](pydantic_tools.py) | Tools with Pydantic model args (Optional, nested) | Yes | Yes | -- |
+| [pydantic_argument.py](pydantic_argument.py) | Tools with Pydantic model args (Optional, nested) | Yes | Yes | -- |
 | [workflow_triage.py](workflow_triage.py) | Triage → conditional ParallelAgent + summary | Yes | Yes | -- |
 | [static_instruction.py](static_instruction.py) | Pure LLM agent with detailed persona (no tools) | Yes | Yes | -- |
 | [token_usage.py](token_usage.py) | Text generation with token usage tracking | Yes | Yes | -- |
 | [multimodal_tools.py](multimodal_tools.py) | Rich tool outputs: charts, reports, comparisons | Yes | Yes | -- |
+| [mcp.py](mcp.py) | MCP tools over HTTP via `MCPToolset` with motus `create_auth` | Yes | Yes | Set `MCP_SERVER_URL`; uses `ConsoleAuth` locally, `DaprAuth` when deployed |
 
 ## How it works
 
