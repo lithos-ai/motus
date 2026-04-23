@@ -16,7 +16,7 @@ from pathlib import Path
 
 from motus.models.base import BaseChatClient
 
-from .events import MemoryChunk
+from .chunk import MemoryChunk
 from .memory_tools import make_memory_tools
 from .prompts import MEMORY_SEARCH_AGENT_PROMPT, MEMORY_UPDATE_AGENT_PROMPT
 

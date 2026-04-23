@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from motus.models.base import ChatMessage
 
-from .background.events import MemoryChunk
+from .background.chunk import MemoryChunk
 from .background.memory_agent import (
     MemorySearchAgent,
     MemoryUpdateAgent,
