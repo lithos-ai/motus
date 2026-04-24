@@ -17,3 +17,4 @@
 - [ ] Format your code with pre-commit
 - [ ] Add unit tests if needed
 - [ ] Update documentation if needed
+- [ ] Update plugin if needed
