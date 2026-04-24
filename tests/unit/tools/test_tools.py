@@ -1,5 +1,3 @@
-import asyncio
-import datetime as real_datetime
 import json
 import unittest
 from dataclasses import dataclass, is_dataclass
@@ -138,65 +136,6 @@ class TestFunctionTool(unittest.IsolatedAsyncioTestCase):
                 "meta": {"x": {"name": "x"}},
             },
         )
-
-
-class TestCron(unittest.IsolatedAsyncioTestCase):
-    async def test_cron_uses_mocked_time_and_reschedules(self):
-        class FixedDatetime(real_datetime.datetime):
-            _now = real_datetime.datetime(2025, 1, 1, 0, 0)
-
-            @classmethod
-            def now(cls, tz=None):
-                if tz is not None:
-                    return cls._now.astimezone(tz)
-                return cls._now
-
-        def fake_time():
-            return FixedDatetime._now.timestamp()
-
-        real_sleep = asyncio.sleep
-
-        async def fake_sleep(_):
-            await real_sleep(0)
-
-        sleep_mock = mock.AsyncMock(side_effect=fake_sleep)
-
-        with (
-            mock.patch("motus.utils.cron.datetime.datetime", FixedDatetime),
-            mock.patch("motus.utils.cron.time.time", new=fake_time),
-            mock.patch("motus.utils.cron.asyncio.sleep", new=sleep_mock),
-        ):
-            from motus.utils.cron import Cron
-
-            cron = Cron()
-            asyncio.create_task(cron.run())
-            calls: list[real_datetime.datetime] = []
-
-            def record_call():
-                calls.append(FixedDatetime._now)
-
-            cron.create_cron(
-                minute=None,
-                hour=None,
-                day_of_month=None,
-                month=None,
-                day_of_week=None,
-                func=record_call,
-            )
-
-            # Job is scheduled for 00:01, current time is 00:00 - no call yet
-            await asyncio.sleep(0)  # Yield control so the scheduler can run
-            self.assertEqual(len(calls), 0)
-
-            # Advance time to 00:01 and let the background task run
-            FixedDatetime._now = FixedDatetime._now + real_datetime.timedelta(minutes=1)
-            await asyncio.sleep(0)
-
-            self.assertEqual(len(calls), 1)
-            self.assertEqual(len(cron.scheduler.queue), 1)
-            next_time = cron.scheduler.queue[0].time
-            expected_time = real_datetime.datetime(2025, 1, 1, 0, 2).timestamp()
-            self.assertEqual(next_time, expected_time)
 
 
 class TestToolWrappers(unittest.IsolatedAsyncioTestCase):

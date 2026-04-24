@@ -30,6 +30,7 @@ DEFAULT_MAX_WORKERS = 4
 _USER_PARAMS_TO_ENV: dict[str, str] = {
     "sandbox_url": "SANDBOX_URL",
     "sandbox_token": "SANDBOX_TOKEN",
+    "session_token": "SESSION_TOKEN",
 }
 
 
