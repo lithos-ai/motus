@@ -42,6 +42,17 @@ client = OpenRouterChatClient(
 )
 ```
 
+### VolcEngineChatClient
+
+```python
+from motus.models import VolcEngineChatClient
+client = VolcEngineChatClient(
+    api_key: str | None = None,        # Falls back to ARK_API_KEY env
+)
+```
+
+Requires `volcenginesdkarkruntime`. Useful for Doubao / Volcengine Ark models.
+
 ### CachePolicy
 
 ```python
@@ -61,7 +72,7 @@ from motus.agent import ReActAgent
 
 agent = ReActAgent(
     client: BaseChatClient,                    # REQUIRED — model client instance
-    model_name: str,                           # REQUIRED — "gpt-4o", "claude-sonnet-4-20250514", etc.
+    model_name: str,                           # REQUIRED — "gpt-4o", "claude-opus-4-7", "claude-sonnet-4-5-20250929", etc.
     name: str | None = None,                   # Agent name (auto-inferred if omitted)
     system_prompt: str | None = None,          # System instructions
     tools: Any | None = None,                  # Tools: list, dict, @tools class, MCPSession, etc.
@@ -242,21 +253,23 @@ from motus.tools import tools
 wrapped = tools(session, prefix="fs_", blocklist={"write_file"})
 ```
 
-### Sandbox (Docker code execution)
+### Sandbox (code execution — local Docker or cloud)
 
 ```python
 from motus.tools import get_sandbox
 
 sandbox = get_sandbox(
     image: str = "python:3.12",
-    dockerfile: str | None = None,               # Build from Dockerfile
-    name: str | None = None,                     # Container name
+    dockerfile: str | None = None,               # Build from Dockerfile (local only)
+    name: str | None = None,                     # Container name (local only)
     env: dict[str, str] | None = None,
-    mounts: dict[str, str] | None = None,        # Host:container path mapping
-    connect: str | None = None,                  # Connect to existing container
+    mounts: dict[str, str] | None = None,        # Host:container path mapping (local only)
+    connect: str | None = None,                  # Connect to existing container (local only)
     ports: dict[int, int | None] | None = None,  # Port mapping
 )
 ```
+
+The same call works locally (Docker) and on cloud deploy (platform-provisioned per-session sandbox). Params marked `(local only)` are no-ops on cloud.
 
 **Usage:**
 
@@ -506,6 +519,7 @@ from motus.openai_agents import Agent as OAIAgent
 
 # Models (for ReActAgent)
 from motus.models import OpenAIChatClient, AnthropicChatClient, GeminiChatClient, OpenRouterChatClient
+from motus.models import VolcEngineChatClient  # optional — requires volcenginesdkarkruntime
 from motus.models.base import ChatMessage, ChatCompletion, CachePolicy
 
 # Tools

@@ -1,6 +1,6 @@
 ---
 name: motus
-version: 0.3.0
+version: 0.4.0
 description: Build, configure, and deploy AI agents using the Motus framework. Use when user wants to create agents, define tools, set up workflows, configure memory or guardrails, or deploy agents locally or to the cloud. Triggers on mentions of motus, ReActAgent, agent_task, tool creation, MCP integration, motus deploy, motus serve.
 argument-hint: "[deploy [--name name] [import-path]] or [deploy [--project-id id] [import-path]] or [serve [import-path]] or [description of agent to build]"
 ---
@@ -74,7 +74,7 @@ Before writing any agent code, verify the user's environment is ready. Run these
    uv add lithosai-motus
    ```
 2. **API keys** — LLM provider keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, etc.) are **only needed for local testing**, not for cloud deployment. If no keys are set, **do not block** — note it and continue. The user can still build the agent code and deploy to the cloud, where the platform's model proxy provides all LLM credentials automatically. Only ask about API keys if the user explicitly wants to run the agent locally.
-3. **Optional: Docker** — Only check if the user needs sandbox or MCP-in-container features. `docker info` should succeed.
+3. **Optional: Docker** — Only needed for **local** sandbox or MCP-in-container runs. `docker info` should succeed. Not needed for cloud deploy.
 
 If everything is fine, proceed without mentioning the checks.
 
@@ -97,14 +97,14 @@ See these files for detailed API reference and patterns:
 | `@agent_task` | Decorator turning functions into dependency-tracked async tasks | `from motus.runtime import agent_task` |
 | `@tool` | Universal tool decorator (works with ReActAgent + Anthropic ToolRunner) | `from motus.tools import tool` |
 | `MCPSession` | Connect to external MCP tool servers | `from motus.tools import get_mcp` |
-| `Sandbox` | Docker container for code execution (**local-only**) | `from motus.tools import get_sandbox` |
+| `Sandbox` | Isolated environment for code execution (local Docker or cloud-managed) | `from motus.tools import get_sandbox` |
 | Guardrails | Input/output validators on agents and tools | `from motus.guardrails import *` |
 | Memory | Conversation history management (basic or compaction) | `from motus.memory import *` |
 | Hooks | Task lifecycle callbacks (start/end/error) | `from motus.runtime.hooks import register_hook` |
 
 ## Deployable agent types
 
-Not all agent configurations can be deployed to the cloud. Use this to guide what you build:
+All common agent configurations deploy to the cloud. Use this to guide what you build:
 
 | Agent type | CLI | Local serve | Cloud deploy | Notes |
 |-----------|-----|-------------|-------------|-------|
@@ -112,9 +112,9 @@ Not all agent configurations can be deployed to the cloud. Use this to guide wha
 | **Research / pipeline** (web search, multi-step reasoning) | Yes | Yes | Yes | Uses `@tool` functions and `@agent_task` workflows |
 | **Multi-agent** (orchestrator + specialists) | Yes | Yes | Yes | Uses `agent.as_tool()` for delegation |
 | **MCP-connected** (external tool servers) | Yes | Yes | Yes | Uses `get_mcp()` — MCP server must be network-accessible from cloud |
-| **Coding / sandbox** (code execution in Docker) | Yes | Yes | **No** | `get_sandbox()` requires local Docker — not available in cloud |
+| **Coding / sandbox** (code execution) | Yes | Yes | Yes | `get_sandbox()` works in both — local uses Docker, cloud is platform-managed |
 
-When the user asks to build an agent, **infer the type from their description** — do not ask them to pick from this list. If they describe something that requires a sandbox (code execution, running scripts, etc.), note that it will only work locally and offer to proceed with CLI or local serve mode.
+When the user asks to build an agent, **infer the type from their description** — do not ask them to pick from this list.
 
 ## Workflow: building an agent application
 
@@ -164,7 +164,7 @@ def my_tool(param: str) -> str:
     return result
 ```
 
-For complex inputs, see [PATTERNS.md](PATTERNS.md). For external tool servers, use `get_mcp()`. For local code execution, use `get_sandbox()` (local-only — not available in cloud deploy).
+For complex inputs, see [PATTERNS.md](PATTERNS.md). For external tool servers, use `get_mcp()`. For code execution, use `get_sandbox()` — works in both local and cloud.
 
 ### Step 2: Create the agent
 
@@ -337,6 +337,8 @@ The Motus cloud platform provides a **transparent model proxy** that automatical
 - `/v1beta/` — Google GenAI API (direct to Google)
 
 **The only check needed:** Ensure the agent code does not hardcode API keys or base URLs that would conflict with the auto-wired values. Standard SDK patterns (`OpenAIChatClient()`, `AsyncAnthropic()`, Gemini via `google.genai`) all pick up the env vars automatically.
+
+**Tracing:** Cloud deploys upload traces to the Motus dashboard automatically. Local runs never upload, even when logged in.
 
 ### C1.6. Local Smoke Test Before Cloud Deploy (Optional)
 
