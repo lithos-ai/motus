@@ -197,7 +197,9 @@ result = await agent("Analyze the sentiment of: 'This product is amazing!'")
 
 ---
 
-## Pattern 9: Docker sandbox for code execution (local-only — not deployable to cloud)
+## Pattern 9: Sandbox for code execution
+
+Works identically locally (Docker) and on cloud deploy (platform-managed). Same code.
 
 ```python
 from motus.tools import get_sandbox, FunctionTool

@@ -145,9 +145,9 @@ asyncio.run(main())
 
 ---
 
-## Example 3: Code Assistant with Sandbox (Local-Only)
+## Example 3: Code Assistant with Sandbox
 
-An agent that writes and executes Python code in a Docker sandbox. **This pattern only works for CLI interaction and local serve** — `get_sandbox()` requires local Docker and cannot be deployed to the cloud.
+An agent that writes and executes Python code in a sandbox. Same code runs locally (Docker) and in cloud deploy (platform-managed).
 
 ```python
 import asyncio
