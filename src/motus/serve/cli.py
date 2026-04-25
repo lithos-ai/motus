@@ -243,8 +243,7 @@ def chat_command(args):
     params = _parse_params(args.params)
 
     try:
-        # NOTE: Use a timeout longer than the agent's GET long poll.
-        with httpx.Client(timeout=620, headers=_auth_headers()) as client:
+        with httpx.Client(timeout=600, headers=_auth_headers()) as client:
             if args.session:
                 session_id = args.session
             else:
