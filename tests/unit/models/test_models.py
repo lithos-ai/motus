@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from motus.models import (
     AnthropicChatClient,
+    CachePolicy,
     ChatCompletion,
     ChatMessage,
     FunctionCall,
@@ -421,6 +422,47 @@ class TestOpenRouterChatClient(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(response2, ChatCompletion)
         self.assertIsNotNone(response2.content)
         self.assertIn("42", response2.content)
+
+
+class TestOpenRouterCacheBody(unittest.TestCase):
+    """Assert cache_control is emitted only for models whose upstream needs it."""
+
+    def test_anthropic_model_gets_ephemeral_marker(self):
+        body = OpenRouterChatClient._build_cache_body(
+            CachePolicy.AUTO, "anthropic/claude-sonnet-4-5"
+        )
+        self.assertEqual(body, {"cache_control": {"type": "ephemeral"}})
+
+    def test_gemini_model_gets_no_marker(self):
+        # Gemini 2.5 auto-caches server-side (implicit caching, May 2025),
+        # so client markers are redundant.
+        body = OpenRouterChatClient._build_cache_body(
+            CachePolicy.AUTO, "google/gemini-2.5-flash"
+        )
+        self.assertEqual(body, {})
+
+    def test_auto_1h_adds_ttl(self):
+        body = OpenRouterChatClient._build_cache_body(
+            CachePolicy.AUTO_1H, "anthropic/claude-opus-4-5"
+        )
+        self.assertEqual(body, {"cache_control": {"type": "ephemeral", "ttl": "1h"}})
+
+    def test_openai_model_gets_no_marker(self):
+        # OpenAI auto-caches server-side; marker would be redundant noise.
+        self.assertEqual(
+            OpenRouterChatClient._build_cache_body(
+                CachePolicy.AUTO, "openai/gpt-4o-mini"
+            ),
+            {},
+        )
+
+    def test_cache_none_returns_empty(self):
+        self.assertEqual(
+            OpenRouterChatClient._build_cache_body(
+                CachePolicy.NONE, "anthropic/claude-sonnet-4-5"
+            ),
+            {},
+        )
 
 
 @pytest.mark.slow

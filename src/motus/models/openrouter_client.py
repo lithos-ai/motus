@@ -13,8 +13,18 @@ from pydantic import BaseModel
 
 from motus.runtime.agent_task import agent_task
 
-from .base import ChatCompletion, ChatMessage, ReasoningConfig, ToolDefinition
+from .base import (
+    CachePolicy,
+    ChatCompletion,
+    ChatMessage,
+    ReasoningConfig,
+    ToolDefinition,
+)
 from .openai_client import OpenAIChatClient
+
+# Anthropic requires client-side cache_control markers to cache via
+# OpenRouter. https://openrouter.ai/docs/guides/best-practices/prompt-caching#anthropic-claude
+_CACHE_SUPPORTED_PREFIXES = ("anthropic/",)
 
 
 class OpenRouterChatClient(OpenAIChatClient):
@@ -84,6 +94,24 @@ class OpenRouterChatClient(OpenAIChatClient):
         return completion
 
     @staticmethod
+    def _build_cache_body(cache_policy: CachePolicy, model: str) -> dict:
+        """Build OpenRouter top-level cache_control for Anthropic/Gemini models.
+
+        OpenRouter's `/chat/completions` accepts `cache_control` at the body for providers whose upstream requires explicit markers
+        (Anthropic). OpenRouter auto-advances the breakpoint across
+        turns. Auto-cache providers (OpenAI, etc.) ignore the field.
+        """
+        if cache_policy == CachePolicy.NONE:
+            return {}
+        if not any(model.startswith(p) for p in _CACHE_SUPPORTED_PREFIXES):
+            return {}
+        ttl = "1h" if cache_policy == CachePolicy.AUTO_1H else None
+        cc = {"type": "ephemeral"}
+        if ttl:
+            cc["ttl"] = ttl
+        return {"cache_control": cc}
+
+    @staticmethod
     def _build_reasoning_body(reasoning: ReasoningConfig, max_tokens: int) -> dict:
         """Build OpenRouter reasoning extra_body from ReasoningConfig.
 
@@ -110,14 +138,17 @@ class OpenRouterChatClient(OpenAIChatClient):
         messages: list[ChatMessage],
         tools: Optional[list[ToolDefinition]] = None,
         reasoning: ReasoningConfig = ReasoningConfig.auto(),
+        cache_policy: CachePolicy = CachePolicy.NONE,
         **kwargs,
     ) -> ChatCompletion:
         """Create a chat completion using OpenRouter API."""
+        extra_body = kwargs.pop("extra_body", {})
         if reasoning.enabled:
-            extra_body = kwargs.pop("extra_body", {})
             extra_body.update(
                 self._build_reasoning_body(reasoning, kwargs.get("max_tokens", 64000))
             )
+        extra_body.update(self._build_cache_body(cache_policy, model))
+        if extra_body:
             kwargs["extra_body"] = extra_body
         return await super().create(
             model=model, messages=messages, tools=tools, **kwargs
@@ -130,14 +161,17 @@ class OpenRouterChatClient(OpenAIChatClient):
         response_format: Type[BaseModel],
         tools: Optional[list[ToolDefinition]] = None,
         reasoning: ReasoningConfig = ReasoningConfig.auto(),
+        cache_policy: CachePolicy = CachePolicy.NONE,
         **kwargs,
     ) -> ChatCompletion:
         """Create a chat completion with structured output parsing using OpenRouter API."""
+        extra_body = kwargs.pop("extra_body", {})
         if reasoning.enabled:
-            extra_body = kwargs.pop("extra_body", {})
             extra_body.update(
                 self._build_reasoning_body(reasoning, kwargs.get("max_tokens", 64000))
             )
+        extra_body.update(self._build_cache_body(cache_policy, model))
+        if extra_body:
             kwargs["extra_body"] = extra_body
         return await super().parse(
             model=model,
