@@ -204,7 +204,10 @@ def _send_and_wait(client, base_url, session_id, message, params=None):
         return
 
     while True:
-        r = client.get(f"{base_url}/sessions/{session_id}", params={"wait": "true"})
+        try:
+            r = client.get(f"{base_url}/sessions/{session_id}", params={"wait": "true"})
+        except httpx.ReadTimeout:
+            continue
         r.raise_for_status()
         data = r.json()
         status = data["status"]
