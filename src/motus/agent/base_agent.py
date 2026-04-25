@@ -9,6 +9,7 @@ from typing import Any, Callable, Generic, List, Literal, Optional, TypeVar
 from pydantic import BaseModel
 
 from motus import Tools, normalize_tools
+from motus.memory.background_memory import BackgroundMemory
 from motus.memory.base_memory import BaseMemory
 from motus.memory.basic_memory import BasicMemory
 from motus.memory.compaction_memory import CompactionMemory
@@ -45,7 +46,7 @@ class AgentBase(ABC, Generic[T]):
         tools: Optional[Any] = None,
         response_format: Optional[type[BaseModel]] = None,
         max_steps: Optional[int] = None,
-        memory_type: Literal["basic", "compact"] = "basic",
+        memory_type: Literal["basic", "compact", "background"] = "basic",
         memory: Optional[BaseMemory] = None,
         input_guardrails: Optional[list[Callable]] = None,
         output_guardrails: Optional[list[Callable]] = None,
@@ -63,10 +64,14 @@ class AgentBase(ABC, Generic[T]):
             system_prompt: Optional system prompt to set agent behavior
             tools: Optional tools (can be Tools, dict, list, or callable)
             max_steps: Maximum number of reasoning steps (default: None, no limit)
-            memory_type: Memory type - "basic" (default) or "compact"
+            memory_type: Memory type - "basic" (default), "compact", or "background".
+                "background" uses the agent's own client/model for the memory agents
+                and stores the memory tree at ~/.motus/memory. For custom settings
+                (e.g., cheaper memory model, custom root), pass ``memory=`` directly.
             memory: Optional BaseMemory instance for conversation and memory management.
                    If not provided, a new Memory instance will be created.
-                   Can be any BaseMemory subclass (e.g., Memory, CompactionMemory).
+                   Can be any BaseMemory subclass (e.g., Memory, CompactionMemory,
+                   BackgroundMemory).
             input_guardrails: Optional list of guardrail callables run before the
                 agent's ``_run()`` method.  Signature: ``(value: str) -> str | None``
                 or ``(value: str, agent) -> str | None``.  Return ``None`` to pass
@@ -100,10 +105,15 @@ class AgentBase(ABC, Generic[T]):
             self._memory = BasicMemory()
         elif memory_type == "compact":
             self._memory = CompactionMemory()
+        elif memory_type == "background":
+            self._memory = BackgroundMemory(
+                memory_client=client,
+                memory_model_name=model_name,
+            )
         else:
             raise ValueError(
                 f"Unknown memory_type={memory_type!r}. "
-                "Supported values: 'basic', 'compact'."
+                "Supported values: 'basic', 'compact', 'background'."
             )
 
         # Inject model/client if the memory supports it
