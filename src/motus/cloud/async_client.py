@@ -1,0 +1,781 @@
+"""Async client + session for motus.cloud."""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Any, Mapping
+
+import httpx
+from pydantic import TypeAdapter
+
+from motus.models import ChatMessage
+from motus.serve.schemas import (
+    MessageResponse,
+    SessionResponse,
+    SessionStatus,
+    SessionSummary,
+)
+
+from ._models import ChatResult, Interrupt, SessionEvent
+from ._transport import (
+    DEFAULT_HTTP_TIMEOUT,
+    DEFAULT_READ_RETRY_BUDGET,
+    DEFAULT_SERVER_WAIT_SLICE,
+    CloudHealthResponse,
+    async_poll_until_terminal,
+    async_post_message,
+    async_request,
+    async_resume_and_poll,
+    async_send_and_poll,
+    build_headers,
+    decode_json_validated,
+    parse_session_response,
+    resolve_api_key,
+    validate_base_url,
+    wait_http_timeout,
+)
+from .errors import (
+    AgentError,
+    ClientClosed,
+    MotusClientError,
+    SessionClosed,
+    SessionNotFound,
+)
+
+_SESSION_LIST_ADAPTER = TypeAdapter(list[SessionSummary])
+_MESSAGES_ADAPTER = TypeAdapter(list[ChatMessage])
+
+
+def _unbounded_read_timeout(current: httpx.Timeout) -> httpx.Timeout:
+    """Return a Timeout that keeps connect/write/pool but disables the read deadline."""
+    return httpx.Timeout(
+        connect=current.connect,
+        read=None,
+        write=current.write,
+        pool=current.pool,
+    )
+
+
+logger = logging.getLogger("motus.cloud")
+
+
+class AsyncClient:
+    """Async counterpart of Client; shares transport and semantics."""
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        api_key: str | None = None,
+        turn_timeout: float | None = None,
+        http_timeout: httpx.Timeout | None = None,
+        server_wait_slice: float = DEFAULT_SERVER_WAIT_SLICE,
+        read_retry_budget: int = DEFAULT_READ_RETRY_BUDGET,
+        extra_headers: Mapping[str, str] | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        if transport is not None and http_client is not None:
+            raise ValueError("pass either transport= or http_client=, not both")
+        self._base_url = validate_base_url(base_url)
+        self._api_key = resolve_api_key(api_key)
+        self._turn_timeout = turn_timeout
+        self._http_timeout = http_timeout or DEFAULT_HTTP_TIMEOUT
+        self._server_wait_slice = server_wait_slice
+        self._read_retry_budget = read_retry_budget
+        self._extra_headers: dict[str, str] = dict(extra_headers or {})
+        if http_client is not None:
+            self._http = http_client
+            self._owns_http = False
+        else:
+            self._http = httpx.AsyncClient(
+                timeout=self._http_timeout, transport=transport
+            )
+            self._owns_http = True
+        self._closed = False
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._owns_http:
+            await self._http.aclose()
+
+    async def __aenter__(self) -> "AsyncClient":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.aclose()
+
+    # ------------------------- internals -------------------------
+
+    def _guard_open(self) -> None:
+        if self._closed:
+            raise ClientClosed("motus.cloud.AsyncClient has been closed")
+
+    def _headers(self, per_call: Mapping[str, str] | None = None) -> dict[str, str]:
+        self._guard_open()
+        return build_headers(self._api_key, self._extra_headers, per_call)
+
+    # ------------------------- low-level -------------------------
+
+    async def health(self, *, extra_headers: Mapping[str, str] | None = None) -> dict:
+        r = await async_request(
+            self._http,
+            "GET",
+            f"{self._base_url}/health",
+            headers=self._headers(extra_headers),
+        )
+        return decode_json_validated(r, CloudHealthResponse)
+
+    async def create_session(
+        self,
+        *,
+        session_id: str | None = None,
+        initial_state: list["ChatMessage"] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> SessionResponse:
+        body: dict[str, Any] | None = None
+        if initial_state:
+            body = {
+                "state": [
+                    m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m
+                    for m in initial_state
+                ]
+            }
+        if session_id is None:
+            r = await async_request(
+                self._http,
+                "POST",
+                f"{self._base_url}/sessions",
+                headers=self._headers(extra_headers),
+                json=body,
+            )
+        else:
+            try:
+                uuid.UUID(session_id)
+            except (ValueError, AttributeError, TypeError) as e:
+                raise ValueError(
+                    f"session_id must be a valid UUID; got: {session_id!r}"
+                ) from e
+            r = await async_request(
+                self._http,
+                "PUT",
+                f"{self._base_url}/sessions/{session_id}",
+                headers=self._headers(extra_headers),
+                json=body,
+                session_id=session_id,
+            )
+        return parse_session_response(r)
+
+    async def get_session(
+        self,
+        session_id: str,
+        *,
+        wait: bool = False,
+        timeout: float | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> SessionResponse:
+        params: dict[str, Any] = {}
+        http_timeout: Any = httpx.USE_CLIENT_DEFAULT
+        if wait:
+            params["wait"] = "true"
+            if timeout is not None:
+                params["timeout"] = str(timeout)
+                # Use the live client's effective timeout so caller-injected
+                # http_client settings are honored.
+                http_timeout = wait_http_timeout(self._http.timeout, timeout)
+            else:
+                http_timeout = _unbounded_read_timeout(self._http.timeout)
+        r = await async_request(
+            self._http,
+            "GET",
+            f"{self._base_url}/sessions/{session_id}",
+            headers=self._headers(extra_headers),
+            params=params or None,
+            timeout=http_timeout,
+            session_id=session_id,
+        )
+        return parse_session_response(r)
+
+    async def list_sessions(
+        self, *, extra_headers: Mapping[str, str] | None = None
+    ) -> list[dict]:
+        r = await async_request(
+            self._http,
+            "GET",
+            f"{self._base_url}/sessions",
+            headers=self._headers(extra_headers),
+        )
+        return decode_json_validated(r, _SESSION_LIST_ADAPTER)
+
+    async def delete_session(
+        self,
+        session_id: str,
+        *,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> None:
+        try:
+            await async_request(
+                self._http,
+                "DELETE",
+                f"{self._base_url}/sessions/{session_id}",
+                headers=self._headers(extra_headers),
+                session_id=session_id,
+            )
+        except SessionNotFound:
+            return
+
+    async def get_messages(
+        self,
+        session_id: str,
+        *,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> list[dict]:
+        r = await async_request(
+            self._http,
+            "GET",
+            f"{self._base_url}/sessions/{session_id}/messages",
+            headers=self._headers(extra_headers),
+            session_id=session_id,
+        )
+        return decode_json_validated(r, _MESSAGES_ADAPTER)
+
+    async def send_message(
+        self,
+        session_id: str,
+        content: str | None = None,
+        *,
+        role: str = "user",
+        user_params: Mapping[str, Any] | None = None,
+        webhook: Mapping[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        **message_fields: Any,
+    ) -> dict:
+        body: dict[str, Any] = {"role": role}
+        if content is not None:
+            body["content"] = content
+        if user_params:
+            body["user_params"] = dict(user_params)
+        if webhook:
+            body["webhook"] = dict(webhook)
+        body.update(message_fields)
+        r = await async_request(
+            self._http,
+            "POST",
+            f"{self._base_url}/sessions/{session_id}/messages",
+            headers=self._headers(extra_headers),
+            json=body,
+            session_id=session_id,
+        )
+        return decode_json_validated(r, MessageResponse)
+
+    # ------------------------- high-level -------------------------
+
+    async def chat(
+        self,
+        content: str,
+        *,
+        turn_timeout: float | None = None,
+        role: str = "user",
+        user_params: Mapping[str, Any] | None = None,
+        webhook: Mapping[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        **message_fields: Any,
+    ) -> ChatResult:
+        session_id = (await self.create_session(extra_headers=extra_headers)).session_id
+        body: dict[str, Any] = {"role": role, "content": content}
+        if user_params:
+            body["user_params"] = dict(user_params)
+        if webhook:
+            body["webhook"] = dict(webhook)
+        body.update(message_fields)
+        headers = self._headers(extra_headers)
+
+        # Clean up the orphaned session if the initial POST fails.
+        try:
+            await async_post_message(
+                self._http, self._base_url, session_id, body, headers=headers
+            )
+        except MotusClientError:
+            try:
+                await self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug(
+                    "ephemeral cleanup after send failure failed: %r", secondary
+                )
+            raise
+
+        clean_idle = False
+        try:
+            snapshot = await async_poll_until_terminal(
+                self._http,
+                self._base_url,
+                session_id,
+                turn_timeout=turn_timeout
+                if turn_timeout is not None
+                else self._turn_timeout,
+                server_wait_slice=self._server_wait_slice,
+                read_retry_budget=self._read_retry_budget,
+                headers=headers,
+            )
+            if snapshot.status == SessionStatus.error:
+                raise AgentError(snapshot.error or "agent error", session_id=session_id)
+            interrupts = [Interrupt.from_info(i) for i in (snapshot.interrupts or [])]
+            clean_idle = snapshot.status == SessionStatus.idle and not interrupts
+            return self._result(
+                snapshot,
+                session_id,
+                interrupts,
+                extra_headers=extra_headers,
+                ephemeral=True,
+            )
+        finally:
+            if clean_idle:
+                try:
+                    await self.delete_session(session_id, extra_headers=extra_headers)
+                except MotusClientError as secondary:
+                    logger.debug("ephemeral cleanup DELETE failed: %r", secondary)
+
+    async def chat_events(
+        self,
+        content: str,
+        *,
+        turn_timeout: float | None = None,
+        role: str = "user",
+        user_params: Mapping[str, Any] | None = None,
+        webhook: Mapping[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        **message_fields: Any,
+    ):
+        """Async coarse session-status iterator (counterpart of Client.chat_events).
+
+        Yields ``SessionEvent(running)`` then the terminal event. Cleanup rules
+        match ``AsyncClient.chat``. This is not token streaming.
+        """
+        session_id = (await self.create_session(extra_headers=extra_headers)).session_id
+        body: dict[str, Any] = {"role": role, "content": content}
+        if user_params:
+            body["user_params"] = dict(user_params)
+        if webhook:
+            body["webhook"] = dict(webhook)
+        body.update(message_fields)
+        headers = self._headers(extra_headers)
+        try:
+            await async_post_message(
+                self._http, self._base_url, session_id, body, headers=headers
+            )
+        except MotusClientError:
+            try:
+                await self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug("chat_events setup cleanup failed: %r", secondary)
+            raise
+
+        cleaned_up = False
+        yielded_terminal = False
+        try:
+            yield SessionEvent(type="running", session_id=session_id, snapshot=None)
+            snapshot = await async_poll_until_terminal(
+                self._http,
+                self._base_url,
+                session_id,
+                turn_timeout=turn_timeout
+                if turn_timeout is not None
+                else self._turn_timeout,
+                server_wait_slice=self._server_wait_slice,
+                read_retry_budget=self._read_retry_budget,
+                headers=headers,
+            )
+            if snapshot.status == SessionStatus.idle and not snapshot.interrupts:
+                try:
+                    await self.delete_session(session_id, extra_headers=extra_headers)
+                except MotusClientError as secondary:
+                    logger.debug("chat_events cleanup DELETE failed: %r", secondary)
+                cleaned_up = True
+            yielded_terminal = True
+            yield SessionEvent(
+                type=snapshot.status.value,
+                session_id=session_id,
+                snapshot=snapshot,
+            )
+        except GeneratorExit:
+            # Caller abandoned before a terminal event — best-effort delete.
+            # Sessions that already emitted an interrupted/error terminal are
+            # intentionally left alive for inspection and are not touched.
+            if not cleaned_up and not yielded_terminal:
+                try:
+                    await self.delete_session(session_id, extra_headers=extra_headers)
+                except MotusClientError as secondary:
+                    logger.debug("chat_events abandon cleanup failed: %r", secondary)
+            raise
+
+    def session(
+        self,
+        *,
+        session_id: str | None = None,
+        keep: bool = False,
+        initial_state: list["ChatMessage"] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> "_AsyncSessionCtx":
+        """Async counterpart of Client.session().
+
+        See Client.session() for the custom-ID ownership rules. Creation happens
+        on ``__aenter__`` so the caller can ``async with client.session() as s:``.
+        """
+        return _AsyncSessionCtx(self, session_id, keep, initial_state, extra_headers)
+
+    async def resume(
+        self,
+        session_id: str,
+        interrupt_id: str,
+        value: Any,
+        *,
+        turn_timeout: float | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> ChatResult:
+        snapshot = await async_resume_and_poll(
+            self._http,
+            self._base_url,
+            session_id,
+            interrupt_id,
+            value,
+            turn_timeout=turn_timeout
+            if turn_timeout is not None
+            else self._turn_timeout,
+            server_wait_slice=self._server_wait_slice,
+            read_retry_budget=self._read_retry_budget,
+            headers=self._headers(extra_headers),
+        )
+        if snapshot.status == SessionStatus.error:
+            raise AgentError(snapshot.error or "agent error", session_id=session_id)
+        return self._result(
+            snapshot,
+            session_id,
+            [Interrupt.from_info(i) for i in (snapshot.interrupts or [])],
+            extra_headers=extra_headers,
+        )
+
+    # ------------------------- helpers -------------------------
+
+    def _result(
+        self,
+        snapshot: SessionResponse,
+        session_id: str,
+        interrupts: list[Interrupt],
+        *,
+        extra_headers: Mapping[str, str] | None = None,
+        ephemeral: bool = False,
+    ) -> ChatResult:
+        async def _resumer(value: Any):
+            iid = interrupts[0].id
+            if ephemeral:
+                return await self._resume_ephemeral(
+                    session_id, iid, value, extra_headers=extra_headers
+                )
+            return await self.resume(
+                session_id, iid, value, extra_headers=extra_headers
+            )
+
+        return ChatResult(
+            message=snapshot.response,
+            interrupts=interrupts,
+            session_id=session_id,
+            status=snapshot.status,
+            snapshot=snapshot,
+            _resumer=_resumer if interrupts else None,
+        )
+
+    async def _resume_ephemeral(
+        self,
+        session_id: str,
+        interrupt_id: str,
+        value: Any,
+        *,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> ChatResult:
+        result = await self.resume(
+            session_id, interrupt_id, value, extra_headers=extra_headers
+        )
+        clean_idle = result.status == SessionStatus.idle and not result.interrupts
+        if clean_idle:
+            try:
+                await self.delete_session(session_id, extra_headers=extra_headers)
+            except MotusClientError as secondary:
+                logger.debug("ephemeral cleanup DELETE failed: %r", secondary)
+            return result
+        if result.interrupts:
+            return self._result(
+                result.snapshot,
+                session_id,
+                list(result.interrupts),
+                extra_headers=extra_headers,
+                ephemeral=True,
+            )
+        return result
+
+
+class AsyncSession:
+    """Pinned session for AsyncClient. Mirrors Session ownership/keep semantics.
+
+    ``extra_headers`` is stored and applied to every lifecycle request
+    (chat, resume, delete) issued through this session.
+    """
+
+    def __init__(
+        self,
+        client: AsyncClient,
+        session_id: str,
+        *,
+        owned: bool,
+        keep: bool,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> None:
+        self._client = client
+        self._session_id = session_id
+        self._owned = owned
+        self._keep = keep
+        self._session_headers: dict[str, str] = dict(extra_headers or {})
+        self._closed = False
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def owned(self) -> bool:
+        return self._owned
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def _merged_headers(
+        self, per_call: Mapping[str, str] | None
+    ) -> dict[str, str] | None:
+        if not self._session_headers and not per_call:
+            return None
+        merged: dict[str, str] = dict(self._session_headers)
+        if per_call:
+            merged.update(per_call)
+        return merged
+
+    async def aclose(self) -> None:
+        """Close the session.
+
+        For owned sessions without ``keep=True``, issues a DELETE. 404 is treated
+        as success; other errors propagate as ``MotusClientError`` and leave the
+        handle re-closable (``closed`` stays False).
+        """
+        if self._closed:
+            return
+        if self._owned and not self._keep:
+            await self._client.delete_session(
+                self._session_id,
+                extra_headers=self._session_headers or None,
+            )
+        elif self._owned and self._keep:
+            logger.info("Session kept alive: session_id=%s", self._session_id)
+        self._closed = True
+
+    def keep_alive(self) -> None:
+        """Switch the session into keep mode so ``aclose()`` does not DELETE."""
+        self._keep = True
+
+    async def chat(
+        self,
+        content: str,
+        *,
+        turn_timeout: float | None = None,
+        role: str = "user",
+        user_params: Mapping[str, Any] | None = None,
+        webhook: Mapping[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        **message_fields: Any,
+    ) -> ChatResult:
+        if self._closed:
+            raise SessionClosed(f"session {self._session_id} is closed")
+        body: dict[str, Any] = {"role": role, "content": content}
+        if user_params:
+            body["user_params"] = dict(user_params)
+        if webhook:
+            body["webhook"] = dict(webhook)
+        body.update(message_fields)
+        snapshot = await async_send_and_poll(
+            self._client._http,
+            self._client._base_url,
+            self._session_id,
+            body,
+            turn_timeout=turn_timeout
+            if turn_timeout is not None
+            else self._client._turn_timeout,
+            server_wait_slice=self._client._server_wait_slice,
+            read_retry_budget=self._client._read_retry_budget,
+            headers=self._client._headers(self._merged_headers(extra_headers)),
+        )
+        if snapshot.status == SessionStatus.error:
+            raise AgentError(
+                snapshot.error or "agent error", session_id=self._session_id
+            )
+        interrupts = [Interrupt.from_info(i) for i in (snapshot.interrupts or [])]
+        return self._make_result(snapshot, interrupts, per_call_headers=extra_headers)
+
+    async def resume(
+        self,
+        interrupt_id: str,
+        value: Any,
+        *,
+        turn_timeout: float | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> ChatResult:
+        if self._closed:
+            raise SessionClosed(f"session {self._session_id} is closed")
+        # self._client.resume already returns a ChatResult whose _resumer uses
+        # client-scoped headers; we rebuild it here so session-scoped headers
+        # survive into any subsequent result.resume().
+        result = await self._client.resume(
+            self._session_id,
+            interrupt_id,
+            value,
+            turn_timeout=turn_timeout,
+            extra_headers=self._merged_headers(extra_headers),
+        )
+        return self._make_result(
+            result.snapshot, list(result.interrupts), per_call_headers=extra_headers
+        )
+
+    def _make_result(
+        self,
+        snapshot,
+        interrupts: list[Interrupt],
+        *,
+        per_call_headers: Mapping[str, str] | None,
+    ):
+        async def _resumer(value: Any):
+            return await self.resume(
+                interrupts[0].id, value, extra_headers=per_call_headers
+            )
+
+        return ChatResult(
+            message=snapshot.response if snapshot is not None else None,
+            interrupts=interrupts,
+            session_id=self._session_id,
+            status=snapshot.status if snapshot is not None else SessionStatus.idle,
+            snapshot=snapshot,
+            _resumer=_resumer if interrupts else None,
+        )
+
+
+class _AsyncSessionCtx:
+    """Async context manager returned by AsyncClient.session()."""
+
+    def __init__(
+        self,
+        client: AsyncClient,
+        session_id: str | None,
+        keep: bool,
+        initial_state: list["ChatMessage"] | None,
+        extra_headers: Mapping[str, str] | None,
+    ) -> None:
+        self._client = client
+        self._session_id = session_id
+        self._keep = keep
+        self._initial_state = initial_state
+        self._extra_headers = extra_headers
+        self._session: AsyncSession | None = None
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: Any,
+    ) -> None:
+        if self._session is None:
+            return
+        if exc_type is not None:
+            try:
+                await self._session.aclose()
+            except Exception as secondary:  # noqa: BLE001
+                logger.debug(
+                    "AsyncSession cleanup during exception propagation failed: %r",
+                    secondary,
+                )
+        else:
+            await self._session.aclose()
+
+    async def __aenter__(self) -> AsyncSession:
+        from .errors import SessionConflict, SessionNotFound
+
+        if self._session_id is None:
+            created = await self._client.create_session(
+                initial_state=self._initial_state,
+                extra_headers=self._extra_headers,
+            )
+            self._session = AsyncSession(
+                self._client,
+                created.session_id,
+                owned=True,
+                keep=self._keep,
+                extra_headers=self._extra_headers,
+            )
+            return self._session
+
+        # Explicit create-with-seed: skip GET-first, go direct to PUT.
+        if self._initial_state is not None:
+            created = await self._client.create_session(
+                session_id=self._session_id,
+                initial_state=self._initial_state,
+                extra_headers=self._extra_headers,
+            )
+            self._session = AsyncSession(
+                self._client,
+                created.session_id,
+                owned=True,
+                keep=self._keep,
+                extra_headers=self._extra_headers,
+            )
+            return self._session
+
+        # GET-first attach (matches sync Client.session); only fall through to PUT
+        # when the session doesn't exist yet.
+        try:
+            await self._client.get_session(
+                self._session_id, extra_headers=self._extra_headers
+            )
+        except SessionNotFound:
+            pass
+        else:
+            self._session = AsyncSession(
+                self._client,
+                self._session_id,
+                owned=False,
+                keep=self._keep,
+                extra_headers=self._extra_headers,
+            )
+            return self._session
+
+        try:
+            created = await self._client.create_session(
+                session_id=self._session_id, extra_headers=self._extra_headers
+            )
+        except SessionConflict:
+            self._session = AsyncSession(
+                self._client,
+                self._session_id,
+                owned=False,
+                keep=self._keep,
+                extra_headers=self._extra_headers,
+            )
+            return self._session
+        self._session = AsyncSession(
+            self._client,
+            created.session_id,
+            owned=True,
+            keep=self._keep,
+            extra_headers=self._extra_headers,
+        )
+        return self._session
+
+
+__all__ = ["AsyncClient", "AsyncSession"]

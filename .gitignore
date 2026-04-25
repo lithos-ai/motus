@@ -52,3 +52,8 @@ TODO.md
 
 # Motus configuration
 motus.toml
+
+# Humanize RLCR workspace — cache/intermediate artifacts only; plans are committed
+.humanize/skill/
+.humanize/bitlesson-*.lock
+.humanize/state/
