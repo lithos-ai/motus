@@ -127,7 +127,13 @@ class Session:
             self._task.cancel()
         self._done.set()
         self.pending_interrupts.clear()
-        asyncio.ensure_future(self.publish(None))
+        try:
+            asyncio.get_running_loop()
+            asyncio.ensure_future(self.publish(None))
+        except RuntimeError:
+            # No running loop (e.g. cancel() invoked from a sync test path).
+            # Nothing to publish to in that scenario.
+            pass
 
     async def wait(self, timeout: float | None = None) -> None:
         """Wait for the current turn to complete."""
