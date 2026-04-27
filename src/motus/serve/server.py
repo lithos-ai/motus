@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -9,6 +10,7 @@ from typing import Callable
 
 import httpx
 from fastapi import FastAPI, HTTPException, Response
+from starlette.responses import StreamingResponse
 
 from motus.models import ChatMessage
 
@@ -249,6 +251,17 @@ class AgentServer:
                 raise HTTPException(status_code=404, detail="Session not found")
             return session.state
 
+        @app.get("/sessions/{session_id}/stream")
+        async def stream_session(session_id: str):
+            session = self._sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            return StreamingResponse(
+                self._sse_generator(session),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
+
         @app.post(
             "/sessions/{session_id}/messages",
             response_model=MessageResponse,
@@ -327,6 +340,59 @@ class AgentServer:
 
         return app
 
+    async def _sse_generator(self, session: Session):
+        """Async generator that yields SSE frames from a session's event log.
+
+        All yields happen outside the condition lock to avoid holding it while
+        the generator is suspended.
+        """
+        index = 0
+        epoch = session._event_epoch
+
+        # Catch-up replay: yield any events already in the log
+        for event in list(session._event_log):
+            if event is None:
+                return
+            yield f"event: {event['event']}\ndata: {json.dumps(event)}\n\n"
+            index += 1
+
+        while True:
+            # Phase 1: under the lock, wait for new events or timeout
+            has_events = False
+            async with session._event_condition:
+                if epoch != session._event_epoch:
+                    index = 0
+                    epoch = session._event_epoch
+                if index < len(session._event_log):
+                    has_events = True
+                else:
+                    try:
+                        await asyncio.wait_for(
+                            session._event_condition.wait_for(
+                                lambda: epoch != session._event_epoch
+                                or index < len(session._event_log)
+                            ),
+                            timeout=15.0,
+                        )
+                        has_events = True
+                    except asyncio.TimeoutError:
+                        pass
+                if has_events and epoch != session._event_epoch:
+                    index = 0
+                    epoch = session._event_epoch
+
+            # Phase 2: outside the lock, yield events or keepalive
+            if not has_events:
+                yield "event: keepalive\ndata: {}\n\n"
+                continue
+
+            while index < len(session._event_log):
+                event = session._event_log[index]
+                index += 1
+                if event is None:
+                    return
+                yield f"event: {event['event']}\ndata: {json.dumps(event)}\n\n"
+
     async def _run_turn(
         self,
         session_id: str,
@@ -347,6 +413,19 @@ class AgentServer:
         def on_interrupt(msg) -> None:
             session.interrupt_turn(msg)
 
+        def on_step(msg) -> None:
+            s = self._sessions.get(session_id)
+            if s is not None:
+                asyncio.ensure_future(
+                    s.publish(
+                        {
+                            "event": "step",
+                            "content": msg.content,
+                            "tool_calls": msg.tool_calls,
+                        }
+                    )
+                )
+
         def on_worker_done() -> None:
             session._resume_queue = None
 
@@ -359,6 +438,7 @@ class AgentServer:
                 timeout=self._timeout,
                 session_id=session_id,
                 on_interrupt=on_interrupt,
+                on_step=on_step,
                 resume_queue=resume_queue,
                 on_worker_done=on_worker_done,
             )
@@ -370,9 +450,18 @@ class AgentServer:
             if result.success:
                 response, new_state = result.value
                 session.complete_turn(response, new_state)
+                await session.publish(
+                    {
+                        "event": "done",
+                        "response": response.model_dump(exclude_none=True),
+                    }
+                )
                 logger.info(f"Turn completed: session={session_id}")
             else:
                 session.fail_turn(result.error or "Unknown error")
+                await session.publish(
+                    {"event": "error", "error": result.error or "Unknown error"}
+                )
                 logger.error(f"Turn failed: session={session_id}\n{result.error}")
 
         except asyncio.CancelledError:

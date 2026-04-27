@@ -36,6 +36,17 @@ class Session:
     _done: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     pending_interrupts: dict = field(default_factory=dict, repr=False)
     _resume_queue: "asyncio.Queue | None" = field(default=None, repr=False)
+    _event_log: list = field(default_factory=list, repr=False)
+    _event_epoch: int = field(default=0, repr=False)
+    _event_condition: asyncio.Condition = field(
+        default_factory=asyncio.Condition, repr=False
+    )
+
+    async def publish(self, event: dict | None) -> None:
+        """Append an event to the log and notify SSE subscribers."""
+        async with self._event_condition:
+            self._event_log.append(event)
+            self._event_condition.notify_all()
 
     def start_turn(self, task: asyncio.Task) -> None:
         """Transition to running state for a new turn."""
@@ -45,6 +56,8 @@ class Session:
         self.response = None
         self.error = None
         self._done.clear()
+        self._event_log.clear()
+        self._event_epoch += 1
 
     def complete_turn(
         self, response: ChatMessage, new_state: list[ChatMessage]
@@ -75,6 +88,7 @@ class Session:
             self._task.cancel()
         self._done.set()
         self.pending_interrupts.clear()
+        asyncio.ensure_future(self.publish(None))
 
     async def wait(self, timeout: float | None = None) -> None:
         """Wait for the current turn to complete."""
