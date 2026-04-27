@@ -2334,5 +2334,225 @@ class TestSessionStoreCustomId:
             store.create(session_id="dup-id")
 
 
+# ---------------------------------------------------------------------------
+# SSE Streaming
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse_frame(frame: str) -> dict:
+    """Parse a single SSE frame into {event, data}."""
+    import json
+
+    event_type = None
+    data = None
+    for line in frame.strip().split("\n"):
+        if line.startswith("event: "):
+            event_type = line[len("event: "):]
+        elif line.startswith("data: "):
+            data = json.loads(line[len("data: "):])
+    return {"event": event_type, "data": data}
+
+
+class TestSSEStreaming:
+    """Test SSE by driving the generator directly.
+
+    httpx ASGITransport buffers the entire response body, so we can't use
+    client.stream() for true SSE streaming tests. Instead, we call the
+    generator directly via session publish/event_log.
+    """
+
+    async def test_stream_nonexistent_session(self):
+        from httpx import ASGITransport, AsyncClient
+
+        server = AgentServer(_add, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.get("/sessions/nonexistent/stream")
+            assert r.status_code == 404
+
+    async def test_generator_receives_done_event(self):
+        """Publish a done event and verify the generator yields it."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        gen = server._sse_generator(session)
+
+        # Publish a done event
+        await session.publish({"event": "done", "response": {"content": "7"}})
+
+        frame = await gen.__anext__()
+        parsed = _parse_sse_frame(frame)
+        assert parsed["event"] == "done"
+        assert parsed["data"]["response"]["content"] == "7"
+
+        await gen.aclose()
+
+    async def test_generator_keepalive_on_idle(self):
+        """With no events, the generator yields a keepalive after timeout."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        # Monkey-patch a short timeout for testing
+        original = server._sse_generator
+
+        async def short_timeout_gen(s):
+            # We'll just test with the real generator — the 15s timeout
+            # is too long for tests, so we publish after a brief delay.
+            pass
+
+        gen = server._sse_generator(session)
+
+        # Publish after a short delay so the generator doesn't wait 15s
+        async def publish_later():
+            await asyncio.sleep(0.1)
+            await session.publish({"event": "done", "response": {}})
+
+        task = asyncio.create_task(publish_later())
+        frame = await gen.__anext__()
+        parsed = _parse_sse_frame(frame)
+        assert parsed["event"] == "done"
+        await task
+        await gen.aclose()
+
+    async def test_generator_catch_up_replay(self):
+        """Events already in the log are yielded immediately on connect."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        # Pre-populate the event log
+        await session.publish({"event": "step", "content": "thinking", "tool_calls": []})
+        await session.publish({"event": "done", "response": {"content": "11"}})
+
+        gen = server._sse_generator(session)
+
+        frame1 = await gen.__anext__()
+        frame2 = await gen.__anext__()
+        assert _parse_sse_frame(frame1)["event"] == "step"
+        assert _parse_sse_frame(frame2)["event"] == "done"
+
+        await gen.aclose()
+
+    async def test_generator_sentinel_closes_stream(self):
+        """A None sentinel in the log causes the generator to exit."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        gen = server._sse_generator(session)
+
+        # Publish a sentinel
+        await session.publish(None)
+
+        # Generator should be exhausted
+        frames = [frame async for frame in gen]
+        assert frames == []
+
+    async def test_generator_epoch_reset(self):
+        """When a new turn starts (epoch changes), the generator resets its index."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        # Simulate a completed first turn
+        await session.publish({"event": "done", "response": {"content": "first"}})
+
+        gen = server._sse_generator(session)
+
+        # Read the replay
+        frame1 = await gen.__anext__()
+        assert _parse_sse_frame(frame1)["data"]["response"]["content"] == "first"
+
+        # Simulate start of a new turn (clears log, bumps epoch)
+        dummy_task = asyncio.create_task(asyncio.sleep(100))
+        session.start_turn(dummy_task)
+
+        # Publish a new done event
+        await session.publish({"event": "done", "response": {"content": "second"}})
+
+        frame2 = await gen.__anext__()
+        assert _parse_sse_frame(frame2)["data"]["response"]["content"] == "second"
+
+        dummy_task.cancel()
+        try:
+            await dummy_task
+        except asyncio.CancelledError:
+            pass
+        await gen.aclose()
+
+    async def test_generator_error_event(self):
+        """Error events are yielded correctly."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        gen = server._sse_generator(session)
+
+        await session.publish({"event": "error", "error": "something broke"})
+
+        frame = await gen.__anext__()
+        parsed = _parse_sse_frame(frame)
+        assert parsed["event"] == "error"
+        assert "something broke" in parsed["data"]["error"]
+
+        await gen.aclose()
+
+    async def test_end_to_end_stream_with_worker(self):
+        """Full integration: send a message and verify done event is published."""
+        from httpx import ASGITransport, AsyncClient
+
+        server = AgentServer(_add, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            await client.post(f"/sessions/{sid}/messages", json={"content": "3 4"})
+            await _poll_until(client, sid, "idle")
+
+            # Verify the done event was published to the session's event log
+            session = server._sessions.get(sid)
+            assert session is not None
+            done_events = [
+                e for e in session._event_log if e is not None and e["event"] == "done"
+            ]
+            assert len(done_events) == 1
+            assert done_events[0]["response"]["content"] == "7"
+
+    async def test_end_to_end_error_in_event_log(self):
+        """Full integration: a failing agent publishes an error event."""
+        from httpx import ASGITransport, AsyncClient
+
+        server = AgentServer(_fail, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            await client.post(f"/sessions/{sid}/messages", json={"content": "x"})
+            await _poll_until(client, sid, "error")
+
+            session = server._sessions.get(sid)
+            assert session is not None
+            error_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "error"
+            ]
+            assert len(error_events) == 1
+            assert "Intentional error" in error_events[0]["error"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

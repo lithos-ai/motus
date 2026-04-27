@@ -34,6 +34,14 @@ _USER_PARAMS_TO_ENV: dict[str, str] = {
 
 
 @dataclass
+class StepEvent:
+    """Worker -> parent: intermediate agent step for SSE streaming."""
+
+    content: str | None
+    tool_calls: list[dict]
+
+
+@dataclass
 class WorkerResult:
     """Result wrapper to distinguish success from failure without raising."""
 
@@ -196,6 +204,16 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
             except Exception:
                 pass  # tracer unavailable is not fatal
 
+        if hasattr(agent_or_fn, "step_callback"):
+
+            async def _send_step(content, tool_calls):
+                try:
+                    conn.send(StepEvent(content=content, tool_calls=tool_calls))
+                except (BrokenPipeError, OSError):
+                    pass
+
+            agent_or_fn.step_callback = _send_step
+
         if isinstance(agent_or_fn, ServableAgent):
             return await agent_or_fn.run_turn(message, state)
         elif _is_openai_agent(agent_or_fn):
@@ -257,9 +275,11 @@ def _run_worker(
     conn,
     loop: asyncio.AbstractEventLoop,
     on_interrupt: Callable | None = None,
+    on_step: Callable | None = None,
 ) -> "WorkerResult":
-    """Thread-pool recv loop. Dispatches InterruptMessages to main loop,
-    returns on WorkerResult. Threading: this thread recv()s only, main loop send()s only.
+    """Thread-pool recv loop. Dispatches InterruptMessages and StepEvents to
+    main loop, returns on WorkerResult. Threading: this thread recv()s only,
+    main loop send()s only.
     """
     import pickle
 
@@ -276,6 +296,9 @@ def _run_worker(
         if isinstance(msg, InterruptMessage):
             if on_interrupt is not None:
                 loop.call_soon_threadsafe(on_interrupt, msg)
+        elif isinstance(msg, StepEvent):
+            if on_step is not None:
+                loop.call_soon_threadsafe(on_step, msg)
         elif isinstance(msg, WorkerResult):
             return msg
         else:
@@ -364,12 +387,18 @@ class WorkerExecutor:
     ):
         self.max_workers = max_workers or os.cpu_count() or DEFAULT_MAX_WORKERS
         self._semaphore = asyncio.Semaphore(self.max_workers)
-        # Prefer forkserver: faster than spawn (reuses a warm fork with preloaded
-        # imports) and safer than fork (no risk of copying locked mutexes from a
-        # multithreaded parent). Fire-and-forget a background thread to warm the
-        # daemon; if it hasn't finished by the first request, the request itself
-        # triggers ensure_running() internally (and it's idempotent).
-        if "forkserver" in mp.get_all_start_methods():
+        # Start method selection:
+        #   * macOS: always spawn. forkserver inherits CoreFoundation state from
+        #     the parent, and many Apple frameworks (SystemConfiguration used by
+        #     urllib proxy_bypass, keychain, Metal, etc.) are not fork-safe —
+        #     touching them in a forked child SIGSEGVs. spawn execs a fresh
+        #     interpreter and sidesteps the entire class of bug.
+        #   * Other POSIX: prefer forkserver — reuses a warm fork with preloaded
+        #     imports, and safer than bare fork (no risk of copying locked
+        #     mutexes from a multithreaded parent). Fire-and-forget a background
+        #     thread to warm the daemon; if it hasn't finished by the first
+        #     request, the request itself triggers ensure_running() (idempotent).
+        if sys.platform != "darwin" and "forkserver" in mp.get_all_start_methods():
             self._mp_context = mp.get_context("forkserver")
             preload = [import_path.rsplit(":", 1)[0]] if import_path else []
             self._mp_context.set_forkserver_preload(preload)
@@ -393,6 +422,7 @@ class WorkerExecutor:
         timeout: float = 0,
         session_id: str | None = None,
         on_interrupt: Callable | None = None,
+        on_step: Callable | None = None,
         resume_queue: "asyncio.Queue | None" = None,
         on_worker_done: Callable | None = None,
     ) -> WorkerResult:
@@ -403,6 +433,8 @@ class WorkerExecutor:
         Args:
             on_interrupt: Called on the main loop (via call_soon_threadsafe)
                 each time the worker sends an InterruptMessage.
+            on_step: Called on the main loop (via call_soon_threadsafe)
+                each time the worker sends a StepEvent.
             resume_queue: If provided, a coroutine forwards ResumeMessages
                 from this queue to the worker over the pipe.
             on_worker_done: Called once in finally, BEFORE cleanup starts.
@@ -422,7 +454,7 @@ class WorkerExecutor:
 
                 loop = asyncio.get_running_loop()
                 recv_future = loop.run_in_executor(
-                    None, _run_worker, parent_conn, loop, on_interrupt
+                    None, _run_worker, parent_conn, loop, on_interrupt, on_step
                 )
                 resume_task = (
                     loop.create_task(_forward_resumes(resume_queue, parent_conn))
