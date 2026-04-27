@@ -3,8 +3,9 @@ Abstract base class for agents in the Motus framework.
 """
 
 import inspect
+import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Generic, List, Literal, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Generic, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel
 
@@ -16,6 +17,8 @@ from motus.models import BaseChatClient, ChatMessage, ReasoningConfig, ToolDefin
 from motus.runtime.agent_task import agent_task
 from motus.runtime.types import AGENT_CALL
 from motus.tools.core.tool import Tool
+
+logger = logging.getLogger(__name__)
 
 # Type variable for the return type of __call__
 T = TypeVar("T")
@@ -50,6 +53,7 @@ class AgentBase(ABC, Generic[T]):
         input_guardrails: Optional[list[Callable]] = None,
         output_guardrails: Optional[list[Callable]] = None,
         reasoning: ReasoningConfig = ReasoningConfig.auto(),
+        on_message: Optional[Callable[[ChatMessage], Awaitable[None]]] = None,
     ) -> None:
         """
         Initialize the agent.
@@ -76,7 +80,12 @@ class AgentBase(ABC, Generic[T]):
                 guardrails.  For structured output (``response_format`` set):
                 declare fields from the BaseModel — ``(field: T, ...) -> dict | None``
                 with optional ``agent`` parameter.
+            on_message: Optional async callback invoked once for each new
+                ChatMessage added to the agent's memory during a live turn
+                (user, assistant, and tool messages alike). Replay of prior
+                state in ``run_turn`` does NOT fire this hook.
         """
+        self.on_message = on_message
         self._client = client
         self._model_name = model_name
         self._name = name  # None means "infer later"
@@ -195,10 +204,20 @@ class AgentBase(ABC, Generic[T]):
         """
         Add a message to the conversation history.
 
+        This is the single chokepoint for messages produced during a live
+        turn. The convenience helpers below route through here so that
+        ``on_message`` (if set) fires uniformly for user, assistant, and
+        tool messages.
+
         Args:
             message: The ChatMessage to add
         """
         await self._memory.add_message(message)
+        if self.on_message is not None:
+            try:
+                await self.on_message(message)
+            except Exception:
+                logger.exception("on_message hook raised; continuing")
 
     async def add_user_message(
         self, content: str, base64_image: Optional[str] = None
@@ -210,7 +229,7 @@ class AgentBase(ABC, Generic[T]):
             content: The user message content
             base64_image: Optional base64 encoded image
         """
-        await self._memory.add_message(ChatMessage.user_message(content, base64_image))
+        await self.add_message(ChatMessage.user_message(content, base64_image))
 
     async def add_assistant_message(
         self, content: Optional[str] = None, tool_calls: Optional[list] = None
@@ -222,9 +241,7 @@ class AgentBase(ABC, Generic[T]):
             content: The assistant message content
             tool_calls: Optional tool calls made by the assistant
         """
-        await self._memory.add_message(
-            ChatMessage.assistant_message(content, tool_calls)
-        )
+        await self.add_message(ChatMessage.assistant_message(content, tool_calls))
 
     async def add_tool_message(
         self,
@@ -242,7 +259,7 @@ class AgentBase(ABC, Generic[T]):
             name: The name of the tool
             base64_image: Optional base64 encoded image
         """
-        await self._memory.add_message(
+        await self.add_message(
             ChatMessage.tool_message(content, tool_call_id, name, base64_image)
         )
 
@@ -494,9 +511,12 @@ class AgentBase(ABC, Generic[T]):
         """
         # Replay prior conversation (skip system messages — agent already
         # has its own system prompt from module-level initialization).
+        # Write directly through memory so on_message does not fire: replay
+        # restores known history, only messages produced by the live agent
+        # loop should emit.
         for msg in state:
             if msg.role != "system":
-                await self.add_message(msg)
+                await self._memory.add_message(msg)
         response_text = await self(message.content)
         response = ChatMessage.assistant_message(content=response_text)
         # Return raw messages (without system prefix) as session state

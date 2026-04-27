@@ -2427,14 +2427,21 @@ class TestSSEStreaming:
         session = Session(session_id="test")
 
         # Pre-populate the event log
-        await session.publish({"event": "step", "content": "thinking", "tool_calls": []})
+        await session.publish(
+            {
+                "event": "message",
+                "message": {"role": "assistant", "content": "thinking"},
+            }
+        )
         await session.publish({"event": "done", "response": {"content": "11"}})
 
         gen = server._sse_generator(session)
 
         frame1 = await gen.__anext__()
         frame2 = await gen.__anext__()
-        assert _parse_sse_frame(frame1)["event"] == "step"
+        parsed1 = _parse_sse_frame(frame1)
+        assert parsed1["event"] == "message"
+        assert parsed1["data"]["message"]["content"] == "thinking"
         assert _parse_sse_frame(frame2)["event"] == "done"
 
         await gen.aclose()
