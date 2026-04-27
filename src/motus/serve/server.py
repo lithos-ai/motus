@@ -413,15 +413,14 @@ class AgentServer:
         def on_interrupt(msg) -> None:
             session.interrupt_turn(msg)
 
-        def on_step(msg) -> None:
+        def on_message(msg: ChatMessage) -> None:
             s = self._sessions.get(session_id)
             if s is not None:
                 asyncio.ensure_future(
                     s.publish(
                         {
-                            "event": "step",
-                            "content": msg.content,
-                            "tool_calls": msg.tool_calls,
+                            "event": "message",
+                            "message": msg.model_dump(exclude_none=True),
                         }
                     )
                 )
@@ -438,7 +437,7 @@ class AgentServer:
                 timeout=self._timeout,
                 session_id=session_id,
                 on_interrupt=on_interrupt,
-                on_step=on_step,
+                on_message=on_message,
                 resume_queue=resume_queue,
                 on_worker_done=on_worker_done,
             )

@@ -34,14 +34,6 @@ _USER_PARAMS_TO_ENV: dict[str, str] = {
 
 
 @dataclass
-class StepEvent:
-    """Worker -> parent: intermediate agent step for SSE streaming."""
-
-    content: str | None
-    tool_calls: list[dict]
-
-
-@dataclass
 class WorkerResult:
     """Result wrapper to distinguish success from failure without raising."""
 
@@ -204,15 +196,15 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
             except Exception:
                 pass  # tracer unavailable is not fatal
 
-        if hasattr(agent_or_fn, "step_callback"):
+        if hasattr(agent_or_fn, "on_message"):
 
-            async def _send_step(content, tool_calls):
+            async def _send_message(message: ChatMessage):
                 try:
-                    conn.send(StepEvent(content=content, tool_calls=tool_calls))
+                    conn.send(message)
                 except (BrokenPipeError, OSError):
                     pass
 
-            agent_or_fn.step_callback = _send_step
+            agent_or_fn.on_message = _send_message
 
         if isinstance(agent_or_fn, ServableAgent):
             return await agent_or_fn.run_turn(message, state)
@@ -275,9 +267,9 @@ def _run_worker(
     conn,
     loop: asyncio.AbstractEventLoop,
     on_interrupt: Callable | None = None,
-    on_step: Callable | None = None,
+    on_message: Callable | None = None,
 ) -> "WorkerResult":
-    """Thread-pool recv loop. Dispatches InterruptMessages and StepEvents to
+    """Thread-pool recv loop. Dispatches InterruptMessages and ChatMessages to
     main loop, returns on WorkerResult. Threading: this thread recv()s only,
     main loop send()s only.
     """
@@ -296,9 +288,9 @@ def _run_worker(
         if isinstance(msg, InterruptMessage):
             if on_interrupt is not None:
                 loop.call_soon_threadsafe(on_interrupt, msg)
-        elif isinstance(msg, StepEvent):
-            if on_step is not None:
-                loop.call_soon_threadsafe(on_step, msg)
+        elif isinstance(msg, ChatMessage):
+            if on_message is not None:
+                loop.call_soon_threadsafe(on_message, msg)
         elif isinstance(msg, WorkerResult):
             return msg
         else:
@@ -422,7 +414,7 @@ class WorkerExecutor:
         timeout: float = 0,
         session_id: str | None = None,
         on_interrupt: Callable | None = None,
-        on_step: Callable | None = None,
+        on_message: Callable | None = None,
         resume_queue: "asyncio.Queue | None" = None,
         on_worker_done: Callable | None = None,
     ) -> WorkerResult:
@@ -433,8 +425,8 @@ class WorkerExecutor:
         Args:
             on_interrupt: Called on the main loop (via call_soon_threadsafe)
                 each time the worker sends an InterruptMessage.
-            on_step: Called on the main loop (via call_soon_threadsafe)
-                each time the worker sends a StepEvent.
+            on_message: Called on the main loop (via call_soon_threadsafe)
+                each time the worker sends a ChatMessage.
             resume_queue: If provided, a coroutine forwards ResumeMessages
                 from this queue to the worker over the pipe.
             on_worker_done: Called once in finally, BEFORE cleanup starts.
@@ -454,7 +446,7 @@ class WorkerExecutor:
 
                 loop = asyncio.get_running_loop()
                 recv_future = loop.run_in_executor(
-                    None, _run_worker, parent_conn, loop, on_interrupt, on_step
+                    None, _run_worker, parent_conn, loop, on_interrupt, on_message
                 )
                 resume_task = (
                     loop.create_task(_forward_resumes(resume_queue, parent_conn))
