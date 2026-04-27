@@ -2430,10 +2430,19 @@ class TestSSEStreaming:
         await session.publish(
             {
                 "event": "message",
+                "session_id": "test",
+                "status": "running",
                 "message": {"role": "assistant", "content": "thinking"},
             }
         )
-        await session.publish({"event": "done", "response": {"content": "11"}})
+        await session.publish(
+            {
+                "event": "done",
+                "session_id": "test",
+                "status": "idle",
+                "response": {"content": "11"},
+            }
+        )
 
         gen = server._sse_generator(session)
 
@@ -2441,6 +2450,8 @@ class TestSSEStreaming:
         frame2 = await gen.__anext__()
         parsed1 = _parse_sse_frame(frame1)
         assert parsed1["event"] == "message"
+        assert parsed1["data"]["session_id"] == "test"
+        assert parsed1["data"]["status"] == "running"
         assert parsed1["data"]["message"]["content"] == "thinking"
         assert _parse_sse_frame(frame2)["event"] == "done"
 
@@ -2534,6 +2545,8 @@ class TestSSEStreaming:
                 e for e in session._event_log if e is not None and e["event"] == "done"
             ]
             assert len(done_events) == 1
+            assert done_events[0]["session_id"] == sid
+            assert done_events[0]["status"] == "idle"
             assert done_events[0]["response"]["content"] == "7"
 
     async def test_end_to_end_error_in_event_log(self):
@@ -2558,7 +2571,54 @@ class TestSSEStreaming:
                 if e is not None and e["event"] == "error"
             ]
             assert len(error_events) == 1
+            assert error_events[0]["session_id"] == sid
+            assert error_events[0]["status"] == "error"
             assert "Intentional error" in error_events[0]["error"]
+
+    async def test_publish_event_interrupted_shape(self):
+        """Session.publish_event('interrupted') emits the unified envelope
+        with session_id, status, and the full pending interrupts list."""
+        from motus.serve.interrupt import InterruptMessage
+        from motus.serve.session import Session
+
+        session = Session(session_id="sid-123")
+        # interrupt_turn only transitions from running/interrupted; simulate
+        # a turn in flight first.
+        dummy_task = asyncio.create_task(asyncio.sleep(100))
+        try:
+            session.start_turn(dummy_task)
+            session.interrupt_turn(
+                InterruptMessage(
+                    interrupt_id="i1",
+                    payload={"type": "tool_approval", "tool": "delete_file"},
+                )
+            )
+            session.interrupt_turn(
+                InterruptMessage(interrupt_id="i2", payload={"type": "user_input"})
+            )
+
+            await session.publish_event("interrupted")
+        finally:
+            dummy_task.cancel()
+            try:
+                await dummy_task
+            except asyncio.CancelledError:
+                pass
+
+        events = [e for e in session._event_log if e is not None]
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["event"] == "interrupted"
+        assert evt["session_id"] == "sid-123"
+        assert evt["status"] == "interrupted"
+        interrupts_by_id = {i["interrupt_id"]: i for i in evt["interrupts"]}
+        assert set(interrupts_by_id) == {"i1", "i2"}
+        assert interrupts_by_id["i1"]["type"] == "tool_approval"
+        assert interrupts_by_id["i1"]["payload"] == {
+            "type": "tool_approval",
+            "tool": "delete_file",
+        }
+        assert interrupts_by_id["i2"]["type"] == "user_input"
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ from typing import Any
 from motus.models import ChatMessage
 from motus.serve.interrupt import InterruptMessage
 
-from .schemas import SessionStatus
+from .schemas import InterruptInfo, SessionResponse, SessionStatus
 
 logger = logging.getLogger("motus.serve")
 
@@ -42,11 +42,50 @@ class Session:
         default_factory=asyncio.Condition, repr=False
     )
 
+    def to_response(self) -> SessionResponse:
+        """Snapshot the current session as a SessionResponse.
+
+        Used by GET /sessions/{id} and as the base shape for SSE events,
+        so terminal SSE frames are a strict superset of the GET body.
+        """
+        interrupts = None
+        if self.status == SessionStatus.interrupted:
+            interrupts = [
+                InterruptInfo(
+                    interrupt_id=iid,
+                    type=msg.payload.get("type", "unknown"),
+                    payload=msg.payload,
+                )
+                for iid, msg in self.pending_interrupts.items()
+            ]
+
+        return SessionResponse(
+            session_id=self.session_id,
+            status=self.status,
+            response=self.response,
+            error=self.error,
+            interrupts=interrupts,
+        )
+
     async def publish(self, event: dict | None) -> None:
         """Append an event to the log and notify SSE subscribers."""
         async with self._event_condition:
             self._event_log.append(event)
             self._event_condition.notify_all()
+
+    async def publish_event(self, event_name: str, **extras) -> None:
+        """Publish an SSE event with standard {session_id, status, ...} envelope.
+
+        Every SSE event carries session_id and status (auto-included via
+        to_response()) plus any state-derived fields populated for the
+        current status. Per-event extras (e.g. ``message=...``) layer on top.
+        """
+        payload = {
+            "event": event_name,
+            **self.to_response().model_dump(exclude_none=True),
+        }
+        payload.update({k: v for k, v in extras.items() if v is not None})
+        await self.publish(payload)
 
     def start_turn(self, task: asyncio.Task) -> None:
         """Transition to running state for a new turn."""
