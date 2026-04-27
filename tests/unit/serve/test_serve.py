@@ -2541,6 +2541,15 @@ class TestSSEStreaming:
             # Verify the done event was published to the session's event log
             session = server._sessions.get(sid)
             assert session is not None
+            running_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "running"
+            ]
+            assert len(running_events) == 1
+            assert running_events[0]["session_id"] == sid
+            assert running_events[0]["status"] == "running"
+
             done_events = [
                 e for e in session._event_log if e is not None and e["event"] == "done"
             ]
@@ -2548,6 +2557,10 @@ class TestSSEStreaming:
             assert done_events[0]["session_id"] == sid
             assert done_events[0]["status"] == "idle"
             assert done_events[0]["response"]["content"] == "7"
+
+            # running must precede done in the event log
+            log = [e for e in session._event_log if e is not None]
+            assert log.index(running_events[0]) < log.index(done_events[0])
 
     async def test_end_to_end_error_in_event_log(self):
         """Full integration: a failing agent publishes an error event."""
@@ -2565,6 +2578,15 @@ class TestSSEStreaming:
 
             session = server._sessions.get(sid)
             assert session is not None
+            running_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "running"
+            ]
+            assert len(running_events) == 1
+            assert running_events[0]["session_id"] == sid
+            assert running_events[0]["status"] == "running"
+
             error_events = [
                 e
                 for e in session._event_log
@@ -2574,6 +2596,95 @@ class TestSSEStreaming:
             assert error_events[0]["session_id"] == sid
             assert error_events[0]["status"] == "error"
             assert "Intentional error" in error_events[0]["error"]
+
+            log = [e for e in session._event_log if e is not None]
+            assert log.index(running_events[0]) < log.index(error_events[0])
+
+    async def test_running_event_after_full_resume(self):
+        """Resuming the last pending interrupt transitions the session back to
+        running and publishes a `running` SSE event."""
+        from httpx import ASGITransport, AsyncClient
+
+        from motus.serve.interrupt import InterruptMessage
+        from motus.serve.schemas import SessionStatus
+
+        server = AgentServer(_add, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            # Manually wedge the session into "interrupted" with one pending
+            # interrupt and an active resume queue.
+            session = server._sessions.get(sid)
+            assert session is not None
+            session.status = SessionStatus.interrupted
+            session._resume_queue = asyncio.Queue()
+            session.pending_interrupts = {
+                "i1": InterruptMessage(
+                    interrupt_id="i1", payload={"type": "tool_approval"}
+                )
+            }
+
+            r = await client.post(
+                f"/sessions/{sid}/resume",
+                json={"interrupt_id": "i1", "value": {"approved": True}},
+            )
+            assert r.status_code == 200
+            assert r.json()["status"] == "running"
+
+            running_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "running"
+            ]
+            assert len(running_events) == 1
+            assert running_events[0]["session_id"] == sid
+            assert running_events[0]["status"] == "running"
+
+    async def test_no_running_event_on_partial_resume(self):
+        """Resolving only one of multiple pending interrupts leaves the
+        session interrupted; no `running` event is published."""
+        from httpx import ASGITransport, AsyncClient
+
+        from motus.serve.interrupt import InterruptMessage
+        from motus.serve.schemas import SessionStatus
+
+        server = AgentServer(_add, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            session = server._sessions.get(sid)
+            assert session is not None
+            session.status = SessionStatus.interrupted
+            session._resume_queue = asyncio.Queue()
+            session.pending_interrupts = {
+                "i1": InterruptMessage(
+                    interrupt_id="i1", payload={"type": "tool_approval"}
+                ),
+                "i2": InterruptMessage(
+                    interrupt_id="i2", payload={"type": "user_input"}
+                ),
+            }
+
+            r = await client.post(
+                f"/sessions/{sid}/resume",
+                json={"interrupt_id": "i1", "value": {"approved": True}},
+            )
+            assert r.status_code == 200
+            assert r.json()["status"] == "interrupted"
+            assert session.status == SessionStatus.interrupted
+
+            running_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "running"
+            ]
+            assert running_events == []
 
     async def test_publish_event_interrupted_shape(self):
         """Session.publish_event('interrupted') emits the unified envelope

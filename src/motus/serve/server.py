@@ -276,6 +276,7 @@ class AgentServer:
             session.start_turn(task)
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
+            await session.publish_event("running")
 
             response.headers["Location"] = f"/sessions/{session_id}"
             return MessageResponse(
@@ -298,6 +299,8 @@ class AgentServer:
                 session.submit_resume(body.interrupt_id, body.value)
             except ValueError as e:
                 raise HTTPException(status_code=404, detail=str(e))
+            if session.status == SessionStatus.running:
+                await session.publish_event("running")
             return {"session_id": session_id, "status": session.status.value}
 
         @app.post("/eval/judge", response_model=JudgeResponse)
