@@ -215,24 +215,7 @@ class AgentServer:
                 if session is None:
                     raise HTTPException(status_code=404, detail="Session deleted")
 
-            interrupts = None
-            if session.status == SessionStatus.interrupted:
-                interrupts = [
-                    InterruptInfo(
-                        interrupt_id=iid,
-                        type=msg.payload.get("type", "unknown"),
-                        payload=msg.payload,
-                    )
-                    for iid, msg in session.pending_interrupts.items()
-                ]
-
-            return SessionResponse(
-                session_id=session.session_id,
-                status=session.status,
-                response=session.response,
-                error=session.error,
-                interrupts=interrupts,
-            )
+            return session.to_response()
 
         @app.delete("/sessions/{session_id}", status_code=204)
         async def delete_session(session_id: str):
@@ -412,16 +395,16 @@ class AgentServer:
 
         def on_interrupt(msg) -> None:
             session.interrupt_turn(msg)
+            s = self._sessions.get(session_id)
+            if s is not None:
+                asyncio.ensure_future(s.publish_event("interrupted"))
 
         def on_message(msg: ChatMessage) -> None:
             s = self._sessions.get(session_id)
             if s is not None:
                 asyncio.ensure_future(
-                    s.publish(
-                        {
-                            "event": "message",
-                            "message": msg.model_dump(exclude_none=True),
-                        }
+                    s.publish_event(
+                        "message", message=msg.model_dump(exclude_none=True)
                     )
                 )
 
@@ -449,18 +432,11 @@ class AgentServer:
             if result.success:
                 response, new_state = result.value
                 session.complete_turn(response, new_state)
-                await session.publish(
-                    {
-                        "event": "done",
-                        "response": response.model_dump(exclude_none=True),
-                    }
-                )
+                await session.publish_event("done")
                 logger.info(f"Turn completed: session={session_id}")
             else:
                 session.fail_turn(result.error or "Unknown error")
-                await session.publish(
-                    {"event": "error", "error": result.error or "Unknown error"}
-                )
+                await session.publish_event("error")
                 logger.error(f"Turn failed: session={session_id}\n{result.error}")
 
         except asyncio.CancelledError:
