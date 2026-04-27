@@ -2390,24 +2390,36 @@ class TestSSEStreaming:
 
         await gen.aclose()
 
-    async def test_generator_keepalive_on_idle(self):
-        """With no events, the generator yields a keepalive after timeout."""
+    async def test_generator_emits_keepalive_comment_on_idle(self):
+        """With no events for SSE_IDLE_TIMEOUT seconds, the generator yields a
+        comment-form heartbeat (":" prefix), not a named event."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        server.SSE_IDLE_TIMEOUT = 0.05  # short timeout for the test
+        session = Session(session_id="test")
+
+        gen = server._sse_generator(session)
+        try:
+            frame = await gen.__anext__()
+        finally:
+            await gen.aclose()
+
+        # Comment-form per WHATWG SSE spec — EventSource ignores it.
+        assert frame == ": keepalive\n\n"
+        assert "event:" not in frame
+        assert "data:" not in frame
+
+    async def test_generator_wakes_on_publish(self):
+        """A publish() during the wait_for() correctly unblocks the generator
+        and yields the published event (rather than timing out to a keepalive)."""
         from motus.serve.session import Session
 
         server = AgentServer(_add, max_workers=1)
         session = Session(session_id="test")
 
-        # Monkey-patch a short timeout for testing
-        original = server._sse_generator
-
-        async def short_timeout_gen(s):
-            # We'll just test with the real generator — the 15s timeout
-            # is too long for tests, so we publish after a brief delay.
-            pass
-
         gen = server._sse_generator(session)
 
-        # Publish after a short delay so the generator doesn't wait 15s
         async def publish_later():
             await asyncio.sleep(0.1)
             await session.publish({"event": "done", "response": {}})

@@ -53,6 +53,10 @@ class AgentServer:
         python -m motus.serve start myapp:my_agent --port 8000
     """
 
+    SSE_IDLE_TIMEOUT: float = 15.0
+    """Seconds the SSE generator waits for new events before emitting a
+    keepalive comment. Tests may monkey-patch this for faster runs."""
+
     def __init__(
         self,
         agent_fn: Callable | str,
@@ -358,7 +362,7 @@ class AgentServer:
                                 lambda: epoch != session._event_epoch
                                 or index < len(session._event_log)
                             ),
-                            timeout=15.0,
+                            timeout=self.SSE_IDLE_TIMEOUT,
                         )
                         has_events = True
                     except asyncio.TimeoutError:
@@ -367,9 +371,11 @@ class AgentServer:
                     index = 0
                     epoch = session._event_epoch
 
-            # Phase 2: outside the lock, yield events or keepalive
+            # Phase 2: outside the lock, yield events or a keepalive comment.
+            # ":" prefix is the WHATWG SSE comment form — invisible to
+            # EventSource consumers, still flushes bytes through proxies.
             if not has_events:
-                yield "event: keepalive\ndata: {}\n\n"
+                yield ": keepalive\n\n"
                 continue
 
             while index < len(session._event_log):
