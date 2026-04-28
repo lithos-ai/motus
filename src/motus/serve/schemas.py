@@ -58,6 +58,7 @@ class TraceMetrics(BaseModel):
     trace_id: str | None = None
     total_duration: float = 0.0
     total_tokens: int = 0
+    total_cost_usd: float = 0.0
     has_error: bool = False
 
 

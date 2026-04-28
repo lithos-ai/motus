@@ -251,6 +251,10 @@ class TraceManager:
         extra_meta = extractor.extract_end_meta(result)
         self.task_meta[task_id_int].update(extra_meta)
 
+        # Resolve and stamp usage.cost so all downstream consumers read the
+        # same value computed once here.
+        self._enrich_usage_with_cost(self.task_meta[task_id_int])
+
         # Pop from stack (conditional: deferred task_end may fire in a
         # different async context where this task is not on the stack)
         stack = self.current_task_stack.get()
@@ -268,6 +272,23 @@ class TraceManager:
 
         # Push updated span via SSE + cloud
         self._push_span_if_needed(task_id_int, self.task_meta[task_id_int])
+
+    def _enrich_usage_with_cost(self, meta: dict) -> None:
+        """Inject computed cost into model_output_meta.usage.cost in-place."""
+        output = meta.get("model_output_meta")
+        if not isinstance(output, dict):
+            return
+        usage = output.get("usage")
+        if not isinstance(usage, dict):
+            return
+        if usage.get("cost"):
+            return
+        from motus.models.pricing import calculate_cost
+
+        model_name = output.get("model") or meta.get("model_name", "")
+        cost = calculate_cost(model_name, usage)
+        if cost is not None:
+            usage["cost"] = cost
 
     def error_task(self, task_id: AgentTaskId, error: Exception) -> None:
         """Record a task that ended with an error.
@@ -455,10 +476,13 @@ class TraceManager:
         Called by serve2 worker after the agent turn completes to include
         metrics in the webhook payload for write-time aggregation.
         """
+        from motus.models.pricing import calculate_cost
+
         tasks = self.task_meta
         min_start = float("inf")
         max_end = 0
         total_tokens = 0
+        total_cost_usd = 0.0
         has_error = False
 
         for task in tasks.values():
@@ -477,6 +501,10 @@ class TraceManager:
                 usage = output.get("usage")
                 if isinstance(usage, dict):
                     total_tokens += usage.get("total_tokens", 0)
+                    model_name = output.get("model") or task.get("model_name", "")
+                    span_cost = calculate_cost(model_name, usage)
+                    if span_cost is not None:
+                        total_cost_usd += span_cost
 
         total_duration = 0.0
         if max_end > min_start:
@@ -488,6 +516,7 @@ class TraceManager:
             else None,
             "total_duration": total_duration,
             "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost_usd, 8),
             "has_error": has_error,
         }
 
