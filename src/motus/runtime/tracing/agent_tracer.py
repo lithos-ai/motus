@@ -251,11 +251,8 @@ class TraceManager:
         extra_meta = extractor.extract_end_meta(result)
         self.task_meta[task_id_int].update(extra_meta)
 
-        # Enrich model_output_meta.usage with cost so downstream consumers
-        # (cloud TracesTable.total_cost_usd, OTel exporter, this tracer's own
-        # get_turn_metrics) all see the same cost value sourced once here.
-        # calculate_cost prefers gateway-provided cost (response.usage.cost)
-        # and falls back to the local pricing table for direct-SDK paths.
+        # Resolve and stamp usage.cost so all downstream consumers read the
+        # same value computed once here.
         self._enrich_usage_with_cost(self.task_meta[task_id_int])
 
         # Pop from stack (conditional: deferred task_end may fire in a
@@ -284,7 +281,6 @@ class TraceManager:
         usage = output.get("usage")
         if not isinstance(usage, dict):
             return
-        # Already populated (gateway-provided) — leave it.
         if usage.get("cost"):
             return
         from motus.models.pricing import calculate_cost
@@ -505,9 +501,6 @@ class TraceManager:
                 usage = output.get("usage")
                 if isinstance(usage, dict):
                     total_tokens += usage.get("total_tokens", 0)
-                    # calculate_cost prefers usage.cost (from model_proxy /
-                    # OpenRouter) and falls back to local pricing. Sum across
-                    # spans to get trace-level cost.
                     model_name = output.get("model") or task.get("model_name", "")
                     span_cost = calculate_cost(model_name, usage)
                     if span_cost is not None:

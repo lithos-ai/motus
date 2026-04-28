@@ -110,7 +110,6 @@ def calculate_cost(model: str | None, usage: dict) -> float | None:
     """
     if not usage:
         return None
-    # Provider/gateway-reported cost takes precedence — single source of truth.
     if usage.get("cost"):
         try:
             return float(usage["cost"])
