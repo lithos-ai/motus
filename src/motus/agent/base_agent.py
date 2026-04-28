@@ -448,7 +448,19 @@ class AgentBase(ABC, Generic[T]):
                 self._input_guardrails, user_prompt, agent=self
             )
 
-        result = await self._run(user_prompt, **kwargs)
+        from ._stream_context import _agent_path, _stream_callback
+
+        should_attribute = (
+            _stream_callback.get() is not None and self.on_message is None
+        )
+        token = None
+        if should_attribute:
+            token = _agent_path.set((*_agent_path.get(), self.name))
+        try:
+            result = await self._run(user_prompt, **kwargs)
+        finally:
+            if token is not None:
+                _agent_path.reset(token)
 
         # Output guardrails
         if self._output_guardrails:
