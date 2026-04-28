@@ -33,6 +33,8 @@
 
 Motus is an open-source agent serving project that enables higher capability, lower cost, and faster agents. As building agents has never been easier, Motus takes a no-framework approach and provides the infrastructure needed for efficient agent serving. Deploy simply across self-managed and cloud environments at any scale.
 
+Hello from motus codex
+
 ## Use with your coding agent
 
 The fastest way to get started is to let your coding agent handle building, serving, and deploying with Motus.
