@@ -2821,7 +2821,13 @@ class TestSSEStreaming:
 
             contents = [e["message"].get("content") for e in message_events]
             assert "reply from internal" in contents
-            assert all("agent_path" not in e for e in message_events)
+            internal_events = [
+                e
+                for e in message_events
+                if e["message"].get("content") == "reply from internal"
+            ]
+            assert internal_events
+            assert all(e["agent_path"] == ["internal"] for e in internal_events)
             assert done["response"]["content"] == "reply from internal"
 
     async def test_explicit_on_message_takes_precedence_over_ambient_callback(self):
