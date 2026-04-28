@@ -210,23 +210,20 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
             except Exception:
                 pass  # tracer unavailable is not fatal
 
+        async def _send_message(message: ChatMessage):
+            try:
+                conn.send(
+                    StreamedMessage(message=message, agent_path=_agent_path.get())
+                )
+            except (BrokenPipeError, OSError):
+                pass
+
         if hasattr(agent_or_fn, "on_message"):
-
-            async def _send_message(message: ChatMessage):
-                try:
-                    conn.send(
-                        StreamedMessage(
-                            message=message, agent_path=_agent_path.get()
-                        )
-                    )
-                except (BrokenPipeError, OSError):
-                    pass
-
             agent_or_fn.on_message = _send_message
-            # Expose the forwarding callback to AgentTool so subagent
-            # messages bubble up through the same pipe, tagged with the
-            # accumulated agent_path.
-            _stream_callback.set(_send_message)
+
+        # Expose the forwarding callback to AgentBase instances created during
+        # this turn, including those created inside plain served functions.
+        _stream_callback.set(_send_message)
 
         if isinstance(agent_or_fn, ServableAgent):
             return await agent_or_fn.run_turn(message, state)

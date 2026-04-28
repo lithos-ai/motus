@@ -213,9 +213,14 @@ class AgentBase(ABC, Generic[T]):
             message: The ChatMessage to add
         """
         await self._memory.add_message(message)
-        if self.on_message is not None:
+        callback = self.on_message
+        if callback is None:
+            from ._stream_context import _stream_callback
+
+            callback = _stream_callback.get()
+        if callback is not None:
             try:
-                await self.on_message(message)
+                await callback(message)
             except Exception:
                 logger.exception("on_message hook raised; continuing")
 
