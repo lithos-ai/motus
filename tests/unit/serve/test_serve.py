@@ -2347,9 +2347,9 @@ def _parse_sse_frame(frame: str) -> dict:
     data = None
     for line in frame.strip().split("\n"):
         if line.startswith("event: "):
-            event_type = line[len("event: "):]
+            event_type = line[len("event: ") :]
         elif line.startswith("data: "):
-            data = json.loads(line[len("data: "):])
+            data = json.loads(line[len("data: ") :])
     return {"event": event_type, "data": data}
 
 
@@ -2600,9 +2600,7 @@ class TestSSEStreaming:
             assert running_events[0]["status"] == "running"
 
             error_events = [
-                e
-                for e in session._event_log
-                if e is not None and e["event"] == "error"
+                e for e in session._event_log if e is not None and e["event"] == "error"
             ]
             assert len(error_events) == 1
             assert error_events[0]["session_id"] == sid
@@ -2749,8 +2747,6 @@ class TestSSEStreaming:
         ``done.response`` reflects only the parent's view."""
         from httpx import ASGITransport, AsyncClient
 
-        from tests.unit.serve.mock_agent import parent_with_subagent
-
         server = AgentServer(
             "tests.unit.serve.mock_agent:parent_with_subagent", max_workers=1
         )
@@ -2797,6 +2793,64 @@ class TestSSEStreaming:
             r = await client.get(f"/sessions/{sid}/messages")
             history_contents = [m.get("content") for m in r.json()]
             assert "reply from inner" not in history_contents
+
+    async def test_plain_function_internal_agent_streams_messages(self):
+        """A plain served function that creates an AgentBase internally still
+        streams the internal agent's live messages via ambient callback."""
+        from httpx import ASGITransport, AsyncClient
+
+        server = AgentServer(
+            "tests.unit.serve.mock_agent:function_with_internal_agent", max_workers=1
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            await client.post(f"/sessions/{sid}/messages", json={"content": "go"})
+            done = await _poll_until(client, sid, "idle")
+
+            session = server._sessions.get(sid)
+            assert session is not None
+            message_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "message"
+            ]
+
+            contents = [e["message"].get("content") for e in message_events]
+            assert "reply from internal" in contents
+            assert all("agent_path" not in e for e in message_events)
+            assert done["response"]["content"] == "reply from internal"
+
+    async def test_explicit_on_message_takes_precedence_over_ambient_callback(self):
+        """An explicitly configured on_message hook wins over ambient serve
+        streaming so a message is not emitted twice."""
+        from motus.agent._stream_context import _stream_callback
+        from tests.unit.serve.mock_agent import MockChatClient, StreamingMockAgent
+
+        received: list[tuple[str, str | None]] = []
+
+        async def explicit_callback(message):
+            received.append(("explicit", message.content))
+
+        async def ambient_callback(message):
+            received.append(("ambient", message.content))
+
+        agent = StreamingMockAgent(
+            client=MockChatClient(),
+            model_name="mock",
+            name="precedence",
+            on_message=explicit_callback,
+        )
+        token = _stream_callback.set(ambient_callback)
+        try:
+            await agent.add_assistant_message("hello")
+        finally:
+            _stream_callback.reset(token)
+
+        assert received == [("explicit", "hello")]
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ can import via import path (e.g., 'tests.unit.serve.mock_agent:echo_agent').
 """
 
 from motus.agent.base_agent import AgentBase
+from motus.models import ChatMessage
 from motus.models.base import BaseChatClient, ChatCompletion
 
 
@@ -110,6 +111,19 @@ parent_with_subagent = ParentWithSubagent(
     name="parent",
     tools=[_subagent_inner.as_tool(name="inner_tool")],
 )
+
+
+async def function_with_internal_agent(message: ChatMessage, state: list[ChatMessage]):
+    """Plain serve entrypoint that creates an AgentBase internally."""
+    internal = StreamingMockAgent(
+        client=MockChatClient(),
+        model_name="mock",
+        name="internal",
+    )
+    content = await internal(message.content or "")
+    response = ChatMessage.assistant_message(content=content)
+    return response, state + [message, response]
+
 
 # Non-agent, non-callable object for testing type rejection
 not_an_agent = "I am just a string"
