@@ -155,7 +155,9 @@ agent.usage
 # {"input_tokens": 1234, "output_tokens": 567, "cache_read_input_tokens": 200, ...}
 
 agent.cost
-# 0.0042  (USD, or None if pricing is not available for the model)
+# 0.0042  (USD; gateway-reported when present — e.g. OpenRouter or
+#         LithosAI proxy — otherwise computed from tokens via the
+#         bundled pricing table; None if neither is available)
 
 agent.context_window_usage
 # {"estimated_tokens": 1801, "threshold": 150000, "ratio": 0.012, "percent": "1%"}
@@ -166,7 +168,7 @@ The `threshold` in `context_window_usage` is whatever will trigger memory compac
 | Attribute | What you get |
 |---|---|
 | `agent.usage` | Accumulated token counts across every LLM call |
-| `agent.cost` | Total cost in USD, or `None` if the model has no pricing entry |
+| `agent.cost` | Total cost in USD — gateway-reported (OpenRouter / LithosAI proxy) when present, otherwise computed from tokens; `None` if neither source is available |
 | `agent.context_window_usage` | Current working-memory size relative to the compaction threshold |
 | `agent.get_execution_trace()` | The memory trace as a dict, enriched with usage, model, and cost |
 
