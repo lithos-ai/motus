@@ -408,14 +408,14 @@ class AgentServer:
             if s is not None:
                 asyncio.ensure_future(s.publish_event("interrupted"))
 
-        def on_message(msg: ChatMessage) -> None:
+        def on_message(msg: ChatMessage, agent_path: tuple[str, ...]) -> None:
             s = self._sessions.get(session_id)
-            if s is not None:
-                asyncio.ensure_future(
-                    s.publish_event(
-                        "message", message=msg.model_dump(exclude_none=True)
-                    )
-                )
+            if s is None:
+                return
+            extras: dict = {"message": msg.model_dump(exclude_none=True)}
+            if agent_path:
+                extras["agent_path"] = list(agent_path)
+            asyncio.ensure_future(s.publish_event("message", **extras))
 
         def on_worker_done() -> None:
             session._resume_queue = None

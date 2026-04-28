@@ -79,6 +79,16 @@ class Session:
         Every SSE event carries session_id and status (auto-included via
         to_response()) plus any state-derived fields populated for the
         current status. Per-event extras (e.g. ``message=...``) layer on top.
+
+        A ``"message"`` event may carry an optional ``agent_path`` field, a
+        list of registered subagent (``AgentTool``) names identifying the
+        nested call chain that produced the message. The field is omitted
+        for messages from the root agent. Note that the SSE stream is a
+        **superset** of the final returned ``list[ChatMessage]``: subagent
+        messages (those with a non-empty ``agent_path``) appear on the
+        stream but are NOT included in ``done.response`` or in the history
+        returned by ``GET /sessions/{id}/messages`` — those reflect only the
+        parent's view of the conversation (tool call + tool result string).
         """
         payload = {
             "event": event_name,
