@@ -227,3 +227,192 @@ class TestNormalizeToolsAgent:
         a2 = _make_echo_agent(name="same")
         with pytest.raises(ValueError, match="Duplicate tool name"):
             normalize_tools([a1, a2])
+
+
+# ---------------------------------------------------------------------------
+# Streaming attribution: AgentTool propagates the on_message callback and
+# pushes the registered tool name onto the agent_path contextvar so subagent
+# messages are tagged with the call chain that produced them.
+# ---------------------------------------------------------------------------
+
+
+class _StreamingAgent(AgentBase[str]):
+    """Adds a single assistant message during _run, then returns."""
+
+    async def _run(self, user_prompt=None, **kwargs) -> str:
+        if user_prompt:
+            await self.add_user_message(user_prompt)
+        await self.add_assistant_message(f"reply from {self.name}")
+        return f"reply from {self.name}"
+
+
+class _AwaitingStreamingAgent(AgentBase[str]):
+    """Adds a marker message after a yield to the loop (interleaving aid)."""
+
+    async def _run(self, user_prompt=None, **kwargs) -> str:
+        import asyncio
+
+        await asyncio.sleep(0)
+        await self.add_assistant_message(f"reply from {self.name}")
+        await asyncio.sleep(0)
+        return f"reply from {self.name}"
+
+
+class _NestedAgent(AgentBase[str]):
+    """Calls a single subagent tool, then adds its own message."""
+
+    async def _run(self, user_prompt=None, **kwargs) -> str:
+        for tool in self._tools.values():
+            await tool._invoke(request=user_prompt or "")
+        await self.add_assistant_message(f"outer from {self.name}")
+        return f"outer from {self.name}"
+
+
+class TestAgentToolStreaming:
+    """Verify that AgentTool propagates streaming callbacks and pushes the
+    correct agent_path onto the contextvar around the child agent's run."""
+
+    async def test_subagent_messages_carry_path(self):
+        """Single-level subagent: messages tagged with [tool_name]."""
+        from unittest.mock import Mock
+
+        from motus.agent._stream_context import _agent_path, _stream_callback
+
+        received: list[tuple[str, tuple[str, ...]]] = []
+
+        async def cb(msg):
+            received.append((msg.content, _agent_path.get()))
+
+        token = _stream_callback.set(cb)
+        try:
+            inner = _StreamingAgent(client=Mock(), model_name="m", name="inner")
+            tool = inner.as_tool(name="research")
+            await tool._invoke(request="hi")
+        finally:
+            _stream_callback.reset(token)
+
+        assert received == [
+            ("hi", ("research",)),
+            ("reply from inner", ("research",)),
+        ]
+
+    async def test_nested_subagents_accumulate_path(self):
+        """Subagent inside subagent: innermost path is [outer_tool, inner_tool]."""
+        from unittest.mock import Mock
+
+        from motus.agent._stream_context import _agent_path, _stream_callback
+
+        received: list[tuple[str, tuple[str, ...]]] = []
+
+        async def cb(msg):
+            received.append((msg.content, _agent_path.get()))
+
+        token = _stream_callback.set(cb)
+        try:
+            leaf = _StreamingAgent(client=Mock(), model_name="m", name="leaf")
+            outer = _NestedAgent(
+                client=Mock(),
+                model_name="m",
+                name="outer",
+                tools=[leaf.as_tool(name="leaf_tool")],
+            )
+            outer_tool = outer.as_tool(name="branch_tool")
+            await outer_tool._invoke(request="go")
+        finally:
+            _stream_callback.reset(token)
+
+        contents = {(c, p) for c, p in received}
+        # Inner agent's reply runs under both path components
+        assert ("reply from leaf", ("branch_tool", "leaf_tool")) in contents
+        # Outer's own reply runs under just its tool name
+        assert ("outer from outer", ("branch_tool",)) in contents
+
+    async def test_parallel_subagents_have_independent_paths(self):
+        """Two AgentTools fired under asyncio.gather get independent paths.
+
+        Relies on contextvars being copied per-Task by asyncio.gather, which
+        is the entire reason we chose contextvars over a list mutated in place.
+        """
+        import asyncio
+        from unittest.mock import Mock
+
+        from motus.agent._stream_context import _agent_path, _stream_callback
+
+        received: list[tuple[str, tuple[str, ...]]] = []
+
+        async def cb(msg):
+            received.append((msg.content, _agent_path.get()))
+
+        token = _stream_callback.set(cb)
+        try:
+            a = _AwaitingStreamingAgent(client=Mock(), model_name="m", name="a")
+            b = _AwaitingStreamingAgent(client=Mock(), model_name="m", name="b")
+            await asyncio.gather(
+                a.as_tool(name="agent_a")._invoke(request="x"),
+                b.as_tool(name="agent_b")._invoke(request="y"),
+            )
+        finally:
+            _stream_callback.reset(token)
+
+        contents = {(c, p) for c, p in received}
+        assert ("reply from a", ("agent_a",)) in contents
+        assert ("reply from b", ("agent_b",)) in contents
+        # No cross-bleeding
+        assert ("reply from a", ("agent_b",)) not in contents
+        assert ("reply from b", ("agent_a",)) not in contents
+
+    async def test_stateful_subagent_attributes_path(self):
+        """as_tool(stateful=True) still attributes correctly (no fork involved)."""
+        from unittest.mock import Mock
+
+        from motus.agent._stream_context import _agent_path, _stream_callback
+
+        received: list[tuple[str, ...]] = []
+
+        async def cb(msg):
+            received.append(_agent_path.get())
+
+        token = _stream_callback.set(cb)
+        try:
+            inner = _StreamingAgent(client=Mock(), model_name="m", name="inner")
+            tool = inner.as_tool(name="stateful_tool", stateful=True)
+            await tool._invoke(request="hi")
+        finally:
+            _stream_callback.reset(token)
+
+        assert ("stateful_tool",) in received
+
+    async def test_no_stream_callback_means_no_emission(self):
+        """Without an ambient callback, AgentTool runs cleanly and emits nothing."""
+        from unittest.mock import Mock
+
+        from motus.agent._stream_context import _stream_callback
+
+        # Default: no callback set in this test's task context.
+        assert _stream_callback.get() is None
+
+        inner = _StreamingAgent(client=Mock(), model_name="m", name="inner")
+        tool = inner.as_tool(name="research")
+        # Should not error. The wrapped agent has on_message=None, so even
+        # though add_message fires, nothing escapes.
+        result = await tool._invoke(request="hi")
+        assert result == "reply from inner"
+
+    async def test_path_is_reset_after_invocation(self):
+        """The contextvar token must reset the path even on the success path."""
+        from unittest.mock import Mock
+
+        from motus.agent._stream_context import _agent_path, _stream_callback
+
+        async def cb(msg):  # pragma: no cover — never called in this test
+            pass
+
+        cb_token = _stream_callback.set(cb)
+        try:
+            assert _agent_path.get() == ()
+            inner = _StreamingAgent(client=Mock(), model_name="m", name="x")
+            await inner.as_tool(name="t")._invoke(request="hi")
+            # Path must have been popped on the way out
+            assert _agent_path.get() == ()
+        finally:
+            _stream_callback.reset(cb_token)

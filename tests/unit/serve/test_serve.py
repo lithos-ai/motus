@@ -2743,6 +2743,61 @@ class TestSSEStreaming:
         }
         assert interrupts_by_id["i2"]["type"] == "user_input"
 
+    async def test_subagent_messages_carry_agent_path(self):
+        """End-to-end via the worker subprocess: subagent messages reach the
+        SSE event log tagged with agent_path; root messages have no path;
+        ``done.response`` reflects only the parent's view."""
+        from httpx import ASGITransport, AsyncClient
+
+        from tests.unit.serve.mock_agent import parent_with_subagent
+
+        server = AgentServer(
+            "tests.unit.serve.mock_agent:parent_with_subagent", max_workers=1
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            await client.post(f"/sessions/{sid}/messages", json={"content": "go"})
+            done = await _poll_until(client, sid, "idle")
+
+            session = server._sessions.get(sid)
+            assert session is not None
+            message_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "message"
+            ]
+
+            # Partition by attribution.
+            root_events = [e for e in message_events if "agent_path" not in e]
+            sub_events = [e for e in message_events if "agent_path" in e]
+
+            # Subagent emitted at least one message tagged with the tool name.
+            assert sub_events, "expected subagent messages with agent_path"
+            for evt in sub_events:
+                assert evt["agent_path"] == ["inner_tool"]
+
+            # The "parent done" assistant message comes from the root agent.
+            root_contents = [e["message"].get("content") for e in root_events]
+            assert "parent done" in root_contents
+
+            # Subagent's marker shows up only on the stream, never as a root event.
+            sub_contents = [e["message"].get("content") for e in sub_events]
+            assert "reply from inner" in sub_contents
+            assert "reply from inner" not in root_contents
+
+            # Final done.response is the parent's return value, not the subagent's.
+            assert done["response"]["content"] == "parent done"
+
+            # GET /messages history reflects only the parent's view: no subagent
+            # marker, but the parent's own messages are present.
+            r = await client.get(f"/sessions/{sid}/messages")
+            history_contents = [m.get("content") for m in r.json()]
+            assert "reply from inner" not in history_contents
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from typing import Any, Callable
 
+from motus.agent._stream_context import _agent_path, _stream_callback
 from motus.models import ChatMessage
 from motus.serve.interrupt import InterruptMessage
 
@@ -41,6 +42,19 @@ class WorkerResult:
     value: Any = None
     error: str | None = None
     trace_metrics: dict | None = None
+
+
+@dataclass
+class StreamedMessage:
+    """Wraps a ChatMessage with the agent_path that produced it.
+
+    Sent over the worker pipe so the parent process can attribute messages
+    to subagents without reading the worker's contextvars. An empty
+    ``agent_path`` denotes a message from the root agent.
+    """
+
+    message: ChatMessage
+    agent_path: tuple[str, ...]
 
 
 def _resolve_import_path(import_path: str):
@@ -200,11 +214,19 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
 
             async def _send_message(message: ChatMessage):
                 try:
-                    conn.send(message)
+                    conn.send(
+                        StreamedMessage(
+                            message=message, agent_path=_agent_path.get()
+                        )
+                    )
                 except (BrokenPipeError, OSError):
                     pass
 
             agent_or_fn.on_message = _send_message
+            # Expose the forwarding callback to AgentTool so subagent
+            # messages bubble up through the same pipe, tagged with the
+            # accumulated agent_path.
+            _stream_callback.set(_send_message)
 
         if isinstance(agent_or_fn, ServableAgent):
             return await agent_or_fn.run_turn(message, state)
@@ -288,9 +310,9 @@ def _run_worker(
         if isinstance(msg, InterruptMessage):
             if on_interrupt is not None:
                 loop.call_soon_threadsafe(on_interrupt, msg)
-        elif isinstance(msg, ChatMessage):
+        elif isinstance(msg, StreamedMessage):
             if on_message is not None:
-                loop.call_soon_threadsafe(on_message, msg)
+                loop.call_soon_threadsafe(on_message, msg.message, msg.agent_path)
         elif isinstance(msg, WorkerResult):
             return msg
         else:
@@ -426,7 +448,10 @@ class WorkerExecutor:
             on_interrupt: Called on the main loop (via call_soon_threadsafe)
                 each time the worker sends an InterruptMessage.
             on_message: Called on the main loop (via call_soon_threadsafe)
-                each time the worker sends a ChatMessage.
+                each time the worker streams a message. Signature:
+                ``(msg: ChatMessage, agent_path: tuple[str, ...])``. An empty
+                ``agent_path`` denotes the root agent; non-empty paths
+                identify the subagent (``AgentTool``) chain that produced it.
             resume_queue: If provided, a coroutine forwards ResumeMessages
                 from this queue to the worker over the pipe.
             on_worker_done: Called once in finally, BEFORE cleanup starts.
