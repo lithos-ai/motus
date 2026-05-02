@@ -1,5 +1,5 @@
 """
-Agent prompts for ActusBot.
+Agent prompts for MotusAgent.
 
 This module exports all agent prompts and the agent_prompt mapping.
 """

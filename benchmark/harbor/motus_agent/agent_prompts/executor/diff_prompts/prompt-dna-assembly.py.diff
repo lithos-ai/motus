@@ -1,7 +1,7 @@
-diff --git a/benchmarks/harbor/actus_bot/agent_prompts/executor/prompt.py b/benchmarks/harbor/actus_bot/agent_prompts/executor/prompt.py
+diff --git a/benchmarks/harbor/motus_agent/agent_prompts/executor/prompt.py b/benchmarks/harbor/motus_agent/agent_prompts/executor/prompt.py
 index a912e7a..3a57e3e 100644
---- a/benchmarks/harbor/actus_bot/agent_prompts/executor/prompt.py
-+++ b/benchmarks/harbor/actus_bot/agent_prompts/executor/prompt.py
+--- a/benchmarks/harbor/motus_agent/agent_prompts/executor/prompt.py
++++ b/benchmarks/harbor/motus_agent/agent_prompts/executor/prompt.py
 @@ -57,6 +57,18 @@ Executing...
  - Skip obvious steps (don't list "read the file" separately)
  - For very simple tasks (single obvious change): 1-2 bullets is fine

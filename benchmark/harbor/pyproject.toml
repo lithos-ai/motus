@@ -1,7 +1,7 @@
 [project]
-name = "actus-bot"
+name = "motus-agent"
 version = "0.1.0"
-description = "ActusBot agent for the Harbor (terminal-bench) benchmark, built on Motus."
+description = "MotusAgent: agent for the Harbor (terminal-bench) benchmark, built on Motus."
 requires-python = ">=3.12"
 
 dependencies = [
@@ -16,10 +16,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["actus_bot*"]
+include = ["motus_agent*"]
 
 [tool.setuptools.package-data]
-"actus_bot" = [
+"motus_agent" = [
     "skills/**/*.md",
     "agent_prompts/**/*.diff",
 ]

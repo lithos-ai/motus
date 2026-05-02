@@ -5,15 +5,15 @@ from harbor.agents.base import AgentContext, BaseAgent, BaseEnvironment
 
 from motus.models import AnthropicChatClient, OpenAIChatClient, SelfHostedChatClient
 
-from .actus_bot import ActusBot
+from .motus_agent import MotusAgent
 
 load_dotenv()
 
 
-class ActusAgent(BaseAgent):
+class MotusHarborAgent(BaseAgent):
     @staticmethod
     def name() -> str:
-        return "actusbot"
+        return "motusagent"
 
     def version(self) -> str | None:
         return "0.1.0"
@@ -53,7 +53,7 @@ class ActusAgent(BaseAgent):
                 "OPENROUTER_API_KEY+OPENROUTER_BASE_URL, or ANTHROPIC_API_KEY."
             )
 
-        self.agent = ActusBot(client=client, model_name=model, environment=environment)
+        self.agent = MotusAgent(client=client, model_name=model, environment=environment)
 
     async def run(
         self,

@@ -17,7 +17,7 @@ logger = logging.getLogger("Application")
 SubAgentName = Literal["executor", "debugger", "syntax_verifier", "file_verifier"]
 
 
-class ActusBot(ReActAgent):
+class MotusAgent(ReActAgent):
     def __init__(self, environment, *args, **kwargs):
         # Set main agent system prompt if not provided
         if "system_prompt" not in kwargs:

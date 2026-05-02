@@ -1,17 +1,17 @@
-# ActusBot — Harbor benchmark agent
+# MotusAgent — Harbor benchmark agent
 
-ActusBot is a multi-agent (main + executor / debugger / syntax_verifier / file_verifier sub-agents) implementation that runs against [Harbor](https://github.com/laude-institute/terminal-bench) tasks, built on the [Motus](https://github.com/lithos-ai/motus) agent framework.
+MotusAgent is a multi-agent (main + executor / debugger / syntax_verifier / file_verifier sub-agents) implementation that runs against [Harbor](https://github.com/laude-institute/terminal-bench) tasks, built on the [Motus](https://github.com/lithos-ai/motus) agent framework.
 
 ## Layout
 
 ```
 benchmark/harbor/
-├── actus_bot/
-│   ├── actus_bot.py          # ActusBot class (extends motus.agent.ReActAgent)
+├── motus_agent/
+│   ├── motus_agent.py        # MotusAgent class (extends motus.agent.ReActAgent)
 │   ├── tools.py              # Wraps harbor BaseEnvironment.exec into a sandbox_sh tool
 │   ├── agent_prompts/        # System prompts per sub-agent
 │   └── skills/               # SKILL.md files loaded on-demand by the executor
-├── test_actus_bot.py         # ActusAgent — Harbor BaseAgent registration / runner
+├── test_motus_agent.py       # MotusHarborAgent — Harbor BaseAgent registration / runner
 ├── pyproject.toml
 └── README.md
 ```
@@ -61,7 +61,7 @@ python -m vllm.entrypoints.openai.api_server --model /path/to/model --port 8000
 
 ## Run
 
-The agent is registered as `ActusAgent` (name: `actusbot`) in `test_actus_bot.py`. Point Harbor at it via its run config and execute the task suite per Harbor's docs.
+The agent is registered as `MotusHarborAgent` (name: `motusagent`) in `test_motus_agent.py`. Point Harbor at it via its run config and execute the task suite per Harbor's docs.
 
 ## Notes on the Motus port
 
