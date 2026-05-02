@@ -18,6 +18,7 @@ from .base import (
 from .gemini_client import GeminiChatClient
 from .openai_client import OpenAIChatClient
 from .openrouter_client import OpenRouterChatClient
+from .self_hosted_client import SelfHostedChatClient
 
 try:
     from .volcengine_client import VolcEngineChatClient
@@ -37,5 +38,6 @@ __all__ = [
     "GeminiChatClient",
     "OpenAIChatClient",
     "OpenRouterChatClient",
+    "SelfHostedChatClient",
     "VolcEngineChatClient",
 ]
