@@ -31,14 +31,32 @@ pip install -e benchmark/harbor
 pip install harbor-bench  # or follow upstream
 ```
 
-Set credentials in a `.env` file (loaded by `python-dotenv` at agent setup):
+Pick one backend and set the matching env vars in a `.env` file (loaded by `python-dotenv` at agent setup). Selection order in `setup()`: self-hosted > OpenRouter > Anthropic.
 
 ```bash
-# Either OpenRouter
+# Option A — local sglang / vllm (OpenAI-compatible endpoint)
+SELF_HOSTED_BASE_URL=http://localhost:30000     # sglang default; vllm uses 8000
+# optional:
+SELF_HOSTED_API_KEY=...                         # only if server was started with --api-key
+SELF_HOSTED_MODEL=/path/to/Llama-3.1-8B         # else: first model from /v1/models
+SELF_HOSTED_ENGINE=sglang                       # sglang | vllm | auto (telemetry only)
+
+# Option B — OpenRouter
 OPENROUTER_API_KEY=...
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-# Or direct Anthropic
+
+# Option C — direct Anthropic
 ANTHROPIC_API_KEY=...
+```
+
+Self-hosted launch examples:
+
+```bash
+# sglang
+python -m sglang.launch_server --model-path /path/to/model --port 30000
+
+# vllm
+python -m vllm.entrypoints.openai.api_server --model /path/to/model --port 8000
 ```
 
 ## Run
