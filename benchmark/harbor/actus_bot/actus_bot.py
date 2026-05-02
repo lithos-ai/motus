@@ -3,9 +3,9 @@ from pathlib import Path
 from typing import Literal
 
 from motus.agent import ReActAgent
-from motus.memory.basic_memory import BasicMemory
+from motus.memory import BasicMemory
 from motus.tools import FunctionTool
-from motus.tools.builtins.skill import make_skill_tool
+from motus.tools.builtins import make_skill_tool
 
 from .agent_prompts import MAIN_AGENT_PROMPT, agent_prompt
 from .tools import build_harbor_tools

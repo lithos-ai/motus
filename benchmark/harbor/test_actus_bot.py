@@ -28,10 +28,10 @@ class ActusAgent(BaseAgent):
                 api_key=os.getenv("OPENROUTER_API_KEY"),
                 base_url=os.getenv("OPENROUTER_BASE_URL"),
             )
-            model = "anthropic/claude-opus-4-6"
+            model = "anthropic/claude-opus-4-7"
         elif os.getenv("ANTHROPIC_API_KEY"):
             client = AnthropicChatClient(api_key=os.getenv("ANTHROPIC_API_KEY"))
-            model = "claude-opus-4-6"
+            model = "claude-opus-4-7"
         else:
             raise ValueError("No valid API key found for OpenRouter or Anthropic.")
 
