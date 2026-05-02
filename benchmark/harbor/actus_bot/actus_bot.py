@@ -2,8 +2,10 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from lithos.agent import ReActAgent
-from lithos.tools import FunctionTool
+from motus.agent import ReActAgent
+from motus.memory.basic_memory import BasicMemory
+from motus.tools import FunctionTool
+from motus.tools.builtins.skill import make_skill_tool
 
 from .agent_prompts import MAIN_AGENT_PROMPT, agent_prompt
 from .tools import build_harbor_tools
@@ -57,15 +59,17 @@ class ActusBot(ReActAgent):
         if agent_name not in agent_prompt:
             return f"Error: Unknown agent '{agent_name}'. Available agents: {list(agent_prompt.keys())}"
 
+        tools = build_harbor_tools(self.environment)
+        if agent_name == "executor":
+            skills_dir = Path(__file__).parent / "skills"
+            tools["load_skill"] = make_skill_tool(skills_dir)
+
         sub_agent = ReActAgent(
             client=self.client,
             model_name=self.model_name,
             system_prompt=agent_prompt[agent_name],
-            tools=build_harbor_tools(self.environment),
-            enable_memory=False,
-            skill_dir=str(Path(__file__).parent / "skills")
-            if agent_name == "executor"
-            else None,
+            tools=tools,
+            memory=BasicMemory(enable_memory_tools=False),
         )
 
         logger.info(

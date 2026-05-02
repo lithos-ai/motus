@@ -1,14 +1,14 @@
 """
-Tool wrappers that adapt Harbor's BaseEnvironment into lithos FunctionTools.
+Tool wrappers that adapt Harbor's BaseEnvironment into motus FunctionTools.
 """
 
 from typing import Any, Dict
 
-from lithos.tools import FunctionTool
+from motus.tools import FunctionTool
 
 
 def build_harbor_tools(environment: Any) -> Dict[str, FunctionTool]:
-    """Wrap Harbor's environment.exec() as a lithos FunctionTool."""
+    """Wrap Harbor's environment.exec() as a motus FunctionTool."""
 
     async def sandbox_sh(command: str, timeout_sec: int = 120) -> str:
         """Execute a sandbox_sh command in the task environment. Returns stdout and stderr."""

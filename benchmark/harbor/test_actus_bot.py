@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 from harbor.agents.base import AgentContext, BaseAgent, BaseEnvironment
 
-from lithos.models import AnthropicChatClient, OpenAIChatClient
+from motus.models import AnthropicChatClient, OpenAIChatClient
 
 from .actus_bot import ActusBot
 

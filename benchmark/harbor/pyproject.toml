@@ -1,0 +1,25 @@
+[project]
+name = "actus-bot"
+version = "0.1.0"
+description = "ActusBot agent for the Harbor (terminal-bench) benchmark, built on Motus."
+requires-python = ">=3.12"
+
+dependencies = [
+    "lithosai-motus",
+    "python-dotenv",
+    "pyyaml",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["actus_bot*"]
+
+[tool.setuptools.package-data]
+"actus_bot" = [
+    "skills/**/*.md",
+    "agent_prompts/**/*.diff",
+]
