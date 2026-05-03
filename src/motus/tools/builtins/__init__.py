@@ -5,13 +5,21 @@ from pathlib import Path
 from ..core import Sandbox
 from .bash import make_bash_tool
 from .file import make_file_tools
+from .plan_mode import PLAN_MODE_TOOLS, make_plan_mode_tools
 from .search import make_search_tools
 from .skill import make_skill_tool
+from .subagent import make_task_tool
 from .to_do import to_do
+from .web import make_web_fetch, make_web_search
 
 __all__ = [
     "BuiltinTools",
+    "PLAN_MODE_TOOLS",
     "builtin_tools",
+    "make_plan_mode_tools",
+    "make_task_tool",
+    "make_web_fetch",
+    "make_web_search",
 ]
 
 
