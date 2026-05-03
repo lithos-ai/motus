@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from motus.tools.builtins import web as web_mod
 from motus.tools.builtins.web import (
     _build_brave_query,
     _format_brave_results,
@@ -154,15 +155,44 @@ class TestWebSearchTool:
     @pytest.mark.asyncio
     async def test_brave_http_error_returned_as_string(self):
         async def _fake_get(self, url, params=None, headers=None, **_):
-            r = _resp(status_code=429, json_payload={}, content_type="application/json")
-            raise httpx.HTTPStatusError("rate limited", request=r.request, response=r)
+            r = _resp(
+                status_code=422,
+                json_payload={"error": {"code": "VALIDATION", "detail": "bad token"}},
+                content_type="application/json",
+            )
+            raise httpx.HTTPStatusError("bad token", request=r.request, response=r)
 
         with patch.object(httpx.AsyncClient, "get", _fake_get):
             search = make_web_search(api_key="key-abc")
             out = await search(query="q")
 
-        assert "429" in out
-        assert "Error" in out
+        assert "422" in out
+        # Response body included for diagnosability.
+        assert "VALIDATION" in out
+
+    @pytest.mark.asyncio
+    async def test_brave_base_url_env_var_is_honored(self, monkeypatch):
+        # Cloud deployments (e.g. the Motus cloud model proxy) wire
+        # BRAVE_BASE_URL to a forwarder that handles auth on behalf of
+        # the agent. The tool must hit that URL, not the hardcoded
+        # public Brave endpoint.
+        custom = "https://proxy.example.com/v1/web/search"
+        monkeypatch.setattr(web_mod, "BRAVE_SEARCH_URL", custom)
+
+        captured: dict = {}
+
+        async def _fake_get(self, url, params=None, headers=None, **_):
+            captured["url"] = url
+            return _resp(
+                json_payload={"web": {"results": []}},
+                content_type="application/json",
+            )
+
+        with patch.object(httpx.AsyncClient, "get", _fake_get):
+            search = make_web_search(api_key="key-abc")
+            await search(query="q")
+
+        assert captured["url"] == custom
 
     @pytest.mark.asyncio
     async def test_allowed_and_blocked_domains_threaded_into_query(self):

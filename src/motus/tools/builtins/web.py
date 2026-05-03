@@ -22,8 +22,12 @@ from ._helpers import truncate_output
 
 logger = logging.getLogger(__name__)
 
-# Brave Search API endpoint.
-BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+# Brave Search API endpoint. Honors ``BRAVE_BASE_URL`` so deployments
+# (e.g. the Motus cloud model proxy) can swap in their own forwarder
+# that handles authentication on behalf of the agent.
+BRAVE_SEARCH_URL = os.getenv(
+    "BRAVE_BASE_URL", "https://api.search.brave.com/res/v1/web/search"
+)
 
 # A polite default UA. Some sites block headless requests with no UA.
 DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; MotusAgent/1.0; +https://lithosai.com)"
@@ -272,7 +276,10 @@ def make_web_search(
                 )
                 resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            return f"Error from Brave Search: HTTP {e.response.status_code}"
+            body = e.response.text[:500] if e.response.text else ""
+            return f"Error from Brave Search: HTTP {e.response.status_code}" + (
+                f" — {body}" if body else ""
+            )
         except httpx.HTTPError as e:
             return f"Error contacting Brave Search: {e}"
 
