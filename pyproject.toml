@@ -40,6 +40,8 @@ dependencies = [
     "pathspec>=1.0.4",
     "pyyaml>=6.0",
     "tomli-w>=1.0.0",
+    "readability-lxml>=0.8.1",
+    "markdownify>=1.0.0",
 ]
 
 [project.urls]
