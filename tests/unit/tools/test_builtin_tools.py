@@ -302,6 +302,39 @@ class TestGlobSearchTool(unittest.IsolatedAsyncioTestCase):
         result = await ft(f'{{"pattern": "**/*.py", "path": "{path}"}}')
         self.assertIn(".py", result)
 
+    async def test_glob_absolute_literal_path(self):
+        # Regression: an absolute pattern was being prepended with "./"
+        # and searched relative to cwd, so absolute file paths never
+        # matched. Should now find the file directly.
+        bt = _bt()
+        ft = FunctionTool(bt.glob_search)
+        with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as f:
+            f.write(b"print('hi')")
+            absolute_path = f.name
+        try:
+            result = await ft(f'{{"pattern": "{absolute_path}"}}')
+            self.assertIn(absolute_path, result)
+        finally:
+            os.unlink(absolute_path)
+
+    async def test_glob_absolute_pattern_with_glob(self):
+        # Absolute pattern containing a glob char — should walk the
+        # static prefix (the parent dir) and match within it.
+        bt = _bt()
+        ft = FunctionTool(bt.glob_search)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "hello.py")
+            with open(target, "w") as f:
+                f.write("print('hi')")
+            result = await ft(f'{{"pattern": "{tmp}/*.py"}}')
+            self.assertIn("hello.py", result)
+
+    async def test_glob_absolute_path_missing_returns_empty(self):
+        bt = _bt()
+        ft = FunctionTool(bt.glob_search)
+        result = await ft('{"pattern": "/var/__nonexistent_motus_test_path__.xyz"}')
+        self.assertNotIn("nonexistent", result)
+
 
 class TestGrepSearchTool(unittest.IsolatedAsyncioTestCase):
     """Tests for the grep_search tool improvements."""
