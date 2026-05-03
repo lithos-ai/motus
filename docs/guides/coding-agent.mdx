@@ -1,0 +1,226 @@
+---
+title: "Coding Agent"
+description: "A pre-configured Motus agent for software-engineering tasks. Multi-provider, sandboxed, and customizable."
+---
+
+`CodingAgent` is a `ReActAgent` subclass preconfigured for software-engineering tasks. It bundles a curated tool set, system prompt, and harness behavior — file I/O, search, shell, web, todos, plan mode, and subagent dispatch — so you can spin up a working coding assistant in a few lines.
+
+```python
+from motus.agent import CodingAgent
+from motus.models import AnthropicChatClient
+
+agent = CodingAgent(
+    client=AnthropicChatClient(),
+    model_name="claude-sonnet-4-6",
+)
+
+result = await agent("Find the bug in src/parser.py and fix it.")
+```
+
+The agent runs against your local shell by default. Pass an explicit `sandbox=` (e.g. a `DockerSandbox`) to run in isolation.
+
+<Tip>
+  The same template works with any chat client Motus supports — `AnthropicChatClient`, `OpenAIChatClient`, `OpenRouterChatClient`, `GeminiChatClient`. Swap the client; the agent code stays the same.
+</Tip>
+
+## What's included
+
+When you construct `CodingAgent` with no special flags, the agent gets the following tools:
+
+| Tool | Purpose |
+|---|---|
+| `bash` | Run shell commands (with timeout + output truncation). |
+| `read_file` | Read a file with line numbers. |
+| `write_file` | Create or overwrite a file. |
+| `edit_file` | Exact-string replacement in an existing file. |
+| `glob_search` | Find files by glob pattern. |
+| `grep_search` | Search file contents with ripgrep-style options. |
+| `to_do` | Track a structured task list. |
+| `web_fetch` | Fetch a URL and extract relevant content via a small LLM. |
+| `web_search` | Search the web with Brave (requires `BRAVE_API_KEY`). |
+| `task` | Dispatch self-contained work to a specialized subagent (`general-purpose`, `Explore`, `Plan`). |
+| `enter_plan_mode` / `exit_plan_mode` | Switch to a read-only investigation phase before making changes. |
+
+The system prompt encodes a clear working philosophy: prefer dedicated tools over `bash`, parallel tool calls when independent, file references as `path:line`, anti-overengineering, careful handling of destructive actions, and so on.
+
+## Customizing the system prompt
+
+There are five ways to customize the prompt, ordered from least to most invasive. **The first is the recommended default for project-scoped instructions.**
+
+### 1. `AGENTS.md` (recommended)
+
+Drop a markdown file at the project root and `CodingAgent` picks it up automatically, wrapping it in a `<system-reminder>` block at the end of the system prompt. Use this for **project-specific rules that should travel with the codebase**.
+
+```markdown
+# AGENTS.md
+
+- This codebase uses pytest, not unittest. Run tests with `pytest -x`.
+- All public APIs must have type hints.
+- Don't import from `internal/` outside its own module.
+- We use Polars, not Pandas, in new code.
+```
+
+`CodingAgent` walks the file at `project_root/AGENTS.md` (defaults to current working directory) plus a fallback `CLAUDE.md`. Both are included if both exist; `AGENTS.md` is rendered first.
+
+```python
+agent = CodingAgent(
+    client=client,
+    model_name="...",
+    project_root="/path/to/repo",   # optional; defaults to cwd
+)
+```
+
+The convention matches the [`AGENTS.md` standard](https://agents.md/), so the same file is portable across any agent that follows it.
+
+<Tip>
+  Prefer `AGENTS.md` over inline customization whenever the rules are about the project rather than your personal preferences. The file lives in `git`, so the rules apply to teammates and CI agents automatically.
+</Tip>
+
+### 2. `system_prompt_extra` — append your own block
+
+For per-agent rules that don't belong in `AGENTS.md` (personal preferences, agent-specific roles), append text to the end of the default prompt:
+
+```python
+agent = CodingAgent(
+    client=client,
+    model_name="...",
+    system_prompt_extra="""
+## Extra rules
+- Always run `make lint` before reporting work as complete.
+- When you finish a task, paste a one-line summary in the format "DONE: <thing>".
+""",
+)
+```
+
+The extra block lands after the default prompt and after any `AGENTS.md` injection.
+
+### 3. Render then patch
+
+When you want to keep most of the default but rewrite a specific section, render the prompt explicitly and edit the string before passing it back:
+
+```python
+from motus.agent.templates import build_system_prompt
+
+default = build_system_prompt(model_name="claude-sonnet-4-6")
+patched = default.replace(
+    "## Tone and style",
+    "## Tone and style\n- Always answer in formal British English.\n",
+)
+
+agent = CodingAgent(
+    client=client,
+    model_name="claude-sonnet-4-6",
+    system_prompt=patched,
+)
+```
+
+### 4. `system_prompt` — full replacement
+
+Pass any string to replace the default entirely. Use when you want a completely different agent personality but still want the `CodingAgent` tool wiring. **Note**: `AGENTS.md` injection is skipped when `system_prompt` is passed explicitly — you'd need to call `build_system_prompt()` and incorporate the project context yourself if you want both.
+
+```python
+agent = CodingAgent(
+    client=client,
+    model_name="...",
+    system_prompt="You are a security-focused code reviewer. Read carefully. Flag issues; don't fix.",
+)
+```
+
+### 5. Subclass `CodingAgent`
+
+For fundamental shape changes — different file conventions, additional auto-injected sections, custom prompt-build pipeline — subclass and override. Reach for this only when the four above don't fit.
+
+<Tip>
+  **Rule of thumb**: project rules → `AGENTS.md`. Personal/agent-specific rules → `system_prompt_extra`. Section rewrites → render+patch. Full personality change → `system_prompt`. Structural change → subclass.
+</Tip>
+
+## Toggling features
+
+All capability sets are keyword flags. Pass `False` to remove a tool group.
+
+| Flag | Default | What it adds |
+|---|---|---|
+| `enable_web` | `True` | `web_fetch` + `web_search`. `web_search` no-ops with a friendly error if `BRAVE_API_KEY` isn't set. |
+| `enable_subagents` | `True` | `task` tool with `general-purpose` / `Explore` / `Plan` types. |
+| `enable_plan_mode` | `True` | `enter_plan_mode` / `exit_plan_mode` and the read-only tool subset toggle. |
+
+```python
+# Minimal: just bash + file + search + todo, no web / subagents / plan mode
+agent = CodingAgent(
+    client=client,
+    model_name="...",
+    enable_web=False,
+    enable_subagents=False,
+    enable_plan_mode=False,
+)
+```
+
+## Adding extra tools
+
+Pass `extra_tools=[...]` to add tools alongside the builtins:
+
+```python
+from motus.tools import tool, InputSchema
+from pydantic import Field
+
+class DeployInput(InputSchema):
+    target: str = Field(description="The deployment target.")
+
+@tool(schema=DeployInput)
+async def deploy(target: str) -> str:
+    """Deploy the project to a target environment."""
+    ...
+
+agent = CodingAgent(
+    client=client,
+    model_name="...",
+    extra_tools=[deploy],
+)
+```
+
+To **replace** the default tools entirely, pass `tools=[...]` instead. (`extra_tools`, `enable_web`, `enable_subagents`, etc. are ignored when `tools=` is set.)
+
+## Sandboxing
+
+By default `CodingAgent` uses a `LocalShell` sandbox — actions affect your real filesystem. For isolated runs:
+
+```python
+from motus.tools import get_sandbox
+
+sandbox = get_sandbox("docker", image="python:3.12")
+
+agent = CodingAgent(
+    client=client,
+    model_name="...",
+    sandbox=sandbox,
+)
+```
+
+The same agent code works against `LocalShell`, `DockerSandbox`, or `CloudSandbox` — only the sandbox arg changes.
+
+## Constructor reference
+
+All keyword arguments after `model_name`:
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `sandbox` | `Sandbox \| None` | `LocalShell()` | Sandbox the builtin tools execute in. |
+| `project_root` | `str \| Path \| None` | cwd | Directory whose `AGENTS.md` / `CLAUDE.md` to inject. |
+| `skills_dir` | `str \| Path \| None` | `None` | If set, adds a `load_skill` tool over this directory. |
+| `enable_web` | `bool` | `True` | Adds `web_fetch` + `web_search`. |
+| `web_search_api_key` | `str \| None` | `BRAVE_API_KEY` env | Brave key for `web_search`. |
+| `web_fetch_extraction_model` | `str \| None` | parent's `model_name` | Model used for `web_fetch` extraction. Use a small fast model (e.g. `claude-haiku-4-5`) to keep costs low. |
+| `enable_subagents` | `bool` | `True` | Adds the `task` tool. |
+| `subagent_specs` | `dict[str, SubAgentSpec] \| None` | `DEFAULT_SUBAGENTS` | Override or extend available subagent types. |
+| `enable_plan_mode` | `bool` | `True` | Adds `enter_plan_mode` / `exit_plan_mode`. |
+| `plan_mode_allowed_tools` | `frozenset[str] \| None` | `PLAN_MODE_TOOLS` | Tool name allowlist active during plan mode. |
+| `extra_tools` | `list \| None` | `None` | Tools added alongside the builtins. |
+| `system_prompt_extra` | `str \| None` | `None` | Text appended to the default system prompt. |
+| `system_prompt` | `str \| None` | rendered default | Replaces the default prompt entirely. |
+| `tools` | `list \| None` | rendered default | Replaces the default tool set entirely. |
+| `memory_type` | `"basic" \| "compact"` | `"compact"` | Memory implementation. Coding sessions usually benefit from compaction. |
+| `reasoning` | `ReasoningConfig` | `ReasoningConfig.auto()` | Reasoning effort. |
+| `cache_policy` | `CachePolicy` | `CachePolicy.AUTO` | Prompt caching strategy (Anthropic providers). |
+| `max_steps` | `int \| None` | `None` | Max reasoning steps. `None` means no limit. |
+
+All other `ReActAgent` keyword arguments pass through unchanged.
