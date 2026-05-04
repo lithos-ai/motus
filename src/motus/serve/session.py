@@ -158,8 +158,6 @@ class Session:
             self._task.cancel()
         self._done.set()
         self.pending_interrupts.clear()
-        # Tells SSE subscribers the session is gone and they should disconnect.
-        # No-op when there is no running loop (e.g. sync test path).
         self.publish_event_soon("closed")
 
     async def wait(self, timeout: float | None = None) -> None:
