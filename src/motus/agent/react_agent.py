@@ -4,7 +4,7 @@ ReActAgent - A simple ReAct (Reasoning + Acting) agent implementation.
 
 import logging
 import time
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from pydantic import BaseModel
 
@@ -48,6 +48,9 @@ class ReActAgent(AgentBase[str]):
         output_guardrails: Optional[list] = None,
         reasoning: ReasoningConfig = ReasoningConfig.auto(),
         cache_policy: CachePolicy | str = CachePolicy.AUTO,
+        step_callback: Optional[
+            Callable[[Optional[str], list[dict]], Awaitable[None]]
+        ] = None,
     ) -> None:
         """
         Initialize the ReactAgent.
@@ -67,7 +70,10 @@ class ReActAgent(AgentBase[str]):
                 (cache system prompt + tools), or "auto" (static + conversation
                 turn prefix). Only effective with providers that support caching
                 (e.g. Anthropic).
+            step_callback: Optional async callback(content, tool_calls) called
+                after each LLM completion for streaming intermediate state.
         """
+        self.step_callback = step_callback
         self._timeout = timeout
         self._cache_policy = CachePolicy(cache_policy)
         self._usage: dict[str, int] = {}
@@ -92,6 +98,7 @@ class ReActAgent(AgentBase[str]):
             {
                 "timeout": self._timeout,
                 "cache_policy": self._cache_policy,
+                "step_callback": self.step_callback,
             }
         )
         return kwargs
@@ -181,6 +188,15 @@ class ReActAgent(AgentBase[str]):
 
             # Check if there are tool calls to execute
             if assistant_msg.tool_calls:
+                # Notify listener of intermediate state (for streaming UIs).
+                # Only fires on intermediate steps (with tool calls), not the
+                # final response — the caller handles final output separately.
+                if self.step_callback:
+                    tool_calls = [
+                        {"name": tc.function.name, "arguments": tc.function.arguments}
+                        for tc in assistant_msg.tool_calls
+                    ]
+                    await self.step_callback(assistant_msg.content, tool_calls)
                 logger.info(
                     f"Executing {len(assistant_msg.tool_calls)} tool call(s): "
                     f"{[tc.function.name for tc in assistant_msg.tool_calls]}"
