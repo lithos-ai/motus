@@ -73,9 +73,8 @@ class AgentTool(Tool):
         if self._max_steps_override is not None:
             agent.max_steps = self._max_steps_override
 
-        # Push the registered tool name onto the path so the child's messages
-        # are tagged with it, and signal "caller already tagged you" so the
-        # child's _execute skips its own self-push.
+        # Tag the child's messages with this tool name and tell its _execute
+        # to skip its own self-push (see motus.agent._stream_context).
         path_token = _agent_path.set((*_agent_path.get(), self.name))
         caller_token = _caller_tagged.set(True)
         try:

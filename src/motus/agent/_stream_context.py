@@ -12,11 +12,11 @@ visible on the same SSE stream, we propagate three pieces of ambient state via
   path (e.g. ``("researcher", "summarizer")``). The forwarding callback reads
   it at emit time and tags the outgoing event with the path.
 - :data:`_caller_tagged` is set ``True`` by ``AgentTool`` and by
-  ``AgentBase.run_turn`` for the duration of the next ``__call__``. The
-  immediate child's ``_execute`` reads it to know "your caller already
-  accounted for you" and skips its own self-push onto ``_agent_path``.
-  ``_execute`` resets it to ``False`` for the body of ``_run`` so descendants
-  (e.g. a free-standing agent created inside a tool body) self-tag normally.
+  ``AgentBase.run_turn`` for the duration of the next ``__call__``,
+  signalling the immediate child's ``_execute`` to skip pushing its own
+  name onto ``_agent_path``. ``_execute`` resets it to ``False`` for the
+  body of ``_run``, so descendants — e.g. a free-standing agent created
+  inside a tool body — self-tag normally.
 
 All three default to "no streaming" (``None`` / empty tuple / ``False``), so
 non-serve usage is unaffected. Contextvars copy correctly across ``await``,

@@ -71,23 +71,17 @@ class Session:
     async def publish_event(self, event_name: str, **extras) -> None:
         """Publish an SSE event with standard {session_id, status, ...} envelope.
 
-        Every SSE event carries session_id and status (auto-included via
-        to_response()) plus any state-derived fields populated for the
-        current status. Per-event extras (e.g. ``message=...``) layer on top.
+        Every event carries session_id and status (auto-included via
+        to_response()) plus state-derived fields populated for the current
+        status. Per-event extras (e.g. ``message=...``) layer on top.
 
         The special event name ``"closed"`` is an internal end-of-stream
         signal: the SSE generator detects it and disconnects subscribers
         without forwarding the frame on the wire.
 
-        A ``"message"`` event may carry an optional ``agent_path`` field, a
-        list of registered subagent (``AgentTool``) names identifying the
-        nested call chain that produced the message. The field is omitted
-        for messages from the root agent. Note that the SSE stream is a
-        **superset** of the final returned ``list[ChatMessage]``: subagent
-        messages (those with a non-empty ``agent_path``) appear on the
-        stream but are NOT included in ``done.response`` or in the history
-        returned by ``GET /sessions/{id}/messages`` — those reflect only the
-        parent's view of the conversation (tool call + tool result string).
+        A ``"message"`` event may carry an optional ``agent_path`` field —
+        the registered subagent (``AgentTool``) names along the call chain.
+        The field is omitted for messages from the root agent.
         """
         payload = {
             "event": event_name,
