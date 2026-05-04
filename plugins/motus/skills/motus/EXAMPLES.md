@@ -1,12 +1,54 @@
 # Motus End-to-End Examples
 
-Complete applications showing how multiple Motus features work together.
+Complete applications showing how multiple Motus features work together. Examples are layered:
+
+1. **`CodingAgent`** (Example 1) — the default. A complete agent harness preconfigured with the standard tool set (bash, file, search, todo, web, plan-mode, subagents) plus `AGENTS.md` auto-injection. Reach for this first.
+2. **`ReActAgent` + custom tools** (Examples 2-4) — when the default harness doesn't fit and you need a specialized tool set, memory strategy, or workflow.
+3. **Other framework wrappers** (Example 5) — when the user explicitly chose a specific SDK (Anthropic, OpenAI Agents, Google ADK).
 
 ---
 
-## Example 1: Customer Support Bot
+## Example 1: CodingAgent (default)
 
-A production-ready customer support agent with memory, guardrails, and multiple tools.
+The minimum viable agent — `CodingAgent` ships with the full standard tool set, so most applications need only a few lines.
+
+```python
+# agent.py — deploy with: motus deploy --name my-agent agent:agent
+from motus.agent import CodingAgent
+from motus.models import AnthropicChatClient
+from motus.tools import get_sandbox
+
+agent = CodingAgent(
+    client=AnthropicChatClient(),  # Cloud proxy auto-provides API keys
+    model_name="claude-sonnet-4-6",
+    sandbox=get_sandbox(image="python:3.12"),  # Docker locally; cloud-managed on deploy
+)
+# Deploy target: agent:agent — run_turn is inherited from AgentBase
+```
+
+Drop an `AGENTS.md` next to `agent.py` to give the agent project-specific rules (it auto-injects into the system prompt):
+
+```markdown
+# AGENTS.md
+
+- This codebase uses pytest, not unittest. Run tests with `pytest -x`.
+- All public APIs must have type hints.
+- We use Polars, not Pandas, in new code.
+```
+
+Run it:
+```bash
+# Local: motus serve start agent:agent --port 8000 && motus serve chat http://localhost:8000
+# Cloud: motus deploy --name my-agent agent:agent
+```
+
+To extend, pass `extra_tools=[...]` (additive) or `tools=[...]` (full replacement). To toggle off pieces of the harness, use `enable_web=False`, `enable_subagents=False`, or `enable_plan_mode=False`. See the [coding-agent guide](https://motus.lithosai.com/guides/coding-agent) for full reference.
+
+---
+
+## Example 2: Customer Support Bot
+
+A specialized `ReActAgent` for customer support — different domain (no shell, no file ops), with memory, guardrails, and custom tools.
 
 ```python
 import asyncio
@@ -88,9 +130,9 @@ asyncio.run(main())
 
 ---
 
-## Example 2: Research Pipeline (Task Graph + ReAct)
+## Example 3: Research Pipeline (Task Graph + ReAct)
 
-A workflow that researches multiple topics in parallel, then synthesizes a report.
+A specialized `ReActAgent` workflow that researches multiple topics in parallel, then synthesizes a report.
 
 ```python
 import asyncio
@@ -145,54 +187,9 @@ asyncio.run(main())
 
 ---
 
-## Example 3: Code Assistant with Sandbox
-
-An agent that writes and executes Python code in a sandbox. Same code runs locally (Docker) and in cloud deploy (platform-managed).
-
-```python
-import asyncio
-from motus.agent import ReActAgent
-from motus.models import OpenAIChatClient
-from motus.tools import get_sandbox, FunctionTool, tool
-
-async def main():
-    client = OpenAIChatClient()
-
-    with get_sandbox(image="python:3.12") as sb:
-
-        @tool
-        async def install_package(package: str) -> str:
-            """Install a Python package in the sandbox."""
-            return await sb.exec("pip", "install", package)
-
-        agent = ReActAgent(
-            client=client,
-            model_name="gpt-4o",
-            system_prompt="""You are a Python coding assistant with access to a sandbox.
-Write code, execute it, and iterate until you get the correct result.
-Always test your code before giving the final answer.""",
-            tools={
-                "run_python": FunctionTool(sb.python),
-                "run_shell": FunctionTool(sb.sh),
-                "install": install_package,
-            },
-            max_steps=15,
-        )
-
-        result = await agent(
-            "Create a matplotlib chart showing the Fibonacci sequence up to F(20). "
-            "Save it as /tmp/fib.png and tell me the values."
-        )
-        print(result)
-
-asyncio.run(main())
-```
-
----
-
 ## Example 4: Multi-Agent System with Delegation
 
-An orchestrator that delegates to specialized sub-agents.
+A specialized `ReActAgent` orchestrator that delegates to specialized sub-agents.
 
 ```python
 import asyncio
@@ -246,47 +243,14 @@ asyncio.run(main())
 
 ---
 
-## Example 5: Deploy to Cloud (Framework Support)
+## Example 5: Other framework wrappers
 
-All Motus framework agents can be deployed directly — no wrapper function needed. The serve runtime detects `ServableAgent` instances (objects with `run_turn`) and OpenAI Agent instances automatically.
-
-```python
-# agent.py — deploy with: motus deploy --name my-support-bot agent:support_agent
-from motus.agent import ReActAgent
-from motus.models import OpenAIChatClient
-from motus.tools import tool
-
-@tool
-async def lookup(query: str) -> str:
-    """Search knowledge base."""
-    return f"Answer for: {query}"
-
-client = OpenAIChatClient()  # Cloud proxy auto-provides API keys
-
-support_agent = ReActAgent(
-    client=client,
-    model_name="gpt-4o",
-    system_prompt="You are a support agent. Be helpful and concise.",
-    tools=[lookup],
-    max_steps=5,
-)
-# Deploy target: agent:support_agent — run_turn is inherited from AgentBase
-```
+When the user explicitly chose a specific SDK, use that SDK's Motus wrapper instead of `CodingAgent` / `ReActAgent`. All wrappers deploy directly — no wrapper function needed; the serve runtime detects `ServableAgent` instances (objects with `run_turn`) and OpenAI Agent instances automatically.
 
 ```bash
-# Local test
-motus serve start agent:support_agent --port 8000
-motus serve chat http://localhost:8000 "What is your return policy?"
-
-# Cloud deploy (first time — creates project, saves to motus.toml)
-motus login        # provision credentials (once)
-motus deploy --name my-support-bot agent:support_agent
-
-# Cloud redeploy (subsequent — reads from motus.toml)
-motus deploy
+# Deploy any of the agents below the same way:
+motus deploy --name my-bot agent:agent
 ```
-
-### Same pattern with other frameworks
 
 ```python
 # Anthropic ToolRunner — deploy with: motus deploy --name my-bot agent:my_runner
