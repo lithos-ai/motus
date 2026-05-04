@@ -341,7 +341,7 @@ class AgentServer:
 
         # Catch-up replay: yield any events already in the log
         for event in list(session._event_log):
-            if event is None:
+            if event["event"] == "closed":
                 return
             yield f"event: {event['event']}\ndata: {json.dumps(event)}\n\n"
             index += 1
@@ -381,7 +381,7 @@ class AgentServer:
             while index < len(session._event_log):
                 event = session._event_log[index]
                 index += 1
-                if event is None:
+                if event["event"] == "closed":
                     return
                 yield f"event: {event['event']}\ndata: {json.dumps(event)}\n\n"
 
@@ -404,13 +404,13 @@ class AgentServer:
 
         def on_interrupt(msg) -> None:
             session.interrupt_turn(msg)
-            asyncio.ensure_future(session.publish_event("interrupted"))
+            session.publish_event_soon("interrupted")
 
         def on_message(msg: ChatMessage, agent_path: tuple[str, ...]) -> None:
             extras: dict = {"message": msg.model_dump(exclude_none=True)}
             if agent_path:
                 extras["agent_path"] = list(agent_path)
-            asyncio.ensure_future(session.publish_event("message", **extras))
+            session.publish_event_soon("message", **extras)
 
         def on_worker_done() -> None:
             session._resume_queue = None

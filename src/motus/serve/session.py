@@ -41,6 +41,7 @@ class Session:
     _event_condition: asyncio.Condition = field(
         default_factory=asyncio.Condition, repr=False
     )
+    _pending_publishes: set = field(default_factory=set, repr=False)
 
     def to_response(self) -> SessionResponse:
         """Snapshot the current session as a SessionResponse.
@@ -67,18 +68,16 @@ class Session:
             interrupts=interrupts,
         )
 
-    async def publish(self, event: dict | None) -> None:
-        """Append an event to the log and notify SSE subscribers."""
-        async with self._event_condition:
-            self._event_log.append(event)
-            self._event_condition.notify_all()
-
     async def publish_event(self, event_name: str, **extras) -> None:
         """Publish an SSE event with standard {session_id, status, ...} envelope.
 
         Every SSE event carries session_id and status (auto-included via
         to_response()) plus any state-derived fields populated for the
         current status. Per-event extras (e.g. ``message=...``) layer on top.
+
+        The special event name ``"closed"`` is an internal end-of-stream
+        signal: the SSE generator detects it and disconnects subscribers
+        without forwarding the frame on the wire.
 
         A ``"message"`` event may carry an optional ``agent_path`` field, a
         list of registered subagent (``AgentTool``) names identifying the
@@ -95,7 +94,26 @@ class Session:
             **self.to_response().model_dump(exclude_none=True),
         }
         payload.update({k: v for k, v in extras.items() if v is not None})
-        await self.publish(payload)
+        async with self._event_condition:
+            self._event_log.append(payload)
+            self._event_condition.notify_all()
+
+    def publish_event_soon(self, event_name: str, **extras) -> None:
+        """Fire-and-forget version of :meth:`publish_event` for sync callers
+        (e.g. interrupt/message callbacks invoked via ``call_soon_threadsafe``,
+        or ``cancel()`` from a sync test path).
+
+        No-op if there is no running event loop. Otherwise schedules the
+        publish and holds a strong reference to the task until it completes
+        so it isn't GC'd mid-flight (asyncio only weakly references tasks).
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = asyncio.ensure_future(self.publish_event(event_name, **extras))
+        self._pending_publishes.add(task)
+        task.add_done_callback(self._pending_publishes.discard)
 
     def start_turn(self, task: asyncio.Task) -> None:
         """Transition to running state for a new turn."""
@@ -137,13 +155,9 @@ class Session:
             self._task.cancel()
         self._done.set()
         self.pending_interrupts.clear()
-        try:
-            asyncio.get_running_loop()
-            asyncio.ensure_future(self.publish(None))
-        except RuntimeError:
-            # No running loop (e.g. cancel() invoked from a sync test path).
-            # Nothing to publish to in that scenario.
-            pass
+        # Tells SSE subscribers the session is gone and they should disconnect.
+        # No-op when there is no running loop (e.g. sync test path).
+        self.publish_event_soon("closed")
 
     async def wait(self, timeout: float | None = None) -> None:
         """Wait for the current turn to complete."""
