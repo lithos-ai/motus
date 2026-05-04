@@ -2830,34 +2830,5 @@ class TestSSEStreaming:
             assert all(e["agent_path"] == ["internal"] for e in internal_events)
             assert done["response"]["content"] == "reply from internal"
 
-    async def test_explicit_on_message_takes_precedence_over_ambient_callback(self):
-        """An explicitly configured on_message hook wins over ambient serve
-        streaming so a message is not emitted twice."""
-        from motus.agent._stream_context import _stream_callback
-        from tests.unit.serve.mock_agent import MockChatClient, StreamingMockAgent
-
-        received: list[tuple[str, str | None]] = []
-
-        async def explicit_callback(message):
-            received.append(("explicit", message.content))
-
-        async def ambient_callback(message):
-            received.append(("ambient", message.content))
-
-        agent = StreamingMockAgent(
-            client=MockChatClient(),
-            model_name="mock",
-            name="precedence",
-            on_message=explicit_callback,
-        )
-        token = _stream_callback.set(ambient_callback)
-        try:
-            await agent.add_assistant_message("hello")
-        finally:
-            _stream_callback.reset(token)
-
-        assert received == [("explicit", "hello")]
-
-
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

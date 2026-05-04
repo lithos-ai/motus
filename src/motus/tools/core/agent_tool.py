@@ -22,9 +22,9 @@ class AgentTool(Tool):
         )
 
     When invoked under the serve harness, the child agent's intermediate
-    messages bubble up to the parent's ``on_message`` callback, tagged with
-    an ``agent_path`` of the registered tool names along the call chain
-    (e.g. ``["research"]``, or ``["research", "summarize"]`` for nested
+    messages bubble up to the ambient ``_stream_callback``, tagged with an
+    ``agent_path`` of the registered tool names along the call chain (e.g.
+    ``["research"]``, or ``["research", "summarize"]`` for nested
     subagents). See :mod:`motus.agent._stream_context`.
     """
 
@@ -62,7 +62,7 @@ class AgentTool(Tool):
 
     async def _invoke(self, **kwargs) -> str:
         """Call the wrapped agent. Invoked by Tool._execute (has @agent_task + guardrails)."""
-        from motus.agent._stream_context import _agent_path, _stream_callback
+        from motus.agent._stream_context import _agent_path, _caller_tagged
 
         request = _DefaultInput.model_validate(kwargs).request
 
@@ -73,17 +73,16 @@ class AgentTool(Tool):
         if self._max_steps_override is not None:
             agent.max_steps = self._max_steps_override
 
-        # Propagate the ambient streaming callback (if any) onto the child
-        # so its intermediate messages flow through the same pipe as the
-        # parent's. The path contextvar carries the attribution.
-        callback = _stream_callback.get()
-        if callback is not None:
-            agent.on_message = callback
-        token = _agent_path.set((*_agent_path.get(), self.name))
+        # Push the registered tool name onto the path so the child's messages
+        # are tagged with it, and signal "caller already tagged you" so the
+        # child's _execute skips its own self-push.
+        path_token = _agent_path.set((*_agent_path.get(), self.name))
+        caller_token = _caller_tagged.set(True)
         try:
             result = await agent(request)
         finally:
-            _agent_path.reset(token)
+            _caller_tagged.reset(caller_token)
+            _agent_path.reset(path_token)
 
         # Extract output if extractor provided
         if self._output_extractor is not None:

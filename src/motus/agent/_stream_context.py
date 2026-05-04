@@ -1,19 +1,25 @@
 """Context-variable plumbing for subagent message attribution.
 
 When an agent runs under the serve harness, the worker installs a forwarding
-``on_message`` callback on the root agent. To make subagent (``AgentTool``)
-activity visible on the same SSE stream, we propagate two pieces of ambient
-state via :mod:`contextvars`:
+callback in :data:`_stream_callback`. To make subagent (``AgentTool``) activity
+visible on the same SSE stream, we propagate three pieces of ambient state via
+:mod:`contextvars`:
 
-- :data:`_stream_callback` holds the single forwarding callback. ``AgentTool``
-  reads it to install on each child agent, so the same closure fires at every
-  depth in the agent tree.
+- :data:`_stream_callback` holds the single forwarding callback. Every
+  ``AgentBase.add_message`` call reads it to emit the new message, so the same
+  closure fires at every depth in the agent tree.
 - :data:`_agent_path` accumulates the registered tool names along the call
   path (e.g. ``("researcher", "summarizer")``). The forwarding callback reads
   it at emit time and tags the outgoing event with the path.
+- :data:`_caller_tagged` is set ``True`` by ``AgentTool`` and by
+  ``AgentBase.run_turn`` for the duration of the next ``__call__``. The
+  immediate child's ``_execute`` reads it to know "your caller already
+  accounted for you" and skips its own self-push onto ``_agent_path``.
+  ``_execute`` resets it to ``False`` for the body of ``_run`` so descendants
+  (e.g. a free-standing agent created inside a tool body) self-tag normally.
 
-Both default to "no streaming" (``None`` / empty tuple), so non-serve usage is
-unaffected. Contextvars copy correctly across ``await``,
+All three default to "no streaming" (``None`` / empty tuple / ``False``), so
+non-serve usage is unaffected. Contextvars copy correctly across ``await``,
 ``asyncio.create_task``, and ``asyncio.to_thread``, so parallel subagent calls
 get independent paths without bleeding into siblings.
 """
@@ -29,4 +35,8 @@ _stream_callback: ContextVar[Callable[[ChatMessage], Awaitable[None]] | None] = 
 
 _agent_path: ContextVar[tuple[str, ...]] = ContextVar(
     "motus_agent_path", default=()
+)
+
+_caller_tagged: ContextVar[bool] = ContextVar(
+    "motus_caller_tagged", default=False
 )

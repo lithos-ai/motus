@@ -230,9 +230,9 @@ class TestNormalizeToolsAgent:
 
 
 # ---------------------------------------------------------------------------
-# Streaming attribution: AgentTool propagates the on_message callback and
-# pushes the registered tool name onto the agent_path contextvar so subagent
-# messages are tagged with the call chain that produced them.
+# Streaming attribution: AgentTool pushes the registered tool name onto the
+# _agent_path contextvar so the child agent's messages are tagged with the
+# call chain that produced them.
 # ---------------------------------------------------------------------------
 
 
@@ -393,8 +393,8 @@ class TestAgentToolStreaming:
 
         inner = _StreamingAgent(client=Mock(), model_name="m", name="inner")
         tool = inner.as_tool(name="research")
-        # Should not error. The wrapped agent has on_message=None, so even
-        # though add_message fires, nothing escapes.
+        # Should not error. add_message reads _stream_callback (None here),
+        # so nothing escapes.
         result = await tool._invoke(request="hi")
         assert result == "reply from inner"
 
