@@ -1,7 +1,7 @@
 ---
 name: motus
 version: 0.4.0
-description: Build, configure, and deploy AI agents using the Motus framework. Use when user wants to create agents, define tools, set up workflows, configure memory or guardrails, or deploy agents locally or to the cloud. Triggers on mentions of motus, ReActAgent, agent_task, tool creation, MCP integration, motus deploy, motus serve.
+description: Build, configure, and deploy AI agents using the Motus framework. Use when user wants to create agents, define tools, set up workflows, configure memory or guardrails, or deploy agents locally or to the cloud. Triggers on mentions of motus, CodingAgent, ReActAgent, agent_task, tool creation, MCP integration, motus deploy, motus serve.
 argument-hint: "[deploy [--name name] [import-path]] or [deploy [--project-id id] [import-path]] or [serve [import-path]] or [description of agent to build]"
 ---
 
@@ -48,14 +48,15 @@ Infer as much as possible from what the user already said and from the project c
 **Choosing a framework** — pick based on context, don't ask:
 
 - If the user mentions a specific SDK (Anthropic, OpenAI Agents, Google ADK), use that SDK's wrapper.
-- Otherwise, default to `motus.agent.ReActAgent` with `OpenAIChatClient`.
+- Otherwise, default to `motus.agent.CodingAgent` — it's a generic, complete agent harness that works for most cases. Only fall back to bare `motus.agent.ReActAgent` when the user wants a specialized harness (different tool set, custom workflow, or other deviation from the default).
 
 | User says | Framework |
 |-----------|-----------|
 | "Anthropic SDK" | `motus.anthropic.ToolRunner` |
 | "OpenAI SDK" / "OpenAI Agents" | `motus.openai_agents.Agent` |
 | "Google ADK" / "Gemini" | `motus.google_adk.agents.llm_agent.Agent` |
-| No preference / "Motus" | `motus.agent.ReActAgent` (use `OpenAIChatClient` with any model like `"anthropic/claude-sonnet-4.5"` or `"gpt-4o"`) |
+| No preference / "Motus" | `motus.agent.CodingAgent` (default) |
+| No preference / "Motus" — needs a specialized harness | `motus.agent.ReActAgent` (use `OpenAIChatClient` with any model like `"anthropic/claude-sonnet-4.5"` or `"gpt-4o"`) |
 
 **Important:** `ReActAgent` is a generic agent loop that uses model clients (`OpenAIChatClient`, etc.) as backends. It is *not* the same as using a provider's native SDK. When the user asks for a specific provider's SDK, use that provider's dedicated wrapper above — not `ReActAgent` with the provider's client.
 
@@ -90,7 +91,8 @@ See these files for detailed API reference and patterns:
 
 | Concept | What it is | Key import |
 |---------|-----------|------------|
-| `ReActAgent` | Autonomous agent with reasoning + tool-use loop (has `run_turn` for deploy) | `from motus.agent import ReActAgent` |
+| `CodingAgent` | **Default agent for most use cases.** A complete ReActAgent harness preconfigured with bash, file (read/write/edit), search (glob/grep), todo, web_fetch, web_search, plan-mode, and subagent dispatch tools. Auto-injects `AGENTS.md` / `CLAUDE.md` from the project root. | `from motus.agent import CodingAgent` |
+| `ReActAgent` | Generic autonomous agent with reasoning + tool-use loop. Use when the default `CodingAgent` harness doesn't fit and you need full control over the tool set. | `from motus.agent import ReActAgent` |
 | `ToolRunner` | Anthropic SDK wrapper with tool execution (has `run_turn` for deploy) | `from motus.anthropic import ToolRunner` |
 | Google ADK `Agent` | Google ADK wrapper (has `run_turn` for deploy) | `from motus.google_adk.agents.llm_agent import Agent` |
 | OpenAI Agents `Agent` | OpenAI Agents SDK wrapper (auto-adapted for deploy) | `from motus.openai_agents import Agent` |
@@ -168,7 +170,19 @@ For complex inputs, see [PATTERNS.md](PATTERNS.md). For external tool servers, u
 
 ### Step 2: Create the agent
 
-**Motus ReActAgent** (generic loop, any provider via OpenAI-compatible client):
+**Motus CodingAgent** (default — a complete agent harness for most cases):
+```python
+from motus.agent import CodingAgent
+from motus.models import AnthropicChatClient
+
+agent = CodingAgent(
+    client=AnthropicChatClient(),  # Cloud proxy auto-provides API keys
+    model_name="claude-sonnet-4-6",
+)
+```
+That's the whole agent — `CodingAgent` ships with bash, file (read/write/edit), search (glob/grep), todo, web_fetch, web_search, plan-mode, and `task` subagent dispatch tools, plus auto-injected `AGENTS.md` from the project root. Add an `AGENTS.md` next to `agent.py` for project-specific rules. Pass `extra_tools=[...]` to add domain tools, or see the [coding-agent guide](https://motus.lithosai.com/guides/coding-agent) for full customization options.
+
+**Motus ReActAgent** (generic loop — use when CodingAgent's harness doesn't fit and you need a specialized tool set):
 ```python
 from motus.agent import ReActAgent
 from motus.models import OpenAIChatClient
