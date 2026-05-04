@@ -2380,8 +2380,7 @@ class TestSSEStreaming:
 
         gen = server._sse_generator(session)
 
-        # Publish a done event
-        await session.publish({"event": "done", "response": {"content": "7"}})
+        await session.publish_event("done", response={"content": "7"})
 
         frame = await gen.__anext__()
         parsed = _parse_sse_frame(frame)
@@ -2422,7 +2421,7 @@ class TestSSEStreaming:
 
         async def publish_later():
             await asyncio.sleep(0.1)
-            await session.publish({"event": "done", "response": {}})
+            await session.publish_event("done")
 
         task = asyncio.create_task(publish_later())
         frame = await gen.__anext__()
@@ -2438,23 +2437,19 @@ class TestSSEStreaming:
         server = AgentServer(_add, max_workers=1)
         session = Session(session_id="test")
 
-        # Pre-populate the event log
-        await session.publish(
-            {
-                "event": "message",
-                "session_id": "test",
-                "status": "running",
-                "message": {"role": "assistant", "content": "thinking"},
-            }
+        # Pre-populate the event log. Use the live envelope: status comes
+        # from session.status, session_id from session.session_id.
+        dummy_task = asyncio.create_task(asyncio.sleep(100))
+        session.start_turn(dummy_task)
+        await session.publish_event(
+            "message",
+            message={"role": "assistant", "content": "thinking"},
         )
-        await session.publish(
-            {
-                "event": "done",
-                "session_id": "test",
-                "status": "idle",
-                "response": {"content": "11"},
-            }
+        session.complete_turn(
+            response=ChatMessage.assistant_message(content="11"),
+            new_state=[],
         )
+        await session.publish_event("done")
 
         gen = server._sse_generator(session)
 
@@ -2466,11 +2461,19 @@ class TestSSEStreaming:
         assert parsed1["data"]["status"] == "running"
         assert parsed1["data"]["message"]["content"] == "thinking"
         assert _parse_sse_frame(frame2)["event"] == "done"
+        assert _parse_sse_frame(frame2)["data"]["response"]["content"] == "11"
+
+        dummy_task.cancel()
+        try:
+            await dummy_task
+        except asyncio.CancelledError:
+            pass
 
         await gen.aclose()
 
-    async def test_generator_sentinel_closes_stream(self):
-        """A None sentinel in the log causes the generator to exit."""
+    async def test_generator_closed_event_closes_stream(self):
+        """A 'closed' event terminates the generator without forwarding it
+        on the wire — the connection close is the signal to clients."""
         from motus.serve.session import Session
 
         server = AgentServer(_add, max_workers=1)
@@ -2478,10 +2481,8 @@ class TestSSEStreaming:
 
         gen = server._sse_generator(session)
 
-        # Publish a sentinel
-        await session.publish(None)
+        await session.publish_event("closed")
 
-        # Generator should be exhausted
         frames = [frame async for frame in gen]
         assert frames == []
 
@@ -2493,7 +2494,7 @@ class TestSSEStreaming:
         session = Session(session_id="test")
 
         # Simulate a completed first turn
-        await session.publish({"event": "done", "response": {"content": "first"}})
+        await session.publish_event("done", response={"content": "first"})
 
         gen = server._sse_generator(session)
 
@@ -2506,7 +2507,7 @@ class TestSSEStreaming:
         session.start_turn(dummy_task)
 
         # Publish a new done event
-        await session.publish({"event": "done", "response": {"content": "second"}})
+        await session.publish_event("done", response={"content": "second"})
 
         frame2 = await gen.__anext__()
         assert _parse_sse_frame(frame2)["data"]["response"]["content"] == "second"
@@ -2527,7 +2528,7 @@ class TestSSEStreaming:
 
         gen = server._sse_generator(session)
 
-        await session.publish({"event": "error", "error": "something broke"})
+        await session.publish_event("error", error="something broke")
 
         frame = await gen.__anext__()
         parsed = _parse_sse_frame(frame)
