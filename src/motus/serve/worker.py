@@ -218,9 +218,9 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
             except (BrokenPipeError, OSError):
                 pass
 
-        # Expose the forwarding callback to every AgentBase instance reached
-        # during this turn (root, AgentTool subagents, free-standing agents
-        # created inside function-task tools).
+        # Make the forwarding callback ambient for every AgentBase reached
+        # this turn — the served root, AgentTool subagents, and free-standing
+        # agents created inside function-task tools.
         _stream_callback.set(_send_message)
 
         if isinstance(agent_or_fn, ServableAgent):

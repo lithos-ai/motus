@@ -528,9 +528,10 @@ class AgentBase(ABC, Generic[T]):
         for msg in state:
             if msg.role != "system":
                 await self._memory.add_message(msg)
-        # Suppress root self-tag: root messages should carry no agent_path
-        # on the wire. _execute will see _caller_tagged=True and skip its
-        # self-push, then reset to False so descendants tag normally.
+        # Root messages should carry no agent_path. run_turn is the serve
+        # entry point (called on the served root by the worker), so suppress
+        # this agent's self-tag for the duration of its turn. See
+        # motus.agent._stream_context for the rule descendants follow.
         caller_token = _caller_tagged.set(True)
         try:
             response_text = await self(message.content)
