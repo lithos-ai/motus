@@ -125,6 +125,7 @@ class Session:
         self._done.clear()
         self._event_log.clear()
         self._event_epoch += 1
+        self.publish_event_soon("running")
 
     def complete_turn(
         self, response: ChatMessage, new_state: list[ChatMessage]
@@ -138,6 +139,7 @@ class Session:
         self.last_message_at = time.monotonic()
         self._done.set()
         self.pending_interrupts.clear()
+        self.publish_event_soon("done")
 
     def fail_turn(self, error: str) -> None:
         """Record a turn failure and transition to error state."""
@@ -148,6 +150,7 @@ class Session:
         self.last_message_at = time.monotonic()
         self._done.set()
         self.pending_interrupts.clear()
+        self.publish_event_soon("error")
 
     def cancel(self) -> None:
         """Cancel any running task and signal waiters."""
@@ -178,6 +181,7 @@ class Session:
         self.status = SessionStatus.interrupted
         self.pending_interrupts[msg.interrupt_id] = msg
         self._done.set()  # wake long-poll waiters
+        self.publish_event_soon("interrupted")
 
     def submit_resume(self, interrupt_id: str, value: Any) -> None:
         """Forward user's reply to the worker. Raises ValueError on bad state."""
@@ -193,6 +197,7 @@ class Session:
         if not self.pending_interrupts:
             self.status = SessionStatus.running
             self._done.clear()
+            self.publish_event_soon("running")
 
 
 class SessionStore:

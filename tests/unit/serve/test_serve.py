@@ -2644,6 +2644,8 @@ class TestSSEStreaming:
             )
             assert r.status_code == 200
             assert r.json()["status"] == "running"
+            # Let submit_resume's scheduled publish run.
+            await asyncio.sleep(0)
 
             running_events = [
                 e
@@ -2698,8 +2700,8 @@ class TestSSEStreaming:
             assert running_events == []
 
     async def test_publish_event_interrupted_shape(self):
-        """Session.publish_event('interrupted') emits the unified envelope
-        with session_id, status, and the full pending interrupts list."""
+        """interrupt_turn emits the unified envelope with session_id, status,
+        and the pending interrupts list (snapshot at the moment of the call)."""
         from motus.serve.interrupt import InterruptMessage
         from motus.serve.session import Session
 
@@ -2718,8 +2720,8 @@ class TestSSEStreaming:
             session.interrupt_turn(
                 InterruptMessage(interrupt_id="i2", payload={"type": "user_input"})
             )
-
-            await session.publish_event("interrupted")
+            # Let the scheduled publish tasks run.
+            await asyncio.sleep(0)
         finally:
             dummy_task.cancel()
             try:
@@ -2727,10 +2729,13 @@ class TestSSEStreaming:
             except asyncio.CancelledError:
                 pass
 
-        events = [e for e in session._event_log if e is not None]
-        assert len(events) == 1
-        evt = events[0]
-        assert evt["event"] == "interrupted"
+        # State transitions emit: running, interrupted (i1), interrupted (i1+i2).
+        # Verify the latest interrupted frame carries both pending interrupts.
+        interrupted_events = [
+            e for e in session._event_log if e["event"] == "interrupted"
+        ]
+        assert len(interrupted_events) == 2
+        evt = interrupted_events[-1]
         assert evt["session_id"] == "sid-123"
         assert evt["status"] == "interrupted"
         interrupts_by_id = {i["interrupt_id"]: i for i in evt["interrupts"]}

@@ -280,7 +280,6 @@ class AgentServer:
             session.start_turn(task)
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
-            await session.publish_event("running")
 
             response.headers["Location"] = f"/sessions/{session_id}"
             return MessageResponse(
@@ -303,8 +302,6 @@ class AgentServer:
                 session.submit_resume(body.interrupt_id, body.value)
             except ValueError as e:
                 raise HTTPException(status_code=404, detail=str(e))
-            if session.status == SessionStatus.running:
-                await session.publish_event("running")
             return {"session_id": session_id, "status": session.status.value}
 
         @app.post("/eval/judge", response_model=JudgeResponse)
@@ -404,7 +401,6 @@ class AgentServer:
 
         def on_interrupt(msg) -> None:
             session.interrupt_turn(msg)
-            session.publish_event_soon("interrupted")
 
         def on_message(msg: ChatMessage, agent_path: tuple[str, ...]) -> None:
             extras: dict = {"message": msg.model_dump(exclude_none=True)}
@@ -436,11 +432,9 @@ class AgentServer:
             if result.success:
                 response, new_state = result.value
                 session.complete_turn(response, new_state)
-                await session.publish_event("done")
                 logger.info(f"Turn completed: session={session_id}")
             else:
                 session.fail_turn(result.error or "Unknown error")
-                await session.publish_event("error")
                 logger.error(f"Turn failed: session={session_id}\n{result.error}")
 
         except asyncio.CancelledError:
