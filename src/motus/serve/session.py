@@ -92,8 +92,8 @@ class Session:
         payload = {
             "event": event_name,
             **self.to_response().model_dump(exclude_none=True),
+            **{k: v for k, v in extras.items() if v is not None},
         }
-        payload.update({k: v for k, v in extras.items() if v is not None})
         async with self._event_condition:
             self._event_log.append(payload)
             self._event_condition.notify_all()
