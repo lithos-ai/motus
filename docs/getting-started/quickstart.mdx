@@ -109,7 +109,7 @@ Drop the quoted message to enter interactive mode:
 motus serve chat http://localhost:8000
 ```
 
-This opens a REPL where you can keep chatting until you hit `Ctrl+C`. Sessions are created automatically and cleaned up on exit. Use `--keep` to preserve the session and resume it later with `--session <id>`.
+This opens a REPL where you can keep chatting until you hit `Ctrl+C`. Sessions are created automatically and the session ID is printed so you can resume later with `--session <id>` (sessions are kept on exit, so traces remain viewable).
 
 <Tip>
   The chat client handles human in the loop pauses for you. If a tool is marked `requires_approval=True`, it prompts you in the terminal before running. See [Human in the Loop](/guides/human-in-the-loop).

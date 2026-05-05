@@ -16,8 +16,10 @@ motus serve chat <url> [message] [options]
 | Flag | Default | Description |
 |---|---|---|
 | `--session` | — | Resume an existing session by ID instead of creating a new one |
-| `--keep` | `false` | Preserve the session on exit and print its ID for later `--session` use |
 | `--param` | — | `KEY=VALUE` parameter passed to the agent as `user_params` (repeatable). Numeric values are auto-coerced to `int` or `float`. |
+
+Sessions are kept on exit so traces remain viewable in the cloud console. The session
+ID is printed when a new session is created — copy it to resume later with `--session`.
 
 ## Examples
 
@@ -25,14 +27,15 @@ motus serve chat <url> [message] [options]
 
 ```bash
 motus serve chat http://localhost:8000 "What is 2+2?"
+Session: 550e8400-e29b-41d4-a716-446655440000 (use --session to resume)
+4
 ```
-
-Without `--keep`, `chat` creates a fresh session, sends the message, prints the response, and then deletes the session.
 
 ### Interactive REPL
 
 ```bash
 motus serve chat http://localhost:8000
+Session: 550e8400-e29b-41d4-a716-446655440000 (use --session to resume)
 Chat session started (Ctrl+C to quit)
 
 > hello
@@ -43,17 +46,15 @@ I'm doing well!
 Bye!
 ```
 
-### Keep and resume a session
+### Resume an existing session
 
 ```bash
-motus serve chat http://localhost:8000 --keep
-Session: 550e8400-e29b-41d4-a716-446655440000 (use --session to resume)
-> hello
-hi there
-^C
-Bye!
-
-# Resume later
 motus serve chat http://localhost:8000 --session 550e8400-e29b-41d4-a716-446655440000
 > where were we?
+```
+
+### Delete a session manually
+
+```bash
+motus serve delete http://localhost:8000 550e8400-e29b-41d4-a716-446655440000
 ```
