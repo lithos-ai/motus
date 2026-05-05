@@ -33,10 +33,6 @@ _stream_callback: ContextVar[Callable[[ChatMessage], Awaitable[None]] | None] = 
     ContextVar("motus_stream_callback", default=None)
 )
 
-_agent_path: ContextVar[tuple[str, ...]] = ContextVar(
-    "motus_agent_path", default=()
-)
+_agent_path: ContextVar[tuple[str, ...]] = ContextVar("motus_agent_path", default=())
 
-_caller_tagged: ContextVar[bool] = ContextVar(
-    "motus_caller_tagged", default=False
-)
+_caller_tagged: ContextVar[bool] = ContextVar("motus_caller_tagged", default=False)

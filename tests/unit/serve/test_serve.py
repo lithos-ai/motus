@@ -2836,5 +2836,6 @@ class TestSSEStreaming:
             assert all(e["agent_path"] == ["internal"] for e in internal_events)
             assert done["response"]["content"] == "reply from internal"
 
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

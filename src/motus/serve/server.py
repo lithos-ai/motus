@@ -17,7 +17,6 @@ from motus.models import ChatMessage
 from .schemas import (
     CreateSessionRequest,
     HealthResponse,
-    InterruptInfo,
     JudgeRequest,
     JudgeResponse,
     MessageRequest,
