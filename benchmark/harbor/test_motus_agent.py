@@ -5,7 +5,7 @@ from harbor.agents.base import AgentContext, BaseAgent, BaseEnvironment
 
 from motus.models import AnthropicChatClient, OpenAIChatClient, SelfHostedChatClient
 
-from .motus_agent import MotusAgent
+from motus_agent import MotusAgent
 
 load_dotenv()
 
