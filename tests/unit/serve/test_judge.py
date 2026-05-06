@@ -107,7 +107,7 @@ class TestJudgeLogic:
         kwargs = parse.call_args.kwargs
         assert kwargs["model"] == "claude-haiku-4-5"
         assert kwargs["response_format"] is JudgeResponse
-        assert kwargs["max_tokens"] == 512
+        assert "max_tokens" not in kwargs
         assert kwargs["messages"][0]["role"] == "system"
         assert kwargs["messages"][1]["role"] == "user"
         assert "input-text" in kwargs["messages"][1]["content"]

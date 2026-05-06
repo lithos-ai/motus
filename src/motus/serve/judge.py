@@ -72,7 +72,6 @@ async def run_llm_judge(
                 {"role": "user", "content": user_content},
             ],
             response_format=JudgeResponse,
-            max_tokens=512,
         )
         parsed = completion.choices[0].message.parsed
         if parsed is None:
