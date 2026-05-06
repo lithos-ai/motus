@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -9,13 +10,13 @@ from typing import Callable
 
 import httpx
 from fastapi import FastAPI, HTTPException, Response
+from starlette.responses import StreamingResponse
 
 from motus.models import ChatMessage
 
 from .schemas import (
     CreateSessionRequest,
     HealthResponse,
-    InterruptInfo,
     JudgeRequest,
     JudgeResponse,
     MessageRequest,
@@ -50,6 +51,10 @@ class AgentServer:
 
         python -m motus.serve start myapp:my_agent --port 8000
     """
+
+    SSE_IDLE_TIMEOUT: float = 15.0
+    """Seconds the SSE generator waits for new events before emitting a
+    keepalive comment. Tests may monkey-patch this for faster runs."""
 
     def __init__(
         self,
@@ -213,24 +218,7 @@ class AgentServer:
                 if session is None:
                     raise HTTPException(status_code=404, detail="Session deleted")
 
-            interrupts = None
-            if session.status == SessionStatus.interrupted:
-                interrupts = [
-                    InterruptInfo(
-                        interrupt_id=iid,
-                        type=msg.payload.get("type", "unknown"),
-                        payload=msg.payload,
-                    )
-                    for iid, msg in session.pending_interrupts.items()
-                ]
-
-            return SessionResponse(
-                session_id=session.session_id,
-                status=session.status,
-                response=session.response,
-                error=session.error,
-                interrupts=interrupts,
-            )
+            return session.to_response()
 
         @app.delete("/sessions/{session_id}", status_code=204)
         async def delete_session(session_id: str):
@@ -248,6 +236,17 @@ class AgentServer:
             if session is None:
                 raise HTTPException(status_code=404, detail="Session not found")
             return session.state
+
+        @app.get("/sessions/{session_id}/stream")
+        async def stream_session(session_id: str):
+            session = self._sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            return StreamingResponse(
+                self._sse_generator(session),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
 
         @app.post(
             "/sessions/{session_id}/messages",
@@ -327,6 +326,61 @@ class AgentServer:
 
         return app
 
+    async def _sse_generator(self, session: Session):
+        """Async generator that yields SSE frames from a session's event log.
+
+        All yields happen outside the condition lock to avoid holding it while
+        the generator is suspended.
+        """
+        index = 0
+        epoch = session._event_epoch
+
+        # Catch-up replay: yield any events already in the log
+        for event in list(session._event_log):
+            if event["event"] == "closed":
+                return
+            yield f"event: {event['event']}\ndata: {json.dumps(event)}\n\n"
+            index += 1
+
+        while True:
+            # Phase 1: under the lock, wait for new events or timeout
+            has_events = False
+            async with session._event_condition:
+                if epoch != session._event_epoch:
+                    index = 0
+                    epoch = session._event_epoch
+                if index < len(session._event_log):
+                    has_events = True
+                else:
+                    try:
+                        await asyncio.wait_for(
+                            session._event_condition.wait_for(
+                                lambda: epoch != session._event_epoch
+                                or index < len(session._event_log)
+                            ),
+                            timeout=self.SSE_IDLE_TIMEOUT,
+                        )
+                        has_events = True
+                    except asyncio.TimeoutError:
+                        pass
+                if has_events and epoch != session._event_epoch:
+                    index = 0
+                    epoch = session._event_epoch
+
+            # Phase 2: outside the lock, yield events or a keepalive comment.
+            # ":" prefix is the WHATWG SSE comment form — invisible to
+            # EventSource consumers, still flushes bytes through proxies.
+            if not has_events:
+                yield ": keepalive\n\n"
+                continue
+
+            while index < len(session._event_log):
+                event = session._event_log[index]
+                index += 1
+                if event["event"] == "closed":
+                    return
+                yield f"event: {event['event']}\ndata: {json.dumps(event)}\n\n"
+
     async def _run_turn(
         self,
         session_id: str,
@@ -347,6 +401,12 @@ class AgentServer:
         def on_interrupt(msg) -> None:
             session.interrupt_turn(msg)
 
+        def on_message(msg: ChatMessage, agent_path: tuple[str, ...]) -> None:
+            extras: dict = {"message": msg.model_dump(exclude_none=True)}
+            if agent_path:
+                extras["agent_path"] = list(agent_path)
+            session.publish_event_soon("message", **extras)
+
         def on_worker_done() -> None:
             session._resume_queue = None
 
@@ -359,6 +419,7 @@ class AgentServer:
                 timeout=self._timeout,
                 session_id=session_id,
                 on_interrupt=on_interrupt,
+                on_message=on_message,
                 resume_queue=resume_queue,
                 on_worker_done=on_worker_done,
             )
