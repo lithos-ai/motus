@@ -58,6 +58,7 @@
               "concepts/models",
               "concepts/memory",
               "concepts/sandbox",
+              "guides/coding-agent",
               "guides/guardrails",
               "guides/human-in-the-loop",
               "guides/multi-agent",

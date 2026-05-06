@@ -107,7 +107,30 @@ def make_search_tools(sandbox: Sandbox):
         """
         target = shlex.quote(path) if path else "."
 
-        if pattern.startswith("**/"):
+        if pattern.startswith("/"):
+            # Absolute path — search from the deepest non-glob ancestor of
+            # the pattern rather than from cwd. Without this, "/tmp/hello.py"
+            # would be searched as "./tmp/hello.py" relative to cwd and
+            # never find the actual file at /tmp/hello.py.
+            has_glob = any(c in pattern for c in "*?[")
+            if not has_glob:
+                # Literal absolute path — just check whether it exists.
+                cmd = f"find {shlex.quote(pattern)} -maxdepth 0 -type f 2>/dev/null"
+            else:
+                # Walk the path components, take everything before the first
+                # glob char as the search root. E.g. /tmp/**/*.py → /tmp.
+                static_parts: list[str] = []
+                for p in pattern.split("/"):
+                    if any(c in p for c in "*?["):
+                        break
+                    static_parts.append(p)
+                search_root = "/".join(static_parts) or "/"
+                find_pattern = pattern.replace("**", "*")
+                cmd = (
+                    f"find {shlex.quote(search_root)} "
+                    f"-path {shlex.quote(find_pattern)} -type f 2>/dev/null | sort"
+                )
+        elif pattern.startswith("**/"):
             # **/*.py -> find is already recursive, just match the name part
             name_part = pattern[3:]  # strip **/
             if "/" in name_part:

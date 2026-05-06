@@ -1,6 +1,6 @@
 [project]
 name = "lithosai-motus"
-version = "0.4.1"
+version = "0.4.2"
 description = "Motus Agent Framework"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -40,6 +40,8 @@ dependencies = [
     "pathspec>=1.0.4",
     "pyyaml>=6.0",
     "tomli-w>=1.0.0",
+    "readability-lxml>=0.8.1",
+    "markdownify>=1.0.0",
 ]
 
 [project.urls]
@@ -68,7 +70,10 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-motus = ["runtime/tracing/templates/*"]
+motus = [
+    "runtime/tracing/templates/*",
+    "agent/templates/prompts/*.md",
+]
 
 [tool.uv.sources]
 motus-deep-research = { workspace = true }
