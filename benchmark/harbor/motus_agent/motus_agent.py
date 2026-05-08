@@ -23,6 +23,7 @@ class MotusAgent(ReActAgent):
         if "system_prompt" not in kwargs:
             kwargs["system_prompt"] = MAIN_AGENT_PROMPT
 
+
         super().__init__(*args, **kwargs)
         self.environment = environment
 
@@ -70,6 +71,7 @@ class MotusAgent(ReActAgent):
             system_prompt=agent_prompt[agent_name],
             tools=tools,
             memory=BasicMemory(enable_memory_tools=False),
+            max_steps=500,
         )
 
         logger.info(
