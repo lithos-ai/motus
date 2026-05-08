@@ -175,10 +175,17 @@ class OpenAIChatClient(BaseChatClient):
                 for tc in message.tool_calls
             ]
 
+        # sglang / vLLM expose chain-of-thought as ``reasoning_content`` (a
+        # non-standard OpenAI field). The SDK keeps it in ``model_extra``;
+        # plumb it onto ChatCompletion.reasoning so reasoning models don't
+        # silently lose their thinking.
+        reasoning = getattr(message, "reasoning_content", None)
+
         return ChatCompletion(
             id=response.id,
             model=model,
             content=message.content,
+            reasoning=reasoning,
             tool_calls=tool_calls,
             finish_reason=choice.finish_reason or "stop",
             usage=self._extract_usage(response),
@@ -267,6 +274,7 @@ class OpenAIChatClient(BaseChatClient):
             id=response.id,
             model=model,
             content=message.content,
+            reasoning=getattr(message, "reasoning_content", None),
             tool_calls=tool_calls,
             finish_reason=choice.finish_reason or "stop",
             parsed=getattr(message, "parsed", None),
