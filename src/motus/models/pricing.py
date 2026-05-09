@@ -76,6 +76,19 @@ _PRICING: dict[str, dict[str, float]] = {
         "cache_write": 1.75,
         "cache_read": 0.175,
     },
+    # DeepSeek (via OpenRouter)
+    "deepseek/deepseek-v4-pro": {
+        "input": 0.435,
+        "output": 0.87,
+        "cache_write": 0.435,
+        "cache_read": 0.0435,
+    },
+    "deepseek/deepseek-v4-flash": {
+        "input": 0.14,
+        "output": 0.28,
+        "cache_write": 0.14,
+        "cache_read": 0.014,
+    },
 }
 
 

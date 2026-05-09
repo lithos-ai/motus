@@ -664,6 +664,20 @@ MINIMAX_MODELS: Dict[str, ModelLimits] = {
         max_output_tokens=128_000,
         description="GPT-5.3 Codex - strong coding model via OpenRouter",
     ),
+    "deepseek/deepseek-v4-pro": ModelLimits(
+        model_id="deepseek/deepseek-v4-pro",
+        provider=ModelProvider.OPENAI,
+        context_window=1_048_576,
+        max_output_tokens=384_000,
+        description="DeepSeek V4 Pro - reasoning model via OpenRouter",
+    ),
+    "deepseek/deepseek-v4-flash": ModelLimits(
+        model_id="deepseek/deepseek-v4-flash",
+        provider=ModelProvider.OPENAI,
+        context_window=1_048_576,
+        max_output_tokens=384_000,
+        description="DeepSeek V4 Flash - cheap fast variant via OpenRouter",
+    ),
 }
 
 
