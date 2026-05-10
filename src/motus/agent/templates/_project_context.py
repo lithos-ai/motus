@@ -14,7 +14,9 @@ import os
 import platform
 from pathlib import Path
 
-PROMPT_PATH = Path(__file__).parent / "prompts" / "coding_agent.md"
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+PROMPT_PATH = PROMPTS_DIR / "coding_agent.md"
+SECTIONS_DIR = PROMPTS_DIR / "sections"
 
 # Files we look for, in priority order. AGENTS.md is the convention Codex
 # established and Claude Code adopted; CLAUDE.md is the older Anthropic
@@ -49,10 +51,28 @@ def _read_project_context(project_root: Path) -> str:
     return "\n\n".join(blocks)
 
 
+def _build_plan_mode_section(*, enable_web: bool, enable_subagents: bool) -> str:
+    """Render the plan-mode section, dropping cross-references to
+    disabled tools so the model isn't told about tools it doesn't have.
+    """
+    template = (SECTIONS_DIR / "plan_mode.md").read_text(encoding="utf-8")
+    return template.format(
+        plan_mode_web_clause=", `web_fetch`, `web_search`" if enable_web else "",
+        plan_mode_task_clause=" and the `task` dispatcher" if enable_subagents else "",
+        plan_mode_explore_hint=(
+            " (use `Explore` subagent instead)" if enable_subagents else ""
+        ),
+    )
+
+
 def build_system_prompt(
     model_name: str,
     project_root: str | os.PathLike[str] | None = None,
     extra: str | None = None,
+    *,
+    enable_web: bool = True,
+    enable_subagents: bool = True,
+    enable_plan_mode: bool = True,
 ) -> str:
     """Build the coding-agent system prompt.
 
@@ -61,6 +81,14 @@ def build_system_prompt(
         project_root: Directory whose ``AGENTS.md`` / ``CLAUDE.md`` to
             include. Defaults to the current working directory.
         extra: Additional text appended at the very end of the prompt.
+        enable_web: Whether ``web_search`` / ``web_fetch`` are wired into
+            the agent. When ``False``, the "Web tools" section is
+            omitted and references in other sections are dropped.
+        enable_subagents: Whether the ``task`` tool is wired in. When
+            ``False``, the "Subagents" section is omitted.
+        enable_plan_mode: Whether ``enter_plan_mode`` / ``exit_plan_mode``
+            are wired in. When ``False``, the "Plan mode" section is
+            omitted.
 
     Returns:
         The fully rendered system prompt.
@@ -68,7 +96,32 @@ def build_system_prompt(
     root = Path(project_root) if project_root is not None else Path.cwd()
     template = PROMPT_PATH.read_text(encoding="utf-8")
     env = _gather_env(model_name, root)
-    prompt = template.format(**env)
+
+    plan_mode_section = (
+        _build_plan_mode_section(
+            enable_web=enable_web,
+            enable_subagents=enable_subagents,
+        )
+        if enable_plan_mode
+        else ""
+    )
+    subagents_section = (
+        (SECTIONS_DIR / "subagents.md").read_text(encoding="utf-8")
+        if enable_subagents
+        else ""
+    )
+    web_tools_section = (
+        (SECTIONS_DIR / "web_tools.md").read_text(encoding="utf-8")
+        if enable_web
+        else ""
+    )
+
+    prompt = template.format(
+        plan_mode_section=plan_mode_section,
+        subagents_section=subagents_section,
+        web_tools_section=web_tools_section,
+        **env,
+    )
 
     project_ctx = _read_project_context(root)
     if project_ctx:

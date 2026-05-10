@@ -202,10 +202,12 @@ class ReActAgent(AgentBase[str]):
                     f"{[tc.function.name for tc in assistant_msg.tool_calls]}"
                 )
 
-                # Execute all tool calls (scheduled in parallel by runtime)
+                # Execute all tool calls (scheduled in parallel by runtime).
+                # Dispatch goes through ``_dispatch_tool_call`` so subclasses
+                # can intercept (e.g. CodingAgent's plan mode returns a
+                # recovery message instead of crashing on a filtered tool).
                 tool_futures = [
-                    self.tools[call.function.name](call.function.arguments)
-                    for call in assistant_msg.tool_calls
+                    self._dispatch_tool_call(call) for call in assistant_msg.tool_calls
                 ]
 
                 # Await results and add to memory
@@ -228,6 +230,15 @@ class ReActAgent(AgentBase[str]):
         raise RuntimeError(
             f"ReactAgent reached max steps ({self._max_steps}) without completing"
         )
+
+    def _dispatch_tool_call(self, call: Any) -> Awaitable[Any]:
+        """Look up and invoke a tool by name, returning an awaitable.
+
+        Default behavior: raise ``KeyError`` if the tool is not in the
+        current set. Subclasses can override to add graceful handling
+        for cases where the model misfires (e.g. plan-mode filtering).
+        """
+        return self.tools[call.function.name](call.function.arguments)
 
     @property
     def usage(self) -> dict[str, int]:
