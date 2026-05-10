@@ -93,6 +93,66 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(model_name="m", project_root=project_dir)
         assert "Is git repo: yes" in prompt
 
+    def test_default_includes_optional_sections(self, project_dir: Path):
+        prompt = build_system_prompt(model_name="m", project_root=project_dir)
+        assert "## Plan mode" in prompt
+        assert "## Subagents" in prompt
+        assert "## Web tools" in prompt
+
+    def test_disable_web_drops_web_section_and_references(self, project_dir: Path):
+        prompt = build_system_prompt(
+            model_name="m",
+            project_root=project_dir,
+            enable_web=False,
+        )
+        assert "## Web tools" not in prompt
+        # No leftover references inside other sections.
+        assert "web_search" not in prompt
+        assert "web_fetch" not in prompt
+
+    def test_disable_subagents_drops_section_and_references(self, project_dir: Path):
+        prompt = build_system_prompt(
+            model_name="m",
+            project_root=project_dir,
+            enable_subagents=False,
+        )
+        assert "## Subagents" not in prompt
+        # The plan-mode "task dispatcher" mention is also dropped.
+        assert "task` dispatcher" not in prompt
+        # And the "use Explore subagent instead" hint.
+        assert "Explore` subagent" not in prompt
+
+    def test_disable_plan_mode_drops_section(self, project_dir: Path):
+        prompt = build_system_prompt(
+            model_name="m",
+            project_root=project_dir,
+            enable_plan_mode=False,
+        )
+        assert "## Plan mode" not in prompt
+        assert "enter_plan_mode" not in prompt
+        assert "exit_plan_mode" not in prompt
+
+    def test_all_optional_sections_disabled(self, project_dir: Path):
+        prompt = build_system_prompt(
+            model_name="m",
+            project_root=project_dir,
+            enable_web=False,
+            enable_subagents=False,
+            enable_plan_mode=False,
+        )
+        for marker in (
+            "## Plan mode",
+            "## Subagents",
+            "## Web tools",
+            "web_search",
+            "web_fetch",
+            "enter_plan_mode",
+        ):
+            assert marker not in prompt, f"unexpected reference: {marker}"
+        # Always-on sections should still be present.
+        assert "## File-edit safety" in prompt
+        assert "## Task management" in prompt
+
 
 # ---------------------------------------------------------------------------
 # CodingAgent — default tool wiring
@@ -290,6 +350,48 @@ class TestCodingAgentPlanMode:
         sub = agent._build_subagent("general-purpose", "m")
         assert "enter_plan_mode" not in sub.tools
         assert "exit_plan_mode" not in sub.tools
+
+    @pytest.mark.asyncio
+    async def test_dispatch_blocked_tool_in_plan_mode_returns_recovery_message(
+        self, fake_client, project_dir: Path
+    ):
+        """Calling a write tool in plan mode returns an error message,
+        not a KeyError, so the model can exit plan mode and recover.
+        """
+        from types import SimpleNamespace
+
+        agent = CodingAgent(
+            client=fake_client,
+            model_name="m",
+            project_root=project_dir,
+        )
+        agent._enter_plan_mode()
+        call = SimpleNamespace(
+            function=SimpleNamespace(name="bash", arguments={"command": "ls"})
+        )
+        result = await agent._dispatch_tool_call(call)
+        assert "blocked while in plan mode" in result
+        assert "exit_plan_mode" in result
+
+    def test_dispatch_unknown_tool_outside_plan_mode_still_raises(
+        self, fake_client, project_dir: Path
+    ):
+        """Outside plan mode, the dispatcher keeps raising on unknown
+        tool names — the graceful fallback is intentionally scoped to
+        plan-mode filtering only.
+        """
+        from types import SimpleNamespace
+
+        agent = CodingAgent(
+            client=fake_client,
+            model_name="m",
+            project_root=project_dir,
+        )
+        call = SimpleNamespace(
+            function=SimpleNamespace(name="nonexistent_tool", arguments={})
+        )
+        with pytest.raises(KeyError):
+            agent._dispatch_tool_call(call)
 
 
 # ---------------------------------------------------------------------------
