@@ -73,6 +73,7 @@ where = ["src"]
 motus = [
     "runtime/tracing/templates/*",
     "agent/templates/prompts/*.md",
+    "agent/templates/prompts/sections/*.md",
 ]
 
 [tool.uv.sources]
