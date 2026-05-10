@@ -157,6 +157,9 @@ class CodingAgent(ReActAgent):
                 model_name=model_name,
                 project_root=self._project_root,
                 extra=system_prompt_extra,
+                enable_web=enable_web,
+                enable_subagents=enable_subagents,
+                enable_plan_mode=enable_plan_mode,
             )
 
         if tools is None:
@@ -263,6 +266,36 @@ class CodingAgent(ReActAgent):
         self._plan_mode_active = False
         self._tools = dict(self._all_tools)
         return True
+
+    def _dispatch_tool_call(self, call: Any):
+        """Dispatch a tool call, with plan-mode-aware error recovery.
+
+        Models occasionally call a write tool (``bash``, ``write_file``,
+        ``edit_file``, ``task``) while in plan mode despite the prompt
+        telling them not to. The default dispatcher would raise
+        ``KeyError`` and abort the run; instead, return a recovery
+        message describing why the tool is unavailable so the model can
+        ``exit_plan_mode`` and try again.
+        """
+        name = call.function.name
+        if (
+            self._plan_mode_active
+            and name not in self._tools
+            and self._all_tools is not None
+            and name in self._all_tools
+        ):
+            allowed = ", ".join(sorted(self._tools))
+
+            async def _blocked() -> str:
+                return (
+                    f"Error: tool '{name}' is blocked while in plan mode. "
+                    f"Allowed tools: {allowed}. "
+                    f"Call `exit_plan_mode(plan=...)` first if you need "
+                    f"to make changes."
+                )
+
+            return _blocked()
+        return super()._dispatch_tool_call(call)
 
     def _build_subagent(
         self,
