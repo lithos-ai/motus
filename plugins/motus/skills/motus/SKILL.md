@@ -1,8 +1,9 @@
 ---
 name: motus
-version: 0.4.2
 description: Build, configure, and deploy AI agents using the Motus framework. Use when user wants to create agents, define tools, set up workflows, configure memory or guardrails, or deploy agents locally or to the cloud. Triggers on mentions of motus, CodingAgent, ReActAgent, agent_task, tool creation, MCP integration, motus deploy, motus serve.
 argument-hint: "[deploy [--name name] [import-path]] or [deploy [--project-id id] [import-path]] or [serve [import-path]] or [description of agent to build]"
+metadata:
+  version: "0.4.3"
 ---
 
 # Motus
@@ -697,7 +698,7 @@ Do not bother the user to file it themselves. Write the issue, show them the dra
 
 ## Skill update
 
-Before starting work, check whether this skill is up to date. This skill's version is in the `version` field of the YAML frontmatter above. Compare it against the latest GitHub release:
+Before starting work, check whether this skill is up to date. This skill's version is in the `metadata.version` field of the YAML frontmatter above. Compare it against the latest GitHub release:
 
 ```bash
 curl -s https://api.github.com/repos/lithos-ai/motus/releases/latest | grep '"tag_name"'
