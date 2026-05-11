@@ -6,7 +6,6 @@ import sys
 from motus.auth.credentials import (
     clear_credentials,
     ensure_authenticated,
-    get_api_url,
     load_credentials,
 )
 
@@ -30,11 +29,6 @@ def _revoke_existing_key():
 
 def _login_handler(args):
     logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
-
-    api_url = args.api_url
-    if not api_url:
-        logging.error("No API URL provided. Pass --api-url <URL>")
-        sys.exit(1)
 
     # Explicit login always revokes + re-authenticates
     _revoke_existing_key()
@@ -62,7 +56,7 @@ def _whoami_handler(args):
 
     creds = load_credentials()
     if not creds:
-        print("Not logged in. Run: motus login --api-url <URL>")
+        print("Not logged in. Run: motus login")
         sys.exit(1)
 
     prefix = creds.api_key[:12]
@@ -73,12 +67,6 @@ def _whoami_handler(args):
 def register_cli(subparsers):
     """Register login, logout, whoami commands."""
     login_parser = subparsers.add_parser("login", help="log in to Motus cloud")
-    login_parser.add_argument(
-        "--api-url",
-        default=get_api_url(),
-        metavar="URL",
-        help="Motus API URL",
-    )
     login_parser.set_defaults(func=_login_handler)
 
     logout_parser = subparsers.add_parser("logout", help="log out and revoke API key")
