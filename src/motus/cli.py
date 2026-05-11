@@ -40,6 +40,7 @@ def _check_for_update() -> None:
     """
     try:
         from importlib.metadata import version
+        from packaging.version import Version
 
         current = version(_PACKAGE)
 
@@ -52,7 +53,7 @@ def _check_for_update() -> None:
 
         if now - cache.get("last_check", 0) < _CHECK_INTERVAL:
             latest = cache.get("latest")
-            if latest and latest != current:
+            if latest and Version(latest) > Version(current):
                 _print_update_message(current, latest)
             return
 
@@ -71,7 +72,7 @@ def _check_for_update() -> None:
         except Exception:
             pass
 
-        if latest != current:
+        if Version(latest) > Version(current):
             _print_update_message(current, latest)
     except Exception:
         pass
