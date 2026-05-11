@@ -50,6 +50,8 @@ Repository = "https://github.com/lithos-ai/motus.git"
 
 [project.scripts]
 motus = "motus.cli:main"
+motus-mars-replay = "motus.mars.cli:main"
+motus-mars-record-coding-agent = "motus.mars.coding_agent_harness:main"
 
 [project.optional-dependencies]
 openai-agents = [
