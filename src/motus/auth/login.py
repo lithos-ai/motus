@@ -55,7 +55,7 @@ def login(api_url: str) -> dict:
     print(f"  {verification_url}")
     print()
     webbrowser.open(verification_url)
-    print("Waiting for browser login...")
+    print("Waiting for browser login...", flush=True)
 
     # Poll for token
     deadline = time.monotonic() + _LOGIN_TIMEOUT_SECONDS
