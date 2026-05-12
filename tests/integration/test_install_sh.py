@@ -43,9 +43,12 @@ def _docker_tests_enabled() -> bool:
     if shutil.which("docker") is None:
         return False
     try:
-        return subprocess.run(
-            ["docker", "info"], capture_output=True, timeout=5
-        ).returncode == 0
+        return (
+            subprocess.run(
+                ["docker", "info"], capture_output=True, timeout=5
+            ).returncode
+            == 0
+        )
     except (subprocess.TimeoutExpired, OSError):
         return False
 
@@ -106,7 +109,9 @@ def test_image() -> str:
     subprocess.run(
         ["docker", "build", "-t", image, "-"],
         input=DOCKERFILE,
-        text=True, check=True, capture_output=True,
+        text=True,
+        check=True,
+        capture_output=True,
     )
     return image
 
@@ -125,7 +130,9 @@ FAKE_UV = dedent("""\
 """)
 
 
-def _run(image: str, home: Path, *, setup: str = "", env: str = "") -> subprocess.CompletedProcess:
+def _run(
+    image: str, home: Path, *, setup: str = "", env: str = ""
+) -> subprocess.CompletedProcess:
     """Run install.sh inside `image` with `home` bind-mounted as HOME."""
     script = dedent(f"""\
         set -eu
@@ -137,26 +144,40 @@ def _run(image: str, home: Path, *, setup: str = "", env: str = "") -> subproces
     """)
     return subprocess.run(
         [
-            "docker", "run", "--rm",
-            "-v", f"{REPO_ROOT}:/repo:ro",
-            "-v", f"{home}:/tmp/h",
-            image, "bash", "-c", script,
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{REPO_ROOT}:/repo:ro",
+            "-v",
+            f"{home}:/tmp/h",
+            image,
+            "bash",
+            "-c",
+            script,
         ],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
 
 
 def _assert_motus_plugin_installed(home: Path) -> None:
     """Verify real claude cloned the marketplace and registered the plugin."""
-    installed = json.loads((home / ".claude/plugins/installed_plugins.json").read_text())
+    installed = json.loads(
+        (home / ".claude/plugins/installed_plugins.json").read_text()
+    )
     assert "motus@LithosAI" in installed["plugins"], installed
     marketplace = home / ".claude/plugins/marketplaces/LithosAI"
-    assert (marketplace / "plugins" / "motus" / ".claude-plugin" / "plugin.json").exists()
+    assert (
+        marketplace / "plugins" / "motus" / ".claude-plugin" / "plugin.json"
+    ).exists()
 
 
 def test_no_agents_skipped(test_image, tmp_path):
     """No agent dirs + no `claude` on PATH → all skipped, motus install attempted."""
-    home = tmp_path / "h"; home.mkdir()
+    home = tmp_path / "h"
+    home.mkdir()
     r = _run(test_image, home, setup="rm /usr/local/bin/claude")
     assert r.returncode == 0, r.stderr
     assert "Skipped (not detected): Claude Code, Codex, Cursor, Gemini" in r.stdout
@@ -165,9 +186,14 @@ def test_no_agents_skipped(test_image, tmp_path):
 
 def test_uv_upgrade_branch(test_image, tmp_path):
     """uv reports lithosai-motus installed → upgrade, not install."""
-    home = tmp_path / "h"; home.mkdir()
-    r = _run(test_image, home, setup="rm /usr/local/bin/claude",
-             env="UV_TOOL_LIST_OUTPUT=lithosai-motus")
+    home = tmp_path / "h"
+    home.mkdir()
+    r = _run(
+        test_image,
+        home,
+        setup="rm /usr/local/bin/claude",
+        env="UV_TOOL_LIST_OUTPUT=lithosai-motus",
+    )
     assert r.returncode == 0, r.stderr
     uv_log = (home / "uv.log").read_text()
     assert "tool upgrade lithosai-motus" in uv_log
@@ -176,7 +202,8 @@ def test_uv_upgrade_branch(test_image, tmp_path):
 
 def test_claude_code_via_path(test_image, tmp_path):
     """`~/.claude` exists + claude on PATH → marketplace cloned + plugin installed."""
-    home = tmp_path / "h"; home.mkdir()
+    home = tmp_path / "h"
+    home.mkdir()
     r = _run(test_image, home, setup="mkdir -p $HOME/.claude")
     assert r.returncode == 0, r.stderr
     assert "Installed motus skill for: Claude Code" in r.stdout
@@ -186,19 +213,28 @@ def test_claude_code_via_path(test_image, tmp_path):
 def test_claude_code_via_bundled_vscode(test_image, tmp_path):
     """Real VS Code + Claude Code extension installed → script uses the
     bundled binary from `~/.vscode/extensions/anthropic.claude-code-*`."""
-    home = tmp_path / "h"; home.mkdir()
-    r = _run(test_image, home, setup=dedent("""\
+    home = tmp_path / "h"
+    home.mkdir()
+    r = _run(
+        test_image,
+        home,
+        setup=dedent("""\
         mkdir -p $HOME/.claude
         # Real VS Code refuses to run as root without these flags;
         # `--install-extension` itself is headless.
         code --no-sandbox --user-data-dir=$HOME/.code-data \\
              --install-extension anthropic.claude-code 2>&1 | tail -1
         rm /usr/local/bin/claude
-    """))
+    """),
+    )
     assert r.returncode == 0, r.stderr
     _assert_motus_plugin_installed(home)
     # Verify the extension landed where install.sh's glob expects.
-    assert list(home.glob(".vscode/extensions/anthropic.claude-code-*/resources/native-binary/claude"))
+    assert list(
+        home.glob(
+            ".vscode/extensions/anthropic.claude-code-*/resources/native-binary/claude"
+        )
+    )
 
 
 def test_claude_code_via_bundled_cursor(test_image, tmp_path):
@@ -206,29 +242,39 @@ def test_claude_code_via_bundled_cursor(test_image, tmp_path):
     bundled binary from `~/.cursor/extensions/anthropic.claude-code-*`.
     Also exercises the for-loop's existence-gating since the `vscode`
     and `vscode-insiders` globs match nothing in this scenario."""
-    home = tmp_path / "h"; home.mkdir()
-    r = _run(test_image, home, setup=dedent("""\
+    home = tmp_path / "h"
+    home.mkdir()
+    r = _run(
+        test_image,
+        home,
+        setup=dedent("""\
         mkdir -p $HOME/.claude
         cursor --no-sandbox --user-data-dir=$HOME/.cursor-data \\
                --install-extension anthropic.claude-code 2>&1 | tail -1
         rm /usr/local/bin/claude
-    """))
+    """),
+    )
     assert r.returncode == 0, r.stderr
     _assert_motus_plugin_installed(home)
-    assert list(home.glob(".cursor/extensions/anthropic.claude-code-*/resources/native-binary/claude"))
+    assert list(
+        home.glob(
+            ".cursor/extensions/anthropic.claude-code-*/resources/native-binary/claude"
+        )
+    )
 
 
 @pytest.mark.parametrize(
     "agent,setup,skill_path",
     [
-        ("Codex",  "mkdir -p $HOME/.codex",          ".codex/skills/motus/SKILL.md"),
-        ("Cursor", "mkdir -p $HOME/.config/Cursor",  ".cursor/skills/motus/SKILL.md"),
-        ("Gemini", "mkdir -p $HOME/.gemini",         ".gemini/extensions/motus/SKILL.md"),
+        ("Codex", "mkdir -p $HOME/.codex", ".codex/skills/motus/SKILL.md"),
+        ("Cursor", "mkdir -p $HOME/.config/Cursor", ".cursor/skills/motus/SKILL.md"),
+        ("Gemini", "mkdir -p $HOME/.gemini", ".gemini/extensions/motus/SKILL.md"),
     ],
 )
 def test_other_agent_detected(test_image, tmp_path, agent, setup, skill_path):
     """Codex / Cursor / Gemini are detected by their config dir → skill copied."""
-    home = tmp_path / "h"; home.mkdir()
+    home = tmp_path / "h"
+    home.mkdir()
     r = _run(test_image, home, setup=f"rm /usr/local/bin/claude\n{setup}")
     assert r.returncode == 0, r.stderr
     assert f"Installed motus skill for: {agent}" in r.stdout
@@ -237,13 +283,17 @@ def test_other_agent_detected(test_image, tmp_path, agent, setup, skill_path):
 
 def test_claude_config_dir_honored(test_image, tmp_path):
     """CLAUDE_CONFIG_DIR overrides the default ~/.claude lookup."""
-    home = tmp_path / "h"; home.mkdir()
+    home = tmp_path / "h"
+    home.mkdir()
     r = _run(
-        test_image, home,
+        test_image,
+        home,
         setup="mkdir -p $HOME/relocated",
         env="CLAUDE_CONFIG_DIR=$HOME/relocated",
     )
     assert r.returncode == 0, r.stderr
     assert "Installed motus skill for: Claude Code" in r.stdout
-    installed = json.loads((home / "relocated/plugins/installed_plugins.json").read_text())
+    installed = json.loads(
+        (home / "relocated/plugins/installed_plugins.json").read_text()
+    )
     assert "motus@LithosAI" in installed["plugins"]
