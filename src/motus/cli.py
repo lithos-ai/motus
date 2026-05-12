@@ -40,6 +40,7 @@ def _check_for_update() -> None:
     """
     try:
         from importlib.metadata import version
+
         from packaging.version import Version
 
         current = version(_PACKAGE)
