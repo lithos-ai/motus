@@ -37,6 +37,7 @@ def test_collect_trace_paths_accepts_files_and_directories(tmp_path):
     assert collect_trace_paths([tmp_path]) == [trace_a, trace_b]
     assert collect_trace_paths([trace_b]) == [trace_b]
     assert collect_trace_paths([tmp_path], limit=1) == [trace_a]
+    assert collect_trace_paths([tmp_path], exclude_trace_ids={"b"}) == [trace_a]
 
 
 def test_cli_replays_traces_and_writes_summary(tmp_path, monkeypatch):
@@ -46,7 +47,9 @@ def test_cli_replays_traces_and_writes_summary(tmp_path, monkeypatch):
     trace_dir = tmp_path / "traces"
     trace_dir.mkdir()
     trace_path = trace_dir / "trace.json"
+    skipped_trace_path = trace_dir / "skipped.json"
     trace_path.write_text(json.dumps(_trace_json()), encoding="utf-8")
+    skipped_trace_path.write_text(json.dumps(_trace_json("skipped")), encoding="utf-8")
     output_dir = tmp_path / "out"
     created_clients = []
     created_runners = []
@@ -56,9 +59,27 @@ def test_cli_replays_traces_and_writes_summary(tmp_path, monkeypatch):
             created_clients.append(kwargs)
 
     class FakeRunner:
-        def __init__(self, *, client, model, concurrency):
+        def __init__(
+            self,
+            *,
+            client,
+            model,
+            concurrency,
+            arrival_mode="concurrency",
+            arrival_rate_jps=None,
+            arrival_seed=None,
+            include_tool_duration_metadata=False,
+        ):
             created_runners.append(
-                {"client": client, "model": model, "concurrency": concurrency}
+                {
+                    "client": client,
+                    "model": model,
+                    "concurrency": concurrency,
+                    "arrival_mode": arrival_mode,
+                    "arrival_rate_jps": arrival_rate_jps,
+                    "arrival_seed": arrival_seed,
+                    "include_tool_duration_metadata": include_tool_duration_metadata,
+                }
             )
 
         async def run_many(self, traces):
@@ -92,6 +113,16 @@ def test_cli_replays_traces_and_writes_summary(tmp_path, monkeypatch):
             "mars-model",
             "--concurrency",
             "2",
+            "--arrival-mode",
+            "poisson",
+            "--arrival-rate-jps",
+            "0.025",
+            "--arrival-seed",
+            "20260512",
+            "--exclude-trace-id",
+            "skipped",
+            "--request-timeout-seconds",
+            "none",
             "--output-dir",
             str(output_dir),
         ]
@@ -99,10 +130,14 @@ def test_cli_replays_traces_and_writes_summary(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert created_clients == [
-        {"api_key": "EMPTY", "base_url": "http://mars.local/v1"}
+        {"api_key": "EMPTY", "base_url": "http://mars.local/v1", "timeout": None}
     ]
     assert created_runners[0]["model"] == "mars-model"
     assert created_runners[0]["concurrency"] == 2
+    assert created_runners[0]["arrival_mode"] == "poisson"
+    assert created_runners[0]["arrival_rate_jps"] == 0.025
+    assert created_runners[0]["arrival_seed"] == 20260512
+    assert created_runners[0]["include_tool_duration_metadata"] is False
     summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary == asdict(
         ReplaySummary(

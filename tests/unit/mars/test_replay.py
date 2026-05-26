@@ -1,5 +1,6 @@
 import asyncio
 import json
+import random
 
 import pytest
 
@@ -61,6 +62,20 @@ class FailingClient:
         raise RuntimeError("context too long")
 
 
+class FakeClock:
+    def __init__(self, now=100.0):
+        self.value = now
+        self.sleeps = []
+
+    def now(self):
+        return self.value
+
+    async def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.value += max(seconds, 0.0)
+        await asyncio.sleep(0)
+
+
 def test_build_agent_replay_uses_minimal_fields():
     from motus.mars.replay import build_agent_replay
 
@@ -75,10 +90,28 @@ def test_build_agent_replay_uses_minimal_fields():
             {
                 "name": "bash",
                 "args": {"command": "pwd"},
-                "duration_ms": 10,
             }
         ],
     }
+
+
+def test_build_agent_replay_can_include_oracle_duration_when_requested():
+    from motus.mars.replay import build_agent_replay
+
+    trace = _trace()
+    replay = build_agent_replay(
+        trace,
+        trace.turns[0],
+        include_tool_duration=True,
+    )
+
+    assert replay["planned_tools"] == [
+        {
+            "name": "bash",
+            "args": {"command": "pwd"},
+            "duration_ms": 10,
+        }
+    ]
 
 
 def test_build_sampling_kwargs_forces_fixed_output_length():
@@ -123,6 +156,7 @@ async def test_runner_appends_actual_generated_output_to_next_turn_context():
     assert client.calls[0]["extra_body"]["ignore_eos"] is True
     assert client.calls[0]["extra_body"]["is_last_step"] is False
     assert client.calls[0]["extra_body"]["agent_replay"]["planned_tools"][0]["name"] == "bash"
+    assert "duration_ms" not in client.calls[0]["extra_body"]["agent_replay"]["planned_tools"][0]
 
     second_messages = client.calls[1]["messages"]
     assert [m.role for m in second_messages] == [
@@ -166,6 +200,51 @@ async def test_run_many_honors_concurrency_limit():
     await runner.run_many([_trace("a", "a"), _trace("b", "b"), _trace("c", "c")])
 
     assert client.max_active <= 2
+
+
+@pytest.mark.asyncio
+async def test_run_many_poisson_arrivals_record_job_completion_latency():
+    from motus.mars.replay import TraceReplayRunner
+
+    clock = FakeClock()
+    runner = TraceReplayRunner(
+        client=FakeClient(),
+        model="model",
+        concurrency=10,
+        sleep=clock.sleep,
+        clock=clock.now,
+        arrival_mode="poisson",
+        arrival_rate_jps=2.0,
+        arrival_seed=7,
+    )
+
+    summary = await runner.run_many(
+        [_trace("a", "a"), _trace("b", "b"), _trace("c", "c")]
+    )
+
+    rng = random.Random(7)
+    expected_offsets = [
+        0.0,
+        rng.expovariate(2.0),
+    ]
+    expected_offsets.append(expected_offsets[-1] + rng.expovariate(2.0))
+
+    assert summary.arrival_mode == "poisson"
+    assert summary.arrival_rate_jps == 2.0
+    assert summary.arrival_seed == 7
+    assert summary.scheduled_span_seconds == pytest.approx(expected_offsets[-1])
+    assert [result.arrival_offset_seconds for result in summary.results] == pytest.approx(
+        expected_offsets
+    )
+    assert [result.scheduled_arrival_at for result in summary.results] == pytest.approx(
+        [100.0 + offset for offset in expected_offsets]
+    )
+    for result in summary.results:
+        assert result.actual_launch_at >= result.scheduled_arrival_at
+        assert result.completed_at >= result.actual_launch_at
+        assert result.job_completion_latency_seconds == pytest.approx(
+            result.completed_at - result.scheduled_arrival_at
+        )
 
 
 @pytest.mark.asyncio
