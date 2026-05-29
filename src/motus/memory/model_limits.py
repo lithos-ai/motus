@@ -372,6 +372,13 @@ ANTHROPIC_MODELS: Dict[str, ModelLimits] = {
         description="Claude 3 Haiku - fast",
     ),
     # Claude Opus 4 series
+    "claude-opus-4-8": ModelLimits(
+        model_id="claude-opus-4-8",
+        provider=ModelProvider.ANTHROPIC,
+        context_window=1_000_000,
+        max_output_tokens=128_000,
+        description="Claude Opus 4.8 - most capable model",
+    ),
     "claude-opus-4-20250514": ModelLimits(
         model_id="claude-opus-4-20250514",
         provider=ModelProvider.ANTHROPIC,
