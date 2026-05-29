@@ -72,7 +72,8 @@ class ReasoningConfig:
             return {"type": "disabled"}
 
         is_adaptive_model = (
-            "claude-opus-4-7" in model
+            "claude-opus-4-8" in model
+            or "claude-opus-4-7" in model
             or "claude-opus-4-6" in model
             or "claude-sonnet-4-6" in model
         )
@@ -92,7 +93,8 @@ class ReasoningConfig:
         if not self.enabled:
             return None
         is_adaptive_model = (
-            "claude-opus-4-7" in model
+            "claude-opus-4-8" in model
+            or "claude-opus-4-7" in model
             or "claude-opus-4-6" in model
             or "claude-sonnet-4-6" in model
         )
