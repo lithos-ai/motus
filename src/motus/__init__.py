@@ -9,7 +9,6 @@ from fastapi.routing import APIRoute
 from openai import AsyncOpenAI
 from uvicorn import Config, Server
 
-from .runtime import init, is_initialized, shutdown
 from .tools import (
     DEFAULT_TOOL_PROVIDER,
     FunctionTool,
@@ -38,10 +37,7 @@ __all__ = [
     "ModelClient",
     "Tools",
     "get_sandbox",
-    "init",
-    "is_initialized",
     "normalize_tools",
-    "shutdown",
     "tool",
     "tools",
     "tools_from",

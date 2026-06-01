@@ -1,5 +1,6 @@
 """Tests for AgentTool — wrapping an agent as a tool."""
 
+import asyncio
 import json
 
 import pytest
@@ -82,7 +83,7 @@ class TestAgentToolInvocation:
     def test_basic_call(self):
         agent = _make_echo_agent()
         tool = AgentTool(agent)
-        result = tool(json.dumps({"request": "hello world"})).af_result()
+        result = asyncio.run(tool(json.dumps({"request": "hello world"})))
         assert "echo: hello world" in result
 
     def test_stateless_does_not_mutate_template(self):
@@ -100,7 +101,7 @@ class TestAgentToolInvocation:
         agent = _MutatingAgent(client=Mock(), model_name="m", name="mut")
         original_count = len(agent.memory.messages)
         tool = AgentTool(agent, stateful=False)
-        tool(json.dumps({"request": "test"})).af_result()
+        asyncio.run(tool(json.dumps({"request": "test"})))
         # Fork was used — template agent's memory is untouched
         assert len(agent.memory.messages) == original_count
         # The forked agent did mutate its own memory
@@ -119,8 +120,8 @@ class TestAgentToolInvocation:
 
         agent = _TrackingAgent(client=Mock(), model_name="m", name="tracked")
         tool = AgentTool(agent, stateful=True)
-        tool(json.dumps({"request": "a"})).af_result()
-        tool(json.dumps({"request": "b"})).af_result()
+        asyncio.run(tool(json.dumps({"request": "a"})))
+        asyncio.run(tool(json.dumps({"request": "b"})))
         # Both calls should use the exact same agent instance
         assert len(call_log) == 2
         assert call_log[0] == call_log[1] == id(agent)
@@ -131,7 +132,7 @@ class TestAgentToolInvocation:
             agent,
             output_extractor=lambda result: result.upper(),
         )
-        result = tool(json.dumps({"request": "hi"})).af_result()
+        result = asyncio.run(tool(json.dumps({"request": "hi"})))
         assert "ECHO: HI" in result
 
     def test_max_steps_override(self):
@@ -148,7 +149,7 @@ class TestAgentToolInvocation:
         agent = _StepsAgent(client=Mock(), model_name="m", name="steps")
         assert agent.max_steps is None
         tool = AgentTool(agent, max_steps=3)
-        tool(json.dumps({"request": "test"})).af_result()
+        asyncio.run(tool(json.dumps({"request": "test"})))
         # Template agent unchanged
         assert agent.max_steps is None
         # Forked agent received the override
@@ -165,7 +166,7 @@ class TestAgentToolInvocation:
 
         agent = _FailAgent(client=Mock(), model_name="m", name="fail")
         tool = AgentTool(agent)
-        result = tool(json.dumps({"request": "go"})).af_result()
+        result = asyncio.run(tool(json.dumps({"request": "go"})))
         parsed = json.loads(result)
         assert "error" in parsed
         assert "boom" in parsed["error"]
@@ -192,7 +193,7 @@ class TestAsToolMethod:
     def test_as_tool_call(self):
         agent = _make_echo_agent()
         tool = agent.as_tool()
-        result = tool(json.dumps({"request": "ping"})).af_result()
+        result = asyncio.run(tool(json.dumps({"request": "ping"})))
         assert "echo: ping" in result
 
 

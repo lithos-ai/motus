@@ -232,7 +232,7 @@ def _finalize_trace() -> None:
 
 def _worker_entry(conn, import_path, message, state, session_id=None):
     """Subprocess entry point that runs an agent and sends the result over pipe."""
-    # Set session_id before any motus import triggers runtime init
+    # Set session_id before any motus import configures tracing
     if session_id:
         os.environ["MOTUS_SESSION_ID"] = session_id
 
@@ -291,8 +291,8 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
             if inspect.iscoroutinefunction(agent_or_fn):
                 return await agent_or_fn(message, state)
             else:
-                # Sync callables must run off-loop to avoid deadlocking
-                # any @agent_task they call internally.
+                # Sync callables must run off-loop to avoid blocking the
+                # worker's event loop.
                 return await asyncio.to_thread(agent_or_fn, message, state)
         else:
             raise TypeError(
@@ -331,12 +331,6 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
         )
     finally:
         conn.close()
-        try:
-            from motus.runtime.agent_runtime import shutdown as _rt_shutdown
-
-            _rt_shutdown()
-        except Exception:
-            pass
 
 
 def _run_worker(

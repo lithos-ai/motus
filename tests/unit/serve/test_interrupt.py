@@ -41,9 +41,8 @@ def test_interrupt_raises_outside_worker():
         asyncio.run(run())
 
 
-def test_init_interrupt_channel_asserts_single_loop_mode():
-    """_init_interrupt_channel must assert that AgentRuntime is in single-loop
-    mode bound to the current asyncio loop."""
+def test_init_interrupt_channel_binds_current_loop():
+    """_init_interrupt_channel binds to the running loop and starts the reader thread."""
     import asyncio
     import multiprocessing as mp
 
@@ -55,16 +54,9 @@ def test_init_interrupt_channel_asserts_single_loop_mode():
     interrupt_mod._reader_thread = None
     interrupt_mod._pending = {}
 
-    # Reset agent_runtime so get_runtime() auto-initializes in single-loop mode
-    import motus.runtime.agent_runtime as ar_mod
-
-    ar_mod._runtime = None
-
     parent_conn, child_conn = mp.Pipe(duplex=True)
 
     async def run():
-        # First call to get_runtime() inside a running loop should initialize
-        # single-loop mode; _init_interrupt_channel's assertion should pass.
         interrupt_mod._init_interrupt_channel(child_conn)
         assert interrupt_mod._conn is child_conn
         assert interrupt_mod._loop is asyncio.get_running_loop()
@@ -74,13 +66,7 @@ def test_init_interrupt_channel_asserts_single_loop_mode():
 
     asyncio.run(run())
 
-    # Clean up: CRITICAL — reset the runtime singleton so subsequent tests
-    # don't inherit a runtime bound to the now-closed asyncio.run() loop.
-    # Without this, any later test calling get_runtime() gets a singleton
-    # whose .loop is closed → RuntimeError: Event loop is closed.
-    ar_mod._runtime = None
-
-    # Also reset interrupt module state (reader thread, conn, etc.)
+    # Reset interrupt module state (reader thread, conn, etc.)
     interrupt_mod._conn = None
     interrupt_mod._loop = None
     interrupt_mod._reader_thread = None

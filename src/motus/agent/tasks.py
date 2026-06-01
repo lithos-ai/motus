@@ -12,9 +12,8 @@ from ..models import (
     ReasoningConfig,
     ToolDefinition,
 )
-from ..runtime.agent_task import agent_task
-from ..runtime.types import MODEL_CALL
 from ..tools.core.tool import Tools
+from ..tracing.decorators import traced_model_call
 
 logger = logging.getLogger("Tasks")
 
@@ -100,7 +99,7 @@ async def model_serve_task(
 ) -> ChatCompletion: ...
 
 
-@agent_task(task_type=MODEL_CALL)
+@traced_model_call
 async def model_serve_task(
     client: BaseChatClient,
     model: str,
