@@ -21,8 +21,22 @@ from motus.guardrails import (
     run_tool_input_guardrails,
     run_tool_output_guardrails,
 )
-from motus.runtime.agent_task import agent_task
 from motus.tools.core.function_tool import FunctionTool
+
+
+class _SyncResult:
+    """Test helper: defer an async call and run it synchronously via ``af_result``.
+
+    Replaces the old ``@agent_task`` / ``AgentFuture`` execution path these
+    tests used to invoke async guardrail helpers from sync test bodies.
+    """
+
+    def __init__(self, coro):
+        self._coro = coro
+
+    def af_result(self):
+        return asyncio.run(self._coro)
+
 
 # ---------------------------------------------------------------------------
 # Exception hierarchy
@@ -181,11 +195,10 @@ class TestExecuteGuardrailAgentStyle:
 
 
 class TestRunGuardrails:
-    """run_guardrails is async — wrap in an @agent_task to run on the runtime event loop."""
+    """run_guardrails is async — wrap in _SyncResult to run from a sync test body."""
 
-    @agent_task
-    async def _run_in_task(self, guardrails, value, **kwargs):
-        return await run_guardrails(guardrails, value, **kwargs)
+    def _run_in_task(self, guardrails, value, **kwargs):
+        return _SyncResult(run_guardrails(guardrails, value, **kwargs))
 
     def test_empty_guardrails(self):
         result = self._run_in_task([], "hello").af_result()
@@ -262,9 +275,8 @@ class TestRunGuardrails:
 class TestRunGuardrailsWithAgent:
     """Agent guardrails receive (value, agent) — verify via run_guardrails."""
 
-    @agent_task
-    async def _run_in_task(self, guardrails, value, **kwargs):
-        return await run_guardrails(guardrails, value, **kwargs)
+    def _run_in_task(self, guardrails, value, **kwargs):
+        return _SyncResult(run_guardrails(guardrails, value, **kwargs))
 
     def test_agent_passed_to_guardrails(self):
         received_agents = []
@@ -331,9 +343,8 @@ class TestRunGuardrailsWithAgent:
 class TestRunGuardrailsParallel:
     """Parallel mode: all guardrails run on the original value, only tripwires matter."""
 
-    @agent_task
-    async def _run_in_task(self, guardrails, value, **kwargs):
-        return await run_guardrails(guardrails, value, **kwargs)
+    def _run_in_task(self, guardrails, value, **kwargs):
+        return _SyncResult(run_guardrails(guardrails, value, **kwargs))
 
     def test_parallel_passthrough(self):
         call_log = []
@@ -646,7 +657,7 @@ class TestFunctionToolGuardrails:
             return f"processed: {text}"
 
         ft = FunctionTool(my_tool, input_guardrails=[block_secret])
-        result = json.loads(ft(json.dumps({"text": "my secret data"})).af_result())
+        result = json.loads(asyncio.run(ft(json.dumps({"text": "my secret data"}))))
         assert "error" in result
         assert "No secrets" in result["error"]
 
@@ -659,7 +670,7 @@ class TestFunctionToolGuardrails:
             return f"processed: {text}"
 
         ft = FunctionTool(my_tool, input_guardrails=[block_secret])
-        result = ft(json.dumps({"text": "safe data"})).af_result()
+        result = asyncio.run(ft(json.dumps({"text": "safe data"})))
         assert "processed: safe data" in result
 
     def test_tool_input_guardrail_modifies(self):
@@ -670,7 +681,7 @@ class TestFunctionToolGuardrails:
             return f"got: {text}"
 
         ft = FunctionTool(my_tool, input_guardrails=[redact])
-        result = ft(json.dumps({"text": "my secret"})).af_result()
+        result = asyncio.run(ft(json.dumps({"text": "my secret"})))
         assert "[REDACTED]" in result
         assert "secret" not in result or "[REDACTED]" in result
 
@@ -684,9 +695,9 @@ class TestFunctionToolGuardrails:
             return f"called {url} with {token}"
 
         ft = FunctionTool(my_tool, input_guardrails=[redact_token])
-        result = ft(
-            json.dumps({"url": "http://api.com", "token": "sk-123"})
-        ).af_result()
+        result = asyncio.run(
+            ft(json.dumps({"url": "http://api.com", "token": "sk-123"}))
+        )
         assert "http://api.com" in result
         assert "[REDACTED]" in result
         assert "sk-123" not in result
@@ -700,7 +711,7 @@ class TestFunctionToolGuardrails:
             return "password=hunter2"
 
         ft = FunctionTool(my_tool, output_guardrails=[block_pii])
-        result = json.loads(ft(json.dumps({"text": "show"})).af_result())
+        result = json.loads(asyncio.run(ft(json.dumps({"text": "show"}))))
         assert "error" in result
         assert "PII detected" in result["error"]
 
@@ -712,7 +723,7 @@ class TestFunctionToolGuardrails:
             return "password=hunter2"
 
         ft = FunctionTool(my_tool, output_guardrails=[redact_output])
-        result = ft(json.dumps({"text": "show"})).af_result()
+        result = asyncio.run(ft(json.dumps({"text": "show"})))
         assert "hunter2" not in result
         assert "***" in result
 
@@ -721,7 +732,7 @@ class TestFunctionToolGuardrails:
             return f"echo: {text}"
 
         ft = FunctionTool(my_tool)
-        result = ft(json.dumps({"text": "hello"})).af_result()
+        result = asyncio.run(ft(json.dumps({"text": "hello"})))
         assert "echo: hello" in result
 
 
@@ -1010,9 +1021,8 @@ class TestExecuteStructuredGuardrail:
 
 
 class TestRunStructuredOutputGuardrails:
-    @agent_task
-    async def _run(self, guardrails, kwargs, **kw):
-        return await run_structured_output_guardrails(guardrails, kwargs, **kw)
+    def _run(self, guardrails, kwargs, **kw):
+        return _SyncResult(run_structured_output_guardrails(guardrails, kwargs, **kw))
 
     def test_empty(self):
         kwargs = {"score": 0.9, "summary": "ok"}

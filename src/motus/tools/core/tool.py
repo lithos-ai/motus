@@ -3,8 +3,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping
 from typing import Any, Self
 
-from motus.runtime.agent_task import agent_task
-from motus.runtime.types import TOOL_CALL
+from motus.tracing.decorators import traced_tool_call
 
 
 class Tool(ABC):
@@ -13,7 +12,7 @@ class Tool(ABC):
     Architecture::
 
         __call__(args: str)          ← base class default (json.loads), FunctionTool overrides with coercion
-          └→ _execute(**kwargs)      ← shared: @agent_task + guardrails + error handling + _serialize
+          └→ _execute(**kwargs)      ← shared: @traced_tool_call + guardrails + error handling + _serialize
                └→ _invoke(**kwargs)  ← abstract: just "call the function"
     """
 
@@ -81,7 +80,7 @@ class Tool(ABC):
             )
         return self._execute(**parsed)
 
-    @agent_task(task_type=TOOL_CALL)
+    @traced_tool_call
     async def _execute(self, **kwargs) -> str:
         """Shared execution boundary — tracing + guardrails + error handling.
 

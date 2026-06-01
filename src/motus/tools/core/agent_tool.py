@@ -61,7 +61,7 @@ class AgentTool(Tool):
         )
 
     async def _invoke(self, **kwargs) -> str:
-        """Call the wrapped agent. Invoked by Tool._execute (has @agent_task + guardrails)."""
+        """Call the wrapped agent. Invoked by Tool._execute (has @traced_tool_call + guardrails)."""
         from motus.agent._stream_context import _agent_path, _caller_tagged
 
         request = _DefaultInput.model_validate(kwargs).request

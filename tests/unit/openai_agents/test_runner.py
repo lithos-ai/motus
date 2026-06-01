@@ -30,16 +30,15 @@ from motus.openai_agents._motus_provider import MotusOpenAIProvider  # noqa: E40
 
 @pytest.fixture(autouse=True)
 def _reset_tracer():
-    """Shut down the motus runtime and reset processor flag so each test is fresh."""
-    from motus.runtime.agent_runtime import is_initialized, shutdown
+    """Reset tracing and the OAI processor flag so each test is fresh."""
+    from motus.tracing import setup_tracing, shutdown_tracing
 
     oai_mod._processor_registered = False
-    if is_initialized():
-        shutdown()
+    shutdown_tracing()
+    setup_tracing()
     yield
     oai_mod._processor_registered = False
-    if is_initialized():
-        shutdown()
+    shutdown_tracing()
 
 
 @pytest.fixture

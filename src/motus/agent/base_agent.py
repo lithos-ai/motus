@@ -14,9 +14,8 @@ from motus.memory.base_memory import BaseMemory
 from motus.memory.basic_memory import BasicMemory
 from motus.memory.compaction_memory import CompactionMemory
 from motus.models import BaseChatClient, ChatMessage, ReasoningConfig, ToolDefinition
-from motus.runtime.agent_task import agent_task
-from motus.runtime.types import AGENT_CALL
 from motus.tools.core.tool import Tool
+from motus.tracing.decorators import traced_agent_call
 
 from ._stream_context import _agent_path, _caller_tagged, _stream_callback
 
@@ -416,14 +415,14 @@ class AgentBase(ABC, Generic[T]):
             self._name = self._infer_name()
         return self._execute(user_prompt, **kwargs)
 
-    @agent_task(task_type=AGENT_CALL)
+    @traced_agent_call
     async def _execute(
         self,
         user_prompt: Optional[str] = None,
         **kwargs,
     ) -> T:
         """
-        Internal method decorated with @agent_task for runtime integration.
+        Internal method decorated with @traced_agent_call for tracing.
 
         This runs as an async coroutine on the runtime event loop.
         Guardrails are executed before/after _run().

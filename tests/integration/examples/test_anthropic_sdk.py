@@ -151,15 +151,9 @@ def _reset_tracer():
     ``setup_tracing()`` here restores that invariant after the teardown of a
     prior test, so ``run_turn`` emits into a live collector.
     """
-    from motus.runtime.agent_runtime import is_initialized, shutdown
-
-    if is_initialized():
-        shutdown()
     shutdown_tracing()
     setup_tracing()
     yield
-    if is_initialized():
-        shutdown()
     shutdown_tracing()
 
 

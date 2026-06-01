@@ -83,15 +83,9 @@ def _reset_tracer():
     ``setup_tracing()`` here restores that invariant after the teardown of a
     prior test, so ADK spans land in a live collector.
     """
-    from motus.runtime.agent_runtime import is_initialized, shutdown
-
-    if is_initialized():
-        shutdown()
     shutdown_tracing()
     setup_tracing()
     yield
-    if is_initialized():
-        shutdown()
     shutdown_tracing()
 
 
