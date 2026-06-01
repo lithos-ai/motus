@@ -145,12 +145,18 @@ def _mock_parse_factory():
 
 @pytest.fixture(autouse=True)
 def _reset_tracer():
-    """Shut down the motus runtime so each test gets a fresh tracer."""
+    """Reset the motus runtime and tracing so each test gets a fresh tracer.
+
+    Production sets tracing up once at ``import motus``; re-running
+    ``setup_tracing()`` here restores that invariant after the teardown of a
+    prior test, so ``run_turn`` emits into a live collector.
+    """
     from motus.runtime.agent_runtime import is_initialized, shutdown
 
     if is_initialized():
         shutdown()
     shutdown_tracing()
+    setup_tracing()
     yield
     if is_initialized():
         shutdown()

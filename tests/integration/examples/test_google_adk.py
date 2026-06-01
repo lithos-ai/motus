@@ -21,7 +21,7 @@ from google.adk.models.llm_response import LlmResponse  # noqa: E402
 from google.genai import types as genai_types  # noqa: E402
 
 from motus.models import ChatMessage  # noqa: E402
-from motus.tracing.agent_tracer import shutdown_tracing  # noqa: E402
+from motus.tracing.agent_tracer import setup_tracing, shutdown_tracing  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Mock Gemini that simulates tool-call → tool-result → final-answer
@@ -77,12 +77,18 @@ def _mock_generate_factory(
 
 @pytest.fixture(autouse=True)
 def _reset_tracer():
-    """Shut down the motus runtime so each test gets a fresh tracer."""
+    """Reset the motus runtime and tracing so each test gets a fresh tracer.
+
+    Production sets tracing up once at ``import motus``; re-running
+    ``setup_tracing()`` here restores that invariant after the teardown of a
+    prior test, so ADK spans land in a live collector.
+    """
     from motus.runtime.agent_runtime import is_initialized, shutdown
 
     if is_initialized():
         shutdown()
     shutdown_tracing()
+    setup_tracing()
     yield
     if is_initialized():
         shutdown()
