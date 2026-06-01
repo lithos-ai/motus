@@ -144,16 +144,19 @@ class TraceReplayRunner:
 
         for turn in trace.turns:
             messages.append(self._input_delta_message(turn))
-            request_kwargs = build_sampling_kwargs(turn.output_tokens)
-            extra_body = dict(request_kwargs.pop("extra_body"))
-            extra_body.update(self._extra_body(trace, turn))
             started_at = time.time()
-            completion = await self._create_completion(
-                model=self.model,
-                messages=list(messages),
-                extra_body=extra_body,
-                **request_kwargs,
-            )
+            if turn.output_tokens == 0:
+                completion = self._zero_output_completion(trace, turn)
+            else:
+                request_kwargs = build_sampling_kwargs(turn.output_tokens)
+                extra_body = dict(request_kwargs.pop("extra_body"))
+                extra_body.update(self._extra_body(trace, turn))
+                completion = await self._create_completion(
+                    model=self.model,
+                    messages=list(messages),
+                    extra_body=extra_body,
+                    **request_kwargs,
+                )
             ended_at = time.time()
             turn_results.append(
                 self._turn_result(trace, turn, completion, started_at, ended_at)
@@ -316,6 +319,19 @@ class TraceReplayRunner:
     async def _create_completion(self, **kwargs: Any) -> ChatCompletion:
         create = getattr(self.client, "create_non_streaming", self.client.create)
         return await create(**kwargs)
+
+    def _zero_output_completion(
+        self,
+        trace: AgentTrace,
+        turn: TraceTurn,
+    ) -> ChatCompletion:
+        return ChatCompletion(
+            id=f"zero-output-{trace.trace_id}-{turn.turn_index}",
+            model=self.model,
+            content="",
+            finish_reason="zero_output_replay_skip",
+            usage={"completion_tokens": 0},
+        )
 
     def _turn_result(
         self,

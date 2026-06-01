@@ -171,6 +171,67 @@ async def test_runner_appends_actual_generated_output_to_next_turn_context():
 
 
 @pytest.mark.asyncio
+async def test_runner_skips_zero_output_turn_without_backend_request():
+    from motus.mars.replay import TraceReplayRunner
+
+    client = FakeClient()
+    runner = TraceReplayRunner(
+        client=client,
+        model="model",
+        concurrency=1,
+        sleep=lambda seconds: asyncio.sleep(0),
+    )
+
+    trace = _trace(
+        turns=[
+            {
+                "turn_index": 0,
+                "input_delta": {"kind": "user", "text": "first"},
+                "output_tokens": 2,
+                "tools": [],
+                "is_terminal": False,
+            },
+            {
+                "turn_index": 1,
+                "input_delta": {"kind": "tool_result", "text": "zero"},
+                "output_tokens": 0,
+                "tools": [],
+                "is_terminal": False,
+            },
+            {
+                "turn_index": 2,
+                "input_delta": {"kind": "tool_result", "text": "third"},
+                "output_tokens": 1,
+                "tools": [],
+                "is_terminal": True,
+            },
+        ],
+    )
+
+    result = await runner.run_trace(trace)
+
+    assert result.turns_completed == 3
+    assert len(client.calls) == 2
+    assert [call["max_tokens"] for call in client.calls] == [2, 1]
+    assert result.turn_results[1].output_tokens_requested == 0
+    assert result.turn_results[1].output_tokens_observed == 0
+    assert result.turn_results[1].finish_reason == "zero_output_replay_skip"
+
+    third_messages = client.calls[1]["messages"]
+    assert [message.role for message in third_messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert third_messages[2].content == "generated-0"
+    assert third_messages[4].content == ""
+    assert third_messages[5].content == "third"
+
+
+@pytest.mark.asyncio
 async def test_run_many_honors_concurrency_limit():
     from motus.mars.replay import TraceReplayRunner
 
