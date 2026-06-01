@@ -41,6 +41,8 @@ def _check_for_update() -> None:
     try:
         from importlib.metadata import version
 
+        from packaging.version import Version
+
         current = version(_PACKAGE)
 
         try:
@@ -52,7 +54,7 @@ def _check_for_update() -> None:
 
         if now - cache.get("last_check", 0) < _CHECK_INTERVAL:
             latest = cache.get("latest")
-            if latest and latest != current:
+            if latest and Version(latest) > Version(current):
                 _print_update_message(current, latest)
             return
 
@@ -71,7 +73,7 @@ def _check_for_update() -> None:
         except Exception:
             pass
 
-        if latest != current:
+        if Version(latest) > Version(current):
             _print_update_message(current, latest)
     except Exception:
         pass
@@ -85,10 +87,19 @@ def _print_update_message(current: str, latest: str) -> None:
     )
 
 
+def _ensure_utf8_stdout():
+    """Reconfigure stdout/stderr to UTF-8 on platforms that default to a narrower encoding."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 # -- Entry point ---------------------------------------------------------------
 
 
 def main():
+    _ensure_utf8_stdout()
     parser = argparse.ArgumentParser(
         prog="motus",
         description="Motus Agent Framework",

@@ -7,18 +7,18 @@ Base URL: `https://{project-id}.agent.lithosai.cloud`
 ### CLI (recommended)
 
 ```bash
-# Interactive chat (creates session, multi-turn, deletes on exit)
+# Interactive chat (creates a new session, prints session ID, kept on exit)
 motus serve chat https://my-project.agent.lithosai.cloud
 
-# Single message
+# Single message (creates a new session, prints session ID, kept on exit)
 motus serve chat https://my-project.agent.lithosai.cloud "hello"
-
-# Keep session alive after exit (prints session ID)
-motus serve chat https://my-project.agent.lithosai.cloud --keep
 
 # Resume an existing session
 motus serve chat https://my-project.agent.lithosai.cloud --session <id>
 ```
+
+Sessions are kept on exit so traces stay viewable in the cloud console. The session ID
+is printed on creation — copy it to resume later or to inspect traces.
 
 ### curl
 

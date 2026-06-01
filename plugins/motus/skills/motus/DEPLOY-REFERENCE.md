@@ -12,6 +12,7 @@
 | `TypeError: xxx() takes 1 positional argument but 2 were given` | Agent function doesn't match the `(message, state)` contract | Wrap the function — see Agent Function Contract in SKILL.md |
 | `AttributeError: 'str' object has no attribute 'content'` | Agent expects `str` but receives `ChatMessage` | Change parameter type or access `message.content` |
 | `Could not import module: motus.openai_agents requires the OpenAI Agents SDK` | `openai-agents` not installed in container | Add `openai-agents` to `requirements.txt` and redeploy |
+| `502 Failed to provision sandbox` on session create | Platform sandbox service unavailable or tenant quota | Retry; if persistent, contact support |
 
 ## Cloud Agent REST API
 

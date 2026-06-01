@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from typing import Any, Callable
 
+from motus.agent._stream_context import _agent_path, _stream_callback
 from motus.models import ChatMessage
 from motus.serve.interrupt import InterruptMessage
 
@@ -41,6 +42,19 @@ class WorkerResult:
     value: Any = None
     error: str | None = None
     trace_metrics: dict | None = None
+
+
+@dataclass
+class StreamedMessage:
+    """Wraps a ChatMessage with the agent_path that produced it.
+
+    Sent over the worker pipe so the parent process can attribute messages
+    to subagents without reading the worker's contextvars. An empty
+    ``agent_path`` denotes a message from the root agent.
+    """
+
+    message: ChatMessage
+    agent_path: tuple[str, ...]
 
 
 def _resolve_import_path(import_path: str):
@@ -127,15 +141,18 @@ def _get_trace_metrics() -> dict | None:
     """Summarize the spans collected during this turn.
 
     Walks the ``OfflineSpanCollector``'s buffered ReadableSpans and returns
-    ``{total_duration, total_tokens, has_error}`` — the shape the serve
-    session schema expects. Returns ``None`` if tracing is disabled or no
-    spans were recorded.
+    ``{total_duration, total_tokens, total_cost_usd, has_error}`` — the shape
+    the serve session schema expects. ``total_cost_usd`` sums each model
+    span's ``model.cost_usd`` (computed by ``span_convert`` with the same
+    pricing the trace viewer shows), so the aggregate matches the per-span
+    costs. Returns ``None`` if tracing is disabled or no spans were recorded.
     """
     try:
         import json
 
         from motus.tracing import get_collector
         from motus.tracing.agent_tracer import ATTR_ERROR, ATTR_MODEL_OUTPUT, ATTR_USAGE
+        from motus.tracing.span_convert import readable_span_to_viewer_dict
 
         collector = get_collector()
         if collector is None or not collector.spans:
@@ -143,12 +160,14 @@ def _get_trace_metrics() -> dict | None:
                 "trace_id": None,
                 "total_duration": 0.0,
                 "total_tokens": 0,
+                "total_cost_usd": 0.0,
                 "has_error": False,
             }
 
         min_start = float("inf")
         max_end = 0
         total_tokens = 0
+        total_cost_usd = 0.0
         has_error = False
 
         for span in collector.spans:
@@ -175,6 +194,12 @@ def _get_trace_metrics() -> dict | None:
                 except (json.JSONDecodeError, TypeError):
                     pass
 
+            cost = (readable_span_to_viewer_dict(span).get("tags") or {}).get(
+                "model.cost_usd"
+            )
+            if cost:
+                total_cost_usd += cost
+
         total_duration = 0.0
         if max_end > min_start:
             total_duration = (max_end - min_start) / 1_000_000
@@ -183,6 +208,7 @@ def _get_trace_metrics() -> dict | None:
             "trace_id": None,
             "total_duration": total_duration,
             "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost_usd, 8),
             "has_error": has_error,
         }
     except Exception:
@@ -242,6 +268,19 @@ def _worker_entry(conn, import_path, message, state, session_id=None):
                 set_session_id(session_id)
             except Exception:
                 pass  # tracer unavailable is not fatal
+
+        async def _send_message(message: ChatMessage):
+            try:
+                conn.send(
+                    StreamedMessage(message=message, agent_path=_agent_path.get())
+                )
+            except (BrokenPipeError, OSError):
+                pass
+
+        # Make the forwarding callback ambient for every AgentBase reached
+        # this turn — the served root, AgentTool subagents, and free-standing
+        # agents created inside function-task tools.
+        _stream_callback.set(_send_message)
 
         if isinstance(agent_or_fn, ServableAgent):
             return await agent_or_fn.run_turn(message, state)
@@ -304,9 +343,11 @@ def _run_worker(
     conn,
     loop: asyncio.AbstractEventLoop,
     on_interrupt: Callable | None = None,
+    on_message: Callable | None = None,
 ) -> "WorkerResult":
-    """Thread-pool recv loop. Dispatches InterruptMessages to main loop,
-    returns on WorkerResult. Threading: this thread recv()s only, main loop send()s only.
+    """Thread-pool recv loop. Dispatches InterruptMessages and ChatMessages to
+    main loop, returns on WorkerResult. Threading: this thread recv()s only,
+    main loop send()s only.
     """
     import pickle
 
@@ -323,6 +364,9 @@ def _run_worker(
         if isinstance(msg, InterruptMessage):
             if on_interrupt is not None:
                 loop.call_soon_threadsafe(on_interrupt, msg)
+        elif isinstance(msg, StreamedMessage):
+            if on_message is not None:
+                loop.call_soon_threadsafe(on_message, msg.message, msg.agent_path)
         elif isinstance(msg, WorkerResult):
             return msg
         else:
@@ -411,12 +455,18 @@ class WorkerExecutor:
     ):
         self.max_workers = max_workers or os.cpu_count() or DEFAULT_MAX_WORKERS
         self._semaphore = asyncio.Semaphore(self.max_workers)
-        # Prefer forkserver: faster than spawn (reuses a warm fork with preloaded
-        # imports) and safer than fork (no risk of copying locked mutexes from a
-        # multithreaded parent). Fire-and-forget a background thread to warm the
-        # daemon; if it hasn't finished by the first request, the request itself
-        # triggers ensure_running() internally (and it's idempotent).
-        if "forkserver" in mp.get_all_start_methods():
+        # Start method selection:
+        #   * macOS: always spawn. forkserver inherits CoreFoundation state from
+        #     the parent, and many Apple frameworks (SystemConfiguration used by
+        #     urllib proxy_bypass, keychain, Metal, etc.) are not fork-safe —
+        #     touching them in a forked child SIGSEGVs. spawn execs a fresh
+        #     interpreter and sidesteps the entire class of bug.
+        #   * Other POSIX: prefer forkserver — reuses a warm fork with preloaded
+        #     imports, and safer than bare fork (no risk of copying locked
+        #     mutexes from a multithreaded parent). Fire-and-forget a background
+        #     thread to warm the daemon; if it hasn't finished by the first
+        #     request, the request itself triggers ensure_running() (idempotent).
+        if sys.platform != "darwin" and "forkserver" in mp.get_all_start_methods():
             self._mp_context = mp.get_context("forkserver")
             preload = [import_path.rsplit(":", 1)[0]] if import_path else []
             self._mp_context.set_forkserver_preload(preload)
@@ -440,6 +490,7 @@ class WorkerExecutor:
         timeout: float = 0,
         session_id: str | None = None,
         on_interrupt: Callable | None = None,
+        on_message: Callable | None = None,
         resume_queue: "asyncio.Queue | None" = None,
         on_worker_done: Callable | None = None,
     ) -> WorkerResult:
@@ -450,6 +501,11 @@ class WorkerExecutor:
         Args:
             on_interrupt: Called on the main loop (via call_soon_threadsafe)
                 each time the worker sends an InterruptMessage.
+            on_message: Called on the main loop (via call_soon_threadsafe)
+                each time the worker streams a message. Signature:
+                ``(msg: ChatMessage, agent_path: tuple[str, ...])``. An empty
+                ``agent_path`` denotes the root agent; non-empty paths
+                identify the subagent (``AgentTool``) chain that produced it.
             resume_queue: If provided, a coroutine forwards ResumeMessages
                 from this queue to the worker over the pipe.
             on_worker_done: Called once in finally, BEFORE cleanup starts.
@@ -469,7 +525,7 @@ class WorkerExecutor:
 
                 loop = asyncio.get_running_loop()
                 recv_future = loop.run_in_executor(
-                    None, _run_worker, parent_conn, loop, on_interrupt
+                    None, _run_worker, parent_conn, loop, on_interrupt, on_message
                 )
                 resume_task = (
                     loop.create_task(_forward_resumes(resume_queue, parent_conn))

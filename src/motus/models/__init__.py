@@ -19,6 +19,11 @@ from .gemini_client import GeminiChatClient
 from .openai_client import OpenAIChatClient
 from .openrouter_client import OpenRouterChatClient
 
+try:
+    from .volcengine_client import VolcEngineChatClient
+except ImportError:
+    VolcEngineChatClient = None  # type: ignore[assignment,misc]
+
 __all__ = [
     "BaseChatClient",
     "CachePolicy",
@@ -32,4 +37,5 @@ __all__ = [
     "GeminiChatClient",
     "OpenAIChatClient",
     "OpenRouterChatClient",
+    "VolcEngineChatClient",
 ]

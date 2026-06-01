@@ -228,23 +228,23 @@ motus serve start myapp:agent --port 8080 --workers 8 --ttl 3600 --timeout 60
 Send a message or enter an interactive REPL:
 
 ```bash
-# Interactive REPL (creates and cleans up a session automatically)
+# Interactive REPL (creates a new session, prints session ID, kept on exit)
 motus serve chat http://localhost:8000
 
 # Single message
 motus serve chat http://localhost:8000 "hello"
 
-# Keep the session after exit for later resumption
-motus serve chat http://localhost:8000 --keep
-
 # Resume an existing session
 motus serve chat http://localhost:8000 --session 550e8400-e29b-41d4-a716-446655440000
 ```
 
+Sessions are always kept on exit so traces remain viewable. The session ID is printed
+when a new session is created — copy it to resume later or to inspect traces in the
+cloud console. Use `motus serve delete <url> <session-id>` to delete manually.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--session` | — | Resume an existing session instead of creating a new one |
-| `--keep` | `false` | Preserve the session on exit (prints session ID) |
 | `--param` | — | `KEY=VALUE` per-request parameter passed as `user_params` (repeatable) |
 
 ### Other commands

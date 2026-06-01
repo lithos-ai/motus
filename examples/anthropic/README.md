@@ -46,6 +46,7 @@ Each defines a module-level `runner` instance deployable via serve.
 |---------|---------|-------|-------|-------|
 | [tools_runner.py](tools_runner.py) | Basic tool runner with `@beta_async_tool` | Yes | Yes | -- |
 | [search_tool.py](search_tool.py) | Deferred tool loading with tool-search meta-tool | Yes | Yes | Requires `tool-search-tool-2025-10-19` beta |
+| [mcp.py](mcp.py) | MCP tools via `async_mcp_tool` bound to a live motus `session()` | No | No | Set `MCP_SERVER_URL`; non-deployable (tools bind to a live `ClientSession`); requires `pip install anthropic[mcp]` |
 
 ## How it works
 

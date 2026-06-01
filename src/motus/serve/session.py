@@ -10,7 +10,7 @@ from typing import Any
 from motus.models import ChatMessage
 from motus.serve.interrupt import InterruptMessage
 
-from .schemas import SessionStatus
+from .schemas import InterruptInfo, SessionResponse, SessionStatus
 
 logger = logging.getLogger("motus.serve")
 
@@ -36,6 +36,78 @@ class Session:
     _done: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     pending_interrupts: dict = field(default_factory=dict, repr=False)
     _resume_queue: "asyncio.Queue | None" = field(default=None, repr=False)
+    _event_log: list = field(default_factory=list, repr=False)
+    _event_epoch: int = field(default=0, repr=False)
+    _event_condition: asyncio.Condition = field(
+        default_factory=asyncio.Condition, repr=False
+    )
+    _pending_publishes: set = field(default_factory=set, repr=False)
+
+    def to_response(self) -> SessionResponse:
+        """Snapshot the current session as a SessionResponse.
+
+        Used by GET /sessions/{id} and as the base shape for SSE events,
+        so terminal SSE frames are a strict superset of the GET body.
+        """
+        interrupts = None
+        if self.status == SessionStatus.interrupted:
+            interrupts = [
+                InterruptInfo(
+                    interrupt_id=iid,
+                    type=msg.payload.get("type", "unknown"),
+                    payload=msg.payload,
+                )
+                for iid, msg in self.pending_interrupts.items()
+            ]
+
+        return SessionResponse(
+            session_id=self.session_id,
+            status=self.status,
+            response=self.response,
+            error=self.error,
+            interrupts=interrupts,
+        )
+
+    async def publish_event(self, event_name: str, **extras) -> None:
+        """Publish an SSE event with standard {session_id, status, ...} envelope.
+
+        Every event carries session_id and status (auto-included via
+        to_response()) plus state-derived fields populated for the current
+        status. Per-event extras (e.g. ``message=...``) layer on top.
+
+        The special event name ``"closed"`` is an internal end-of-stream
+        signal: the SSE generator detects it and disconnects subscribers
+        without forwarding the frame on the wire.
+
+        A ``"message"`` event may carry an optional ``agent_path`` field —
+        the registered subagent (``AgentTool``) names along the call chain.
+        The field is omitted for messages from the root agent.
+        """
+        payload = {
+            "event": event_name,
+            **self.to_response().model_dump(exclude_none=True),
+            **{k: v for k, v in extras.items() if v is not None},
+        }
+        async with self._event_condition:
+            self._event_log.append(payload)
+            self._event_condition.notify_all()
+
+    def publish_event_soon(self, event_name: str, **extras) -> None:
+        """Fire-and-forget version of :meth:`publish_event` for sync callers
+        (e.g. interrupt/message callbacks invoked via ``call_soon_threadsafe``,
+        or ``cancel()`` from a sync test path).
+
+        No-op if there is no running event loop. Otherwise schedules the
+        publish and holds a strong reference to the task until it completes
+        so it isn't GC'd mid-flight (asyncio only weakly references tasks).
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = asyncio.ensure_future(self.publish_event(event_name, **extras))
+        self._pending_publishes.add(task)
+        task.add_done_callback(self._pending_publishes.discard)
 
     def start_turn(self, task: asyncio.Task) -> None:
         """Transition to running state for a new turn."""
@@ -45,6 +117,9 @@ class Session:
         self.response = None
         self.error = None
         self._done.clear()
+        self._event_log.clear()
+        self._event_epoch += 1
+        self.publish_event_soon("running")
 
     def complete_turn(
         self, response: ChatMessage, new_state: list[ChatMessage]
@@ -58,6 +133,7 @@ class Session:
         self.last_message_at = time.monotonic()
         self._done.set()
         self.pending_interrupts.clear()
+        self.publish_event_soon("done")
 
     def fail_turn(self, error: str) -> None:
         """Record a turn failure and transition to error state."""
@@ -68,6 +144,7 @@ class Session:
         self.last_message_at = time.monotonic()
         self._done.set()
         self.pending_interrupts.clear()
+        self.publish_event_soon("error")
 
     def cancel(self) -> None:
         """Cancel any running task and signal waiters."""
@@ -75,6 +152,7 @@ class Session:
             self._task.cancel()
         self._done.set()
         self.pending_interrupts.clear()
+        self.publish_event_soon("closed")
 
     async def wait(self, timeout: float | None = None) -> None:
         """Wait for the current turn to complete."""
@@ -95,6 +173,7 @@ class Session:
         self.status = SessionStatus.interrupted
         self.pending_interrupts[msg.interrupt_id] = msg
         self._done.set()  # wake long-poll waiters
+        self.publish_event_soon("interrupted")
 
     def submit_resume(self, interrupt_id: str, value: Any) -> None:
         """Forward user's reply to the worker. Raises ValueError on bad state."""
@@ -110,6 +189,7 @@ class Session:
         if not self.pending_interrupts:
             self.status = SessionStatus.running
             self._done.clear()
+            self.publish_event_soon("running")
 
 
 class SessionStore:

@@ -57,18 +57,39 @@ skipped=""
 add_installed() { installed="${installed:+$installed, }$1"; }
 add_skipped()   { skipped="${skipped:+$skipped, }$1"; }
 
-# Claude Code — marketplace from GitHub, auto-updates independently
-if command -v claude >/dev/null 2>&1
+# Claude Code: Vercel's skills package only checks whether the user has a
+# `.claude` directory. Honor $CLAUDE_CONFIG_DIR for users who relocated it.
+claude_home=${CLAUDE_CONFIG_DIR-$HOME/.claude}
+if [ -d "$claude_home" ]
 then
-	claude plugin marketplace add "$org/$repo" 2>/dev/null || true
-	claude plugin install "$product@LithosAI" 2>/dev/null || true
+	# Resolve a `claude` binary: prefer the one on PATH, else the binary
+	# bundled inside the VS Code / VS Code Insiders / Cursor extension at
+	# resources/native-binary/claude. Walk those editor dirs in priority
+	# order and pick the first installed extension's binary — gating on
+	# `-x` so an editor with no Claude Code extension installed doesn't
+	# leak its unexpanded glob pattern into `claude_cmd`.
+	if command -v claude >/dev/null 2>&1
+	then
+		claude_cmd=claude
+	else
+		claude_cmd=`for editor in vscode vscode-insiders cursor
+		do
+			for bin in "$HOME"/.$editor/extensions/anthropic.claude-code-*/resources/native-binary/claude
+			do
+				[ -x "$bin" ] && echo "$bin"
+			done
+		done | awk '{print; exit}'`
+	fi
+	"${claude_cmd?}" plugin marketplace add "$org/$repo"
+	"$claude_cmd" plugin install "$product@LithosAI"
 	python3 <<-EOF 2>/dev/null
 		import json
 		from pathlib import Path
 
+		claude_home = Path("$claude_home")
 		for p in [
-		    Path.home() / '.claude/plugins/known_marketplaces.json',
-		    Path.home() / '.claude/settings.json',
+		    claude_home / 'plugins/known_marketplaces.json',
+		    claude_home / 'settings.json',
 		]:
 		    if not p.exists(): continue
 		    d = json.loads(p.read_text())
@@ -119,6 +140,15 @@ fi
 
 # -- Report --------------------------------------------------------------------
 
-[ -n "$installed" ] && echo "Installed $product skill for: $installed"
-[ -n "$skipped" ]   && echo "Skipped (not detected): $skipped"
-[ -n "$installed" ] && echo "Done. Restart your coding agent to pick up the /$product skill."
+if [ -n "$installed" ]
+then
+	echo "Installed $product skill for: $installed"
+fi
+if [ -n "$skipped" ]
+then
+	echo "Skipped (not detected): $skipped"
+fi
+if [ -n "$installed" ]
+then
+	echo "Done. Restart your coding agent to pick up the /$product skill."
+fi

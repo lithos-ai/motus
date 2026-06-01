@@ -4,7 +4,6 @@ Usage (via unified CLI):
     motus serve start myapp:my_agent --port 8000
     motus serve chat http://localhost:8000 "hello world"
     motus serve chat http://localhost:8000 --session abc-123
-    motus serve chat http://localhost:8000 --keep
     motus serve health http://localhost:8000
     motus serve create http://localhost:8000
     motus serve sessions http://localhost:8000
@@ -204,7 +203,10 @@ def _send_and_wait(client, base_url, session_id, message, params=None):
         return
 
     while True:
-        r = client.get(f"{base_url}/sessions/{session_id}", params={"wait": "true"})
+        try:
+            r = client.get(f"{base_url}/sessions/{session_id}", params={"wait": "true"})
+        except httpx.ReadTimeout:
+            continue
         r.raise_for_status()
         data = r.json()
         status = data["status"]
@@ -235,7 +237,6 @@ def chat_command(args):
 
     base_url = args.url.rstrip("/")
     message = args.message
-    owned_session = args.session is None
 
     params = _parse_params(args.params)
 
@@ -253,35 +254,30 @@ def chat_command(args):
                     )
                     sys.exit(1)
                 session_id = r.json()["session_id"]
-                if args.keep:
-                    print(f"Session: {session_id} (use --session to resume)")
+                print(f"Session: {session_id} (use --session to resume)")
 
-            try:
-                if message:
+            if message:
+                _send_and_wait(
+                    client, base_url, session_id, message, params=params or None
+                )
+            else:
+                print("Chat session started (Ctrl+C to quit)")
+                print()
+                while True:
+                    try:
+                        user_input = input("> ")
+                    except (EOFError, KeyboardInterrupt):
+                        print("\nBye!")
+                        break
+                    if not user_input.strip():
+                        continue
                     _send_and_wait(
-                        client, base_url, session_id, message, params=params or None
+                        client,
+                        base_url,
+                        session_id,
+                        user_input,
+                        params=params or None,
                     )
-                else:
-                    print("Chat session started (Ctrl+C to quit)")
-                    print()
-                    while True:
-                        try:
-                            user_input = input("> ")
-                        except (EOFError, KeyboardInterrupt):
-                            print("\nBye!")
-                            break
-                        if not user_input.strip():
-                            continue
-                        _send_and_wait(
-                            client,
-                            base_url,
-                            session_id,
-                            user_input,
-                            params=params or None,
-                        )
-            finally:
-                if owned_session and not args.keep:
-                    client.delete(f"{base_url}/sessions/{session_id}")
     except httpx.ConnectError:
         print(f"Error: Could not connect to {base_url}")
         sys.exit(1)
@@ -482,11 +478,6 @@ def register_cli(subparsers):
         "--session",
         default=None,
         help="existing session ID to resume",
-    )
-    chat_parser.add_argument(
-        "--keep",
-        action="store_true",
-        help="keep session alive after exit",
     )
     chat_parser.add_argument(
         "--param",

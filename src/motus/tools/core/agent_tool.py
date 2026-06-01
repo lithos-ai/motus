@@ -20,6 +20,12 @@ class AgentTool(Tool):
         orchestrator = ReActAgent(
             tools=[research.as_tool(name="research", description="Deep research")],
         )
+
+    When invoked under the serve harness, the child agent's intermediate
+    messages bubble up to the ambient ``_stream_callback``, tagged with an
+    ``agent_path`` of the registered tool names along the call chain (e.g.
+    ``["research"]``, or ``["research", "summarize"]`` for nested
+    subagents). See :mod:`motus.agent._stream_context`.
     """
 
     def __init__(
@@ -56,6 +62,8 @@ class AgentTool(Tool):
 
     async def _invoke(self, **kwargs) -> str:
         """Call the wrapped agent. Invoked by Tool._execute (has @agent_task + guardrails)."""
+        from motus.agent._stream_context import _agent_path, _caller_tagged
+
         request = _DefaultInput.model_validate(kwargs).request
 
         # Stateless: fork to avoid mutating the template agent
@@ -65,8 +73,15 @@ class AgentTool(Tool):
         if self._max_steps_override is not None:
             agent.max_steps = self._max_steps_override
 
-        # Call the agent
-        result = await agent(request)
+        # Tag the child's messages with this tool name and tell its _execute
+        # to skip its own self-push (see motus.agent._stream_context).
+        path_token = _agent_path.set((*_agent_path.get(), self.name))
+        caller_token = _caller_tagged.set(True)
+        try:
+            result = await agent(request)
+        finally:
+            _caller_tagged.reset(caller_token)
+            _agent_path.reset(path_token)
 
         # Extract output if extractor provided
         if self._output_extractor is not None:

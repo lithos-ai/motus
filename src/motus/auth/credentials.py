@@ -4,6 +4,7 @@ import os
 import stat
 from pathlib import Path
 
+import httpx
 from pydantic import BaseModel
 
 CREDENTIALS_DIR = Path.home() / ".motus"
@@ -55,29 +56,56 @@ def clear_credentials() -> None:
         CREDENTIALS_FILE.unlink()
 
 
+def _validate_stored_key(creds: Credentials) -> bool:
+    """Check whether a stored API key is still accepted by the server.
+
+    Returns True if the key is valid or if the check can't be performed
+    (network error, server error, etc.) — we only return False on a
+    definitive 401/403 rejection.
+    """
+    try:
+        resp = httpx.get(
+            f"{creds.cloud_api_url}/api-keys",
+            headers={"Authorization": f"Bearer {creds.api_key}"},
+            timeout=5,
+        )
+        return resp.status_code not in (401, 403)
+    except httpx.HTTPError:
+        # Network issue — trust stored credentials rather than forcing a
+        # re-login that also can't reach the server.
+        return True
+
+
 def ensure_authenticated() -> tuple[str, str]:
     """Return (api_url, api_key), triggering interactive login if needed.
 
-    Checks env vars and credentials file first. If no credentials exist,
-    runs the OAuth device flow to provision an API key.
+    Checks env vars and credentials file first. If stored credentials
+    exist, validates them against the server — if the key was externally
+    revoked (e.g. deleted from the web console) the user is seamlessly
+    re-authenticated via the OAuth device flow.
     """
-    api_key = get_api_key()
+    # Env-var credentials are used as-is (CI / deployed agents can't
+    # run an interactive login).
+    if os.getenv("LITHOSAI_API_KEY"):
+        return get_api_url(), get_api_key()
+
     api_url = get_api_url()
-    if api_key:
-        return api_url, api_key
+    creds = load_credentials()
 
-    # No credentials — run interactive login
+    if creds and _validate_stored_key(creds):
+        return creds.cloud_api_url, creds.api_key
+
+    # Credentials are missing or rejected — run interactive login.
     import logging
-
-    import httpx
 
     from motus.auth.login import login
 
     logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
 
-    # Revoke stale key if credentials file exists but key is missing (shouldn't
-    # normally happen, but be safe)
-    creds = load_credentials()
+    if creds:
+        print("Stored API key is no longer valid. Re-authenticating...")
+
+    # Best-effort revocation of the old key (will fail if already deleted).
     if creds:
         try:
             httpx.delete(

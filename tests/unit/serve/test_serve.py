@@ -2334,5 +2334,508 @@ class TestSessionStoreCustomId:
             store.create(session_id="dup-id")
 
 
+# ---------------------------------------------------------------------------
+# SSE Streaming
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse_frame(frame: str) -> dict:
+    """Parse a single SSE frame into {event, data}."""
+    import json
+
+    event_type = None
+    data = None
+    for line in frame.strip().split("\n"):
+        if line.startswith("event: "):
+            event_type = line[len("event: ") :]
+        elif line.startswith("data: "):
+            data = json.loads(line[len("data: ") :])
+    return {"event": event_type, "data": data}
+
+
+class TestSSEStreaming:
+    """Test SSE by driving the generator directly.
+
+    httpx ASGITransport buffers the entire response body, so we can't use
+    client.stream() for true SSE streaming tests. Instead, we call the
+    generator directly via session publish/event_log.
+    """
+
+    async def test_stream_nonexistent_session(self):
+        from httpx import ASGITransport, AsyncClient
+
+        server = AgentServer(_add, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.get("/sessions/nonexistent/stream")
+            assert r.status_code == 404
+
+    async def test_generator_receives_done_event(self):
+        """Publish a done event and verify the generator yields it."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        gen = server._sse_generator(session)
+
+        await session.publish_event("done", response={"content": "7"})
+
+        frame = await gen.__anext__()
+        parsed = _parse_sse_frame(frame)
+        assert parsed["event"] == "done"
+        assert parsed["data"]["response"]["content"] == "7"
+
+        await gen.aclose()
+
+    async def test_generator_emits_keepalive_comment_on_idle(self):
+        """With no events for SSE_IDLE_TIMEOUT seconds, the generator yields a
+        comment-form heartbeat (":" prefix), not a named event."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        server.SSE_IDLE_TIMEOUT = 0.05  # short timeout for the test
+        session = Session(session_id="test")
+
+        gen = server._sse_generator(session)
+        try:
+            frame = await gen.__anext__()
+        finally:
+            await gen.aclose()
+
+        # Comment-form per WHATWG SSE spec — EventSource ignores it.
+        assert frame == ": keepalive\n\n"
+        assert "event:" not in frame
+        assert "data:" not in frame
+
+    async def test_generator_wakes_on_publish(self):
+        """A publish() during the wait_for() correctly unblocks the generator
+        and yields the published event (rather than timing out to a keepalive)."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        gen = server._sse_generator(session)
+
+        async def publish_later():
+            await asyncio.sleep(0.1)
+            await session.publish_event("done")
+
+        task = asyncio.create_task(publish_later())
+        frame = await gen.__anext__()
+        parsed = _parse_sse_frame(frame)
+        assert parsed["event"] == "done"
+        await task
+        await gen.aclose()
+
+    async def test_generator_catch_up_replay(self):
+        """Events already in the log are yielded immediately on connect."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        # Pre-populate the event log. Use the live envelope: status comes
+        # from session.status, session_id from session.session_id.
+        dummy_task = asyncio.create_task(asyncio.sleep(100))
+        session.start_turn(dummy_task)
+        await session.publish_event(
+            "message",
+            message={"role": "assistant", "content": "thinking"},
+        )
+        session.complete_turn(
+            response=ChatMessage.assistant_message(content="11"),
+            new_state=[],
+        )
+        await session.publish_event("done")
+
+        gen = server._sse_generator(session)
+
+        frame1 = await gen.__anext__()
+        frame2 = await gen.__anext__()
+        parsed1 = _parse_sse_frame(frame1)
+        assert parsed1["event"] == "message"
+        assert parsed1["data"]["session_id"] == "test"
+        assert parsed1["data"]["status"] == "running"
+        assert parsed1["data"]["message"]["content"] == "thinking"
+        assert _parse_sse_frame(frame2)["event"] == "done"
+        assert _parse_sse_frame(frame2)["data"]["response"]["content"] == "11"
+
+        dummy_task.cancel()
+        try:
+            await dummy_task
+        except asyncio.CancelledError:
+            pass
+
+        await gen.aclose()
+
+    async def test_generator_closed_event_closes_stream(self):
+        """A 'closed' event terminates the generator without forwarding it
+        on the wire — the connection close is the signal to clients."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        gen = server._sse_generator(session)
+
+        await session.publish_event("closed")
+
+        frames = [frame async for frame in gen]
+        assert frames == []
+
+    async def test_generator_epoch_reset(self):
+        """When a new turn starts (epoch changes), the generator resets its index."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        # Simulate a completed first turn
+        await session.publish_event("done", response={"content": "first"})
+
+        gen = server._sse_generator(session)
+
+        # Read the replay
+        frame1 = await gen.__anext__()
+        assert _parse_sse_frame(frame1)["data"]["response"]["content"] == "first"
+
+        # Simulate start of a new turn (clears log, bumps epoch)
+        dummy_task = asyncio.create_task(asyncio.sleep(100))
+        session.start_turn(dummy_task)
+
+        # Publish a new done event
+        await session.publish_event("done", response={"content": "second"})
+
+        frame2 = await gen.__anext__()
+        assert _parse_sse_frame(frame2)["data"]["response"]["content"] == "second"
+
+        dummy_task.cancel()
+        try:
+            await dummy_task
+        except asyncio.CancelledError:
+            pass
+        await gen.aclose()
+
+    async def test_generator_error_event(self):
+        """Error events are yielded correctly."""
+        from motus.serve.session import Session
+
+        server = AgentServer(_add, max_workers=1)
+        session = Session(session_id="test")
+
+        gen = server._sse_generator(session)
+
+        await session.publish_event("error", error="something broke")
+
+        frame = await gen.__anext__()
+        parsed = _parse_sse_frame(frame)
+        assert parsed["event"] == "error"
+        assert "something broke" in parsed["data"]["error"]
+
+        await gen.aclose()
+
+    async def test_end_to_end_stream_with_worker(self):
+        """Full integration: send a message and verify done event is published."""
+        from httpx import ASGITransport, AsyncClient
+
+        server = AgentServer(_add, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            await client.post(f"/sessions/{sid}/messages", json={"content": "3 4"})
+            await _poll_until(client, sid, "idle")
+
+            # Verify the done event was published to the session's event log
+            session = server._sessions.get(sid)
+            assert session is not None
+            running_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "running"
+            ]
+            assert len(running_events) == 1
+            assert running_events[0]["session_id"] == sid
+            assert running_events[0]["status"] == "running"
+
+            done_events = [
+                e for e in session._event_log if e is not None and e["event"] == "done"
+            ]
+            assert len(done_events) == 1
+            assert done_events[0]["session_id"] == sid
+            assert done_events[0]["status"] == "idle"
+            assert done_events[0]["response"]["content"] == "7"
+
+            # running must precede done in the event log
+            log = [e for e in session._event_log if e is not None]
+            assert log.index(running_events[0]) < log.index(done_events[0])
+
+    async def test_end_to_end_error_in_event_log(self):
+        """Full integration: a failing agent publishes an error event."""
+        from httpx import ASGITransport, AsyncClient
+
+        server = AgentServer(_fail, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            await client.post(f"/sessions/{sid}/messages", json={"content": "x"})
+            await _poll_until(client, sid, "error")
+
+            session = server._sessions.get(sid)
+            assert session is not None
+            running_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "running"
+            ]
+            assert len(running_events) == 1
+            assert running_events[0]["session_id"] == sid
+            assert running_events[0]["status"] == "running"
+
+            error_events = [
+                e for e in session._event_log if e is not None and e["event"] == "error"
+            ]
+            assert len(error_events) == 1
+            assert error_events[0]["session_id"] == sid
+            assert error_events[0]["status"] == "error"
+            assert "Intentional error" in error_events[0]["error"]
+
+            log = [e for e in session._event_log if e is not None]
+            assert log.index(running_events[0]) < log.index(error_events[0])
+
+    async def test_running_event_after_full_resume(self):
+        """Resuming the last pending interrupt transitions the session back to
+        running and publishes a `running` SSE event."""
+        from httpx import ASGITransport, AsyncClient
+
+        from motus.serve.interrupt import InterruptMessage
+        from motus.serve.schemas import SessionStatus
+
+        server = AgentServer(_add, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            # Manually wedge the session into "interrupted" with one pending
+            # interrupt and an active resume queue.
+            session = server._sessions.get(sid)
+            assert session is not None
+            session.status = SessionStatus.interrupted
+            session._resume_queue = asyncio.Queue()
+            session.pending_interrupts = {
+                "i1": InterruptMessage(
+                    interrupt_id="i1", payload={"type": "tool_approval"}
+                )
+            }
+
+            r = await client.post(
+                f"/sessions/{sid}/resume",
+                json={"interrupt_id": "i1", "value": {"approved": True}},
+            )
+            assert r.status_code == 200
+            assert r.json()["status"] == "running"
+            # Let submit_resume's scheduled publish run.
+            await asyncio.sleep(0)
+
+            running_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "running"
+            ]
+            assert len(running_events) == 1
+            assert running_events[0]["session_id"] == sid
+            assert running_events[0]["status"] == "running"
+
+    async def test_no_running_event_on_partial_resume(self):
+        """Resolving only one of multiple pending interrupts leaves the
+        session interrupted; no `running` event is published."""
+        from httpx import ASGITransport, AsyncClient
+
+        from motus.serve.interrupt import InterruptMessage
+        from motus.serve.schemas import SessionStatus
+
+        server = AgentServer(_add, max_workers=1)
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            session = server._sessions.get(sid)
+            assert session is not None
+            session.status = SessionStatus.interrupted
+            session._resume_queue = asyncio.Queue()
+            session.pending_interrupts = {
+                "i1": InterruptMessage(
+                    interrupt_id="i1", payload={"type": "tool_approval"}
+                ),
+                "i2": InterruptMessage(
+                    interrupt_id="i2", payload={"type": "user_input"}
+                ),
+            }
+
+            r = await client.post(
+                f"/sessions/{sid}/resume",
+                json={"interrupt_id": "i1", "value": {"approved": True}},
+            )
+            assert r.status_code == 200
+            assert r.json()["status"] == "interrupted"
+            assert session.status == SessionStatus.interrupted
+
+            running_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "running"
+            ]
+            assert running_events == []
+
+    async def test_publish_event_interrupted_shape(self):
+        """interrupt_turn emits the unified envelope with session_id, status,
+        and the pending interrupts list (snapshot at the moment of the call)."""
+        from motus.serve.interrupt import InterruptMessage
+        from motus.serve.session import Session
+
+        session = Session(session_id="sid-123")
+        # interrupt_turn only transitions from running/interrupted; simulate
+        # a turn in flight first.
+        dummy_task = asyncio.create_task(asyncio.sleep(100))
+        try:
+            session.start_turn(dummy_task)
+            session.interrupt_turn(
+                InterruptMessage(
+                    interrupt_id="i1",
+                    payload={"type": "tool_approval", "tool": "delete_file"},
+                )
+            )
+            session.interrupt_turn(
+                InterruptMessage(interrupt_id="i2", payload={"type": "user_input"})
+            )
+            # Let the scheduled publish tasks run.
+            await asyncio.sleep(0)
+        finally:
+            dummy_task.cancel()
+            try:
+                await dummy_task
+            except asyncio.CancelledError:
+                pass
+
+        # State transitions emit: running, interrupted (i1), interrupted (i1+i2).
+        # Verify the latest interrupted frame carries both pending interrupts.
+        interrupted_events = [
+            e for e in session._event_log if e["event"] == "interrupted"
+        ]
+        assert len(interrupted_events) == 2
+        evt = interrupted_events[-1]
+        assert evt["session_id"] == "sid-123"
+        assert evt["status"] == "interrupted"
+        interrupts_by_id = {i["interrupt_id"]: i for i in evt["interrupts"]}
+        assert set(interrupts_by_id) == {"i1", "i2"}
+        assert interrupts_by_id["i1"]["type"] == "tool_approval"
+        assert interrupts_by_id["i1"]["payload"] == {
+            "type": "tool_approval",
+            "tool": "delete_file",
+        }
+        assert interrupts_by_id["i2"]["type"] == "user_input"
+
+    async def test_subagent_messages_carry_agent_path(self):
+        """End-to-end via the worker subprocess: subagent messages reach the
+        SSE event log tagged with agent_path; root messages have no path;
+        ``done.response`` reflects only the parent's view."""
+        from httpx import ASGITransport, AsyncClient
+
+        server = AgentServer(
+            "tests.unit.serve.mock_agent:parent_with_subagent", max_workers=1
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            await client.post(f"/sessions/{sid}/messages", json={"content": "go"})
+            done = await _poll_until(client, sid, "idle")
+
+            session = server._sessions.get(sid)
+            assert session is not None
+            message_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "message"
+            ]
+
+            # Partition by attribution.
+            root_events = [e for e in message_events if "agent_path" not in e]
+            sub_events = [e for e in message_events if "agent_path" in e]
+
+            # Subagent emitted at least one message tagged with the tool name.
+            assert sub_events, "expected subagent messages with agent_path"
+            for evt in sub_events:
+                assert evt["agent_path"] == ["inner_tool"]
+
+            # The "parent done" assistant message comes from the root agent.
+            root_contents = [e["message"].get("content") for e in root_events]
+            assert "parent done" in root_contents
+
+            # Subagent's marker shows up only on the stream, never as a root event.
+            sub_contents = [e["message"].get("content") for e in sub_events]
+            assert "reply from inner" in sub_contents
+            assert "reply from inner" not in root_contents
+
+            # Final done.response is the parent's return value, not the subagent's.
+            assert done["response"]["content"] == "parent done"
+
+            # GET /messages history reflects only the parent's view: no subagent
+            # marker, but the parent's own messages are present.
+            r = await client.get(f"/sessions/{sid}/messages")
+            history_contents = [m.get("content") for m in r.json()]
+            assert "reply from inner" not in history_contents
+
+    async def test_plain_function_internal_agent_streams_messages(self):
+        """A plain served function that creates an AgentBase internally still
+        streams the internal agent's live messages via ambient callback."""
+        from httpx import ASGITransport, AsyncClient
+
+        server = AgentServer(
+            "tests.unit.serve.mock_agent:function_with_internal_agent", max_workers=1
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=server.app), base_url="http://test"
+        ) as client:
+            r = await client.post("/sessions")
+            sid = r.json()["session_id"]
+
+            await client.post(f"/sessions/{sid}/messages", json={"content": "go"})
+            done = await _poll_until(client, sid, "idle")
+
+            session = server._sessions.get(sid)
+            assert session is not None
+            message_events = [
+                e
+                for e in session._event_log
+                if e is not None and e["event"] == "message"
+            ]
+
+            contents = [e["message"].get("content") for e in message_events]
+            assert "reply from internal" in contents
+            internal_events = [
+                e
+                for e in message_events
+                if e["message"].get("content") == "reply from internal"
+            ]
+            assert internal_events
+            assert all(e["agent_path"] == ["internal"] for e in internal_events)
+            assert done["response"]["content"] == "reply from internal"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

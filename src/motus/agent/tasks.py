@@ -132,12 +132,13 @@ async def model_serve_task(
         strict=True if response_format is not None else None,
     )
 
-    # Only pass cache_policy to clients that support it (e.g. Anthropic).
-    # Other clients would forward it via **kwargs to their underlying SDK.
     from motus.models.anthropic_client import AnthropicChatClient
+    from motus.models.openrouter_client import OpenRouterChatClient
 
     cache_kwargs = {}
-    if cache_policy != CachePolicy.NONE and isinstance(client, AnthropicChatClient):
+    if cache_policy != CachePolicy.NONE and isinstance(
+        client, (AnthropicChatClient, OpenRouterChatClient)
+    ):
         cache_kwargs["cache_policy"] = cache_policy
 
     if response_format is not None and issubclass(response_format, BaseModel):

@@ -33,9 +33,9 @@ keys unless serving locally.
 
 | SDK | Examples | Deployable |
 |-----|----------|------------|
-| Anthropic SDK | [`anthropic/`](anthropic/) — Tool runner, deferred tool search | Yes |
-| OpenAI Agents SDK | [`openai_agents/`](openai_agents/) — Tools, routing, agents-as-tools, guardrails, message filtering | Yes |
-| Google ADK | [`google_adk/`](google_adk/) — Tools, callbacks, multi-agent, structured output, parallel tools, triage workflows | Yes |
+| Anthropic SDK | [`anthropic/`](anthropic/) — Tool runner, deferred tool search, MCP | Yes |
+| OpenAI Agents SDK | [`openai_agents/`](openai_agents/) — Tools, routing, agents-as-tools, guardrails, message filtering, MCP | Yes |
+| Google ADK | [`google_adk/`](google_adk/) — Tools, callbacks, multi-agent, structured output, parallel tools, triage workflows, MCP | Yes |
 
 ## Multi-SDK example
 

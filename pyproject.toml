@@ -1,6 +1,6 @@
 [project]
 name = "lithosai-motus"
-version = "0.3.0"
+version = "0.4.3"
 description = "Motus Agent Framework"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -42,6 +42,8 @@ dependencies = [
     "tomli-w>=1.0.0",
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
+    "readability-lxml>=0.8.1",
+    "markdownify>=1.0.0",
 ]
 
 [project.urls]
@@ -58,6 +60,9 @@ openai-agents = [
 google-adk = [
     "google-adk>=1.27.2",
 ]
+volcengine = [
+    "volcengine-python-sdk[ark]>=5.0.23",
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -67,7 +72,11 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-motus = ["runtime/tracing/templates/*"]
+motus = [
+    "runtime/tracing/templates/*",
+    "agent/templates/prompts/*.md",
+    "agent/templates/prompts/sections/*.md",
+]
 
 [tool.uv.sources]
 motus-deep-research = { workspace = true }

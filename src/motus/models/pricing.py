@@ -76,6 +76,19 @@ _PRICING: dict[str, dict[str, float]] = {
         "cache_write": 1.75,
         "cache_read": 0.175,
     },
+    # DeepSeek (via OpenRouter)
+    "deepseek/deepseek-v4-pro": {
+        "input": 0.435,
+        "output": 0.87,
+        "cache_write": 0.435,
+        "cache_read": 0.0435,
+    },
+    "deepseek/deepseek-v4-flash": {
+        "input": 0.14,
+        "output": 0.28,
+        "cache_write": 0.14,
+        "cache_read": 0.014,
+    },
 }
 
 
@@ -93,15 +106,29 @@ def get_pricing(model: str) -> dict[str, float] | None:
 def calculate_cost(model: str | None, usage: dict) -> float | None:
     """Calculate cost in USD from token usage and model pricing.
 
+    If the response includes an explicit ``cost`` field in ``usage`` (emitted
+    by OpenAI-compatible gateways like OpenRouter or LithosAI's model proxy),
+    use that value directly — it's the provider/gateway's authoritative
+    number. Otherwise fall back to computing from tokens using the local
+    pricing table.
+
     Args:
         model: Model identifier.
         usage: Dict with token counts (prompt_tokens, completion_tokens,
-               cache_creation_input_tokens, cache_read_input_tokens).
+               cache_creation_input_tokens, cache_read_input_tokens). May also
+               include a pre-computed ``cost`` field.
 
     Returns:
-        Cost in USD, or None if model pricing not found.
+        Cost in USD, or None if no cost can be determined.
     """
-    if not model or not usage:
+    if not usage:
+        return None
+    if usage.get("cost"):
+        try:
+            return float(usage["cost"])
+        except (TypeError, ValueError):
+            pass  # fall through to local computation
+    if not model:
         return None
     pricing = get_pricing(model)
     if not pricing:

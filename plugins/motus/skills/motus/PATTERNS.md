@@ -4,6 +4,27 @@ Proven patterns for common scenarios. Each pattern is copy-pasteable and runnabl
 
 ---
 
+## Default: CodingAgent
+
+For most agents, start with `CodingAgent` — it's a complete agent harness preconfigured with the standard tool set (bash, file read/write/edit, search, todo, web, plan-mode, subagents) and auto-injects `AGENTS.md` from the project root.
+
+```python
+from motus.agent import CodingAgent
+from motus.models import AnthropicChatClient
+
+agent = CodingAgent(
+    client=AnthropicChatClient(),  # Cloud proxy auto-provides API keys
+    model_name="claude-sonnet-4-6",
+)
+response = await agent("Read README.md and summarize it.")
+```
+
+Pass `extra_tools=[...]` to add domain tools alongside the defaults, or `tools=[...]` to replace them entirely. Toggle off pieces of the harness with `enable_web=False`, `enable_subagents=False`, or `enable_plan_mode=False`.
+
+The patterns below show how to build a specialized agent with `ReActAgent` when CodingAgent's preset harness doesn't fit.
+
+---
+
 ## Pattern 1: Minimal agent
 
 ```python
@@ -197,7 +218,9 @@ result = await agent("Analyze the sentiment of: 'This product is amazing!'")
 
 ---
 
-## Pattern 9: Docker sandbox for code execution (local-only — not deployable to cloud)
+## Pattern 9: Sandbox for code execution
+
+Works identically locally (Docker) and on cloud deploy (platform-managed). Same code.
 
 ```python
 from motus.tools import get_sandbox, FunctionTool
