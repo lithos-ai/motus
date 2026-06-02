@@ -12,7 +12,8 @@ class Tool(ABC):
 
     Architecture::
 
-        __call__(args: str)          ← base class default (json.loads), FunctionTool overrides with coercion
+        __call__(args: str)          ← base class: error handling + _parse_args
+          ├→ _parse_args(args)       ← override for custom coercion (FunctionTool)
           └→ _execute(**kwargs)      ← shared: @agent_task + guardrails + error handling + _serialize
                └→ _invoke(**kwargs)  ← abstract: just "call the function"
     """
@@ -69,17 +70,24 @@ class Tool(ABC):
                 if getattr(g, "__name__", "") != "_builtin_approval_guardrail"
             ]
 
+    def _parse_args(self, args: str) -> dict:
+        """Parse raw JSON string into kwargs for _execute.
+
+        Override in subclasses for custom coercion (e.g. Pydantic schemas).
+        """
+        return json.loads(args) if args and args.strip() else {}
+
     def __call__(self, args: str):
         """Parse JSON args, then delegate to _execute."""
         try:
-            parsed = json.loads(args) if args and args.strip() else {}
-        except json.JSONDecodeError as e:
+            kwargs = self._parse_args(args)
+        except Exception as e:
             # Return error to the model so it can retry with valid JSON
             return self._execute(
-                __json_error=f"Invalid JSON in tool arguments: {e}. "
-                f"Raw args: {args[:200]}. Please retry with valid JSON."
+                __json_error=f"Invalid tool arguments: {e}. "
+                f"Raw args: {str(args)[:200]}. Please retry with valid JSON."
             )
-        return self._execute(**parsed)
+        return self._execute(**kwargs)
 
     @agent_task(task_type=TOOL_CALL)
     async def _execute(self, **kwargs) -> str:

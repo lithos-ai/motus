@@ -317,16 +317,14 @@ class FunctionTool(Tool):
             requires_approval=requires_approval,
         )
 
-    def __call__(self, args: str):
-        """Parse JSON args with type coercion, then delegate to _execute."""
+    def _parse_args(self, args: str) -> dict:
+        """Parse JSON args with Pydantic schema coercion."""
         if self.schema_model is not None:
             payload = json.loads(args)
             if not isinstance(payload, dict):
                 raise ValueError("Tool arguments must be a JSON object")
-            kwargs = self.schema_model.model_validate(payload).model_dump()
-        else:
-            kwargs = self.params.decode(args)
-        return self._execute(**kwargs)
+            return self.schema_model.model_validate(payload).model_dump()
+        return self.params.decode(args)
 
     async def _invoke(self, **kwargs) -> Any:
         """Call the wrapped Python function (sync/async/AgentFuture)."""

@@ -161,22 +161,25 @@ class GeminiChatClient(BaseChatClient):
         if response.candidates and len(response.candidates) > 0:
             candidate = response.candidates[0]
 
-            for part in candidate.content.parts:
-                if hasattr(part, "text") and part.text:
-                    content = part.text
-                elif hasattr(part, "function_call") and part.function_call:
-                    if tool_calls is None:
-                        tool_calls = []
-                    fc = part.function_call
-                    tool_calls.append(
-                        ToolCall(
-                            id=f"call_{uuid.uuid4().hex[:24]}",
-                            function=FunctionCall(
-                                name=fc.name,
-                                arguments=json.dumps(dict(fc.args) if fc.args else {}),
-                            ),
+            if candidate.content and candidate.content.parts:
+                for part in candidate.content.parts:
+                    if hasattr(part, "text") and part.text:
+                        content = part.text
+                    elif hasattr(part, "function_call") and part.function_call:
+                        if tool_calls is None:
+                            tool_calls = []
+                        fc = part.function_call
+                        tool_calls.append(
+                            ToolCall(
+                                id=f"call_{uuid.uuid4().hex[:24]}",
+                                function=FunctionCall(
+                                    name=fc.name,
+                                    arguments=json.dumps(
+                                        dict(fc.args) if fc.args else {}
+                                    ),
+                                ),
+                            )
                         )
-                    )
 
         # Determine finish reason
         finish_reason = "stop"
