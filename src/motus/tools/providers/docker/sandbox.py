@@ -4,7 +4,7 @@ import tarfile
 from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
-from socket import SocketIO
+from socket import SHUT_WR, SocketIO
 from struct import Struct
 from threading import Thread
 from typing import Mapping
@@ -200,7 +200,16 @@ class DockerSandbox(Sandbox):
         )
         sock: SocketIO = api.exec_start(e["Id"], socket=True)
         if input is not None:
-            thread = Thread(target=sock.write, args=[input.encode()])
+
+            def write_sock():
+                try:
+                    sock._sock.sendall(input.encode())
+                    sock.flush()
+                    sock._sock.shutdown(SHUT_WR)
+                except OSError:
+                    pass
+
+            thread = Thread(target=write_sock)
             thread.start()
         header = Struct(">BxxxI")
 
