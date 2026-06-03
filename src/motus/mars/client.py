@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Optional, Type
 
 from pydantic import BaseModel
@@ -37,6 +38,20 @@ class MarsOpenAIChatClient(OpenAIChatClient):
                 extra_body[key] = value
         if extra_body:
             request_kwargs["extra_body"] = extra_body
+            # Also surface the Mars metadata as request headers so it survives an
+            # OpenAI-compatible *gateway* in front of the engine (the gateway's typed
+            # ChatCompletionRequest drops unknown body fields; it refolds these headers
+            # back into the body before forwarding). Direct-to-engine still uses the
+            # body. `X-SMG-Agent-Instance-ID` is also the gateway's routing key.
+            mars_keys = ("agent_instance_id", "agent_class_id", "is_last_step", "agent_replay")
+            mars_meta = {k: extra_body[k] for k in mars_keys if k in extra_body}
+            if mars_meta:
+                extra_headers = dict(request_kwargs.get("extra_headers") or {})
+                extra_headers.setdefault("X-SMG-Mars-Meta", json.dumps(mars_meta))
+                aid = mars_meta.get("agent_instance_id")
+                if aid is not None:
+                    extra_headers.setdefault("X-SMG-Agent-Instance-ID", str(aid))
+                request_kwargs["extra_headers"] = extra_headers
         return request_kwargs
 
     async def create(
