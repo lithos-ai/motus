@@ -11,42 +11,49 @@ _PRICING: dict[str, dict[str, float]] = {
         "input": 1.00,
         "output": 5.00,
         "cache_write": 1.25,
+        "cache_write_1h": 2.00,  # 1-hour cache write (2x input)
         "cache_read": 0.10,
     },
     "claude-haiku-4-5": {
         "input": 1.00,
         "output": 5.00,
         "cache_write": 1.25,
+        "cache_write_1h": 2.00,  # 1-hour cache write (2x input)
         "cache_read": 0.10,
     },
     "claude-sonnet-4-5-20250929": {
         "input": 3.00,
         "output": 15.00,
         "cache_write": 3.75,
+        "cache_write_1h": 6.00,  # 1-hour cache write (2x input)
         "cache_read": 0.30,
     },
     "claude-sonnet-4-6": {
         "input": 3.00,
         "output": 15.00,
         "cache_write": 3.75,
+        "cache_write_1h": 6.00,  # 1-hour cache write (2x input)
         "cache_read": 0.30,
     },
     "claude-opus-4-8": {
         "input": 5.00,
         "output": 25.00,
         "cache_write": 6.25,
+        "cache_write_1h": 10.00,  # 1-hour cache write (2x input)
         "cache_read": 0.50,
     },
     "claude-opus-4-7": {
         "input": 5.00,
         "output": 25.00,
         "cache_write": 6.25,
+        "cache_write_1h": 10.00,  # 1-hour cache write (2x input)
         "cache_read": 0.50,
     },
     "claude-opus-4-6": {
         "input": 5.00,
         "output": 25.00,
         "cache_write": 6.25,
+        "cache_write_1h": 10.00,  # 1-hour cache write (2x input)
         "cache_read": 0.50,
     },
     # MiniMax (via OpenRouter)
@@ -139,10 +146,25 @@ def calculate_cost(model: str | None, usage: dict) -> float | None:
     pricing = get_pricing(model)
     if not pricing:
         return None
+    # Cache-creation cost: when the usage carries the per-TTL split (Anthropic's
+    # ephemeral_5m / ephemeral_1h breakdown) AND the model has a distinct 1h rate,
+    # price each TTL separately. Otherwise price the lumped cache_creation_input_tokens
+    # at the 5m (cache_write) rate, exactly as before, so every other provider/model
+    # is unaffected (they never emit ephemeral_1h_input_tokens).
+    tok_1h = usage.get("ephemeral_1h_input_tokens", 0) or 0
+    if tok_1h and pricing.get("cache_write_1h"):
+        tok_5m = usage.get("ephemeral_5m_input_tokens", 0) or 0
+        cache_write_cost = (
+            tok_5m * pricing["cache_write"] + tok_1h * pricing["cache_write_1h"]
+        )
+    else:
+        cache_write_cost = (
+            usage.get("cache_creation_input_tokens", 0) * pricing["cache_write"]
+        )
     cost = (
         usage.get("prompt_tokens", 0) * pricing["input"]
         + usage.get("completion_tokens", 0) * pricing["output"]
-        + usage.get("cache_creation_input_tokens", 0) * pricing["cache_write"]
+        + cache_write_cost
         + usage.get("cache_read_input_tokens", 0) * pricing["cache_read"]
     ) / 1_000_000
     return round(cost, 8)

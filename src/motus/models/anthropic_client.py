@@ -202,6 +202,23 @@ class AnthropicChatClient(BaseChatClient):
                     response.usage, "cache_read_input_tokens", 0
                 )
                 or 0,
+                # TTL split of the cache-creation tokens. Anthropic returns this under
+                # usage.cache_creation when 1h caching is in play, so downstream cost
+                # can price 5m writes (1.25x input) vs 1h writes (2x input) separately.
+                # Absent (5m-only / older API) -> both 0 -> cost falls back to the
+                # lumped cache_creation_input_tokens above. Their sum == that lumped.
+                "ephemeral_5m_input_tokens": getattr(
+                    getattr(response.usage, "cache_creation", None),
+                    "ephemeral_5m_input_tokens",
+                    0,
+                )
+                or 0,
+                "ephemeral_1h_input_tokens": getattr(
+                    getattr(response.usage, "cache_creation", None),
+                    "ephemeral_1h_input_tokens",
+                    0,
+                )
+                or 0,
             },
         )
 

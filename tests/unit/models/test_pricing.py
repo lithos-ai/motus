@@ -74,3 +74,27 @@ class TestCalculateCost:
     def test_unknown_model_no_response_cost_returns_none(self):
         usage = {"prompt_tokens": 1000, "completion_tokens": 500}
         assert calculate_cost("totally-fake-model", usage) is None
+
+    def test_cache_write_1h_priced_separately(self):
+        """1-hour cache writes (2x input) are priced apart from 5-minute (1.25x)."""
+        # opus-4-8: cache_write=$6.25/M (5m), cache_write_1h=$10/M (1h)
+        cost = calculate_cost(
+            "claude-opus-4-8", {"ephemeral_1h_input_tokens": 1_000_000}
+        )
+        assert cost == pytest.approx(10.0, rel=1e-6)
+        # mixed 5m + 1h: 6.25 + 10.0
+        cost = calculate_cost(
+            "claude-opus-4-8",
+            {
+                "ephemeral_5m_input_tokens": 1_000_000,
+                "ephemeral_1h_input_tokens": 1_000_000,
+            },
+        )
+        assert cost == pytest.approx(16.25, rel=1e-6)
+
+    def test_lumped_cache_creation_unchanged(self):
+        """No per-TTL split: the lumped cache-creation prices at the 5m rate, as before."""
+        cost = calculate_cost(
+            "claude-opus-4-8", {"cache_creation_input_tokens": 1_000_000}
+        )
+        assert cost == pytest.approx(6.25, rel=1e-6)
