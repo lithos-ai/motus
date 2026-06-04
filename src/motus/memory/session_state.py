@@ -83,7 +83,33 @@ class CompactionSessionState(SessionState):
         )
 
 
+@dataclass
+class BackgroundSessionState(SessionState):
+    """Session state for BackgroundMemory.
+
+    Captures the memory tree root so the MemoryAgent can continue
+    building the existing tree on disk.
+    """
+
+    tree_root: str = "~/.motus/memory"
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        d["tree_root"] = self.tree_root
+        return d
+
+    @classmethod
+    def _from_dict_impl(cls, data: Dict[str, Any]) -> "BackgroundSessionState":
+        messages = [ChatMessage(**m) for m in data.get("messages", [])]
+        return cls(
+            messages=messages,
+            system_prompt=data.get("system_prompt", ""),
+            tree_root=data.get("tree_root", "~/.motus/memory"),
+        )
+
+
 _STATE_TYPE_REGISTRY: Dict[str, type] = {
     "SessionState": SessionState,
     "CompactionSessionState": CompactionSessionState,
+    "BackgroundSessionState": BackgroundSessionState,
 }
