@@ -9,6 +9,7 @@ _COMMAND_MODULES = [
     "motus.auth.cli",
     "motus.serve.cli",
     "motus.deploy.cli",
+    "motus.mars.cli",
 ]
 
 _PACKAGE = "lithosai-motus"
