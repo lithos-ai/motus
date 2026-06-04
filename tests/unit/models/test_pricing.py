@@ -12,6 +12,14 @@ class TestGetPricing:
         assert pricing["input"] == 1.00
         assert pricing["output"] == 5.00
 
+    def test_opus_4_8(self):
+        pricing = get_pricing("claude-opus-4-8")
+        assert pricing is not None
+        assert pricing["input"] == 5.00
+        assert pricing["output"] == 25.00
+        assert pricing["cache_write"] == 6.25
+        assert pricing["cache_read"] == 0.50
+
     def test_unknown_model_returns_none(self):
         assert get_pricing("totally-fake-model") is None
 
