@@ -26,6 +26,7 @@ dependencies = [
     "anthropic>=0.40.0",
     "colorlog>=6.8.0",
     "docker>=7.1.0",
+    "exa-py>=2.0.0",
     "fastapi>=0.128.0",
     "google-genai>=1.0.0",
     "httpx>=0.28.1",

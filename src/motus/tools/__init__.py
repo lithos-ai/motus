@@ -28,6 +28,7 @@ from .providers import (
     CloudSandboxToolProvider,
     DockerSandbox,
     DockerToolProvider,
+    ExaSearchTool,
     LocalShell,
     WebSearchTool,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "CloudSandboxToolProvider",
     "DockerSandbox",
     "DockerToolProvider",
+    "ExaSearchTool",
     "LocalShell",
     "WebSearchTool",
     # Builtins
