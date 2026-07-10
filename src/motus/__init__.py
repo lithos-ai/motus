@@ -21,6 +21,14 @@ from .tools import (
     tools,
     tools_from,
 )
+from .tracing import setup_tracing
+
+# Configure OpenTelemetry at import time so every motus entry point — the
+# runtime, framework integrations, CLIs, tests — emits spans through the
+# same TracerProvider without each caller needing to remember setup. Config
+# is frozen to env-var state here; programmatic overrides after import
+# require ``shutdown_tracing(); setup_tracing(new_config)``.
+setup_tracing()
 
 __all__ = [
     "DEFAULT_TOOL_PROVIDER",

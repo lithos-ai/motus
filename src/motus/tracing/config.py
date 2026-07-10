@@ -108,7 +108,7 @@ def _get_log_dir_default() -> Path:
 
 @dataclass
 class TraceConfig:
-    """Configuration for the TraceManager.
+    """Configuration for motus tracing.
 
     Usage Patterns:
     ---------------

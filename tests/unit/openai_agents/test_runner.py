@@ -89,13 +89,6 @@ class TestTracing:
             await Runner.run(agent, "hello")
             spy.assert_called_once()
 
-    async def test_get_tracer_returns_trace_manager(self):
-        from motus.runtime.tracing import TraceManager
-
-        tracer = oai_mod.get_tracer()
-        assert tracer is not None
-        assert isinstance(tracer, TraceManager)
-
 
 # ---------------------------------------------------------------------------
 # Provider injection

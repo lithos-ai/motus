@@ -16,6 +16,7 @@ from motus.runtime.agent_runtime import (
     shutdown,
 )
 from motus.runtime.agent_task import agent_task
+from motus.tracing import get_config
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -72,14 +73,14 @@ class TestInitShutdown:
 
     def test_init_with_tracing_enabled(self, monkeypatch):
         monkeypatch.setenv("MOTUS_TRACING", "1")
-        rt = init()
-        assert rt.scheduler.tracer.config.is_collecting
-        assert rt.scheduler.tracer.config.export_enabled
+        init()
+        assert get_config().is_collecting
+        assert get_config().export_enabled
 
     def test_init_with_tracing_disabled(self, monkeypatch):
         monkeypatch.setenv("MOTUS_COLLECTION_LEVEL", "disabled")
-        rt = init()
-        assert not rt.scheduler.tracer.config.is_collecting
+        init()
+        assert not get_config().is_collecting
 
 
 # ---------------------------------------------------------------------------
