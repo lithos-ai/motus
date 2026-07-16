@@ -4,7 +4,7 @@ import tarfile
 from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
-from socket import SocketIO
+from socket import SHUT_WR, SocketIO
 from struct import Struct
 from threading import Thread
 from typing import Mapping
@@ -199,8 +199,29 @@ class DockerSandbox(Sandbox):
             self.container.id, cmd, stdin=True, environment=env, workdir=cwd
         )
         sock: SocketIO = api.exec_start(e["Id"], socket=True)
+        writer_error: list[BaseException] = []
         if input is not None:
-            thread = Thread(target=sock.write, args=[input.encode()])
+
+            def write_stdin() -> None:
+                try:
+                    # docker-py exposes the response as a read-only SocketIO;
+                    # writes must go to its underlying hijacked connection.
+                    raw_sock = sock._sock
+                    raw_sock.sendall(input.encode())
+                    # Docker's hijacked exec socket is full duplex. Closing only
+                    # its write side delivers EOF to commands such as cat/tee
+                    # while leaving stdout/stderr readable below.
+                    raw_sock.shutdown(SHUT_WR)
+                except BaseException as exc:
+                    writer_error.append(exc)
+                    # Unblock a command waiting for stdin so the reader can
+                    # finish and propagate the original writer error.
+                    try:
+                        sock._sock.shutdown(SHUT_WR)
+                    except OSError:
+                        pass
+
+            thread = Thread(target=write_stdin)
             thread.start()
         header = Struct(">BxxxI")
 
@@ -217,6 +238,8 @@ class DockerSandbox(Sandbox):
                     length -= len(chunk)
             if input is not None:
                 thread.join()
+                if writer_error:
+                    raise writer_error[0]
             return output
 
         try:
